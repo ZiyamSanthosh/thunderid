@@ -1,3 +1,32 @@
+-- Migration engine state for this logical database.
+-- Rows are registered by `thunderid migration initialize` after schema creation.
+CREATE TABLE IF NOT EXISTS "MIGRATION_STATE" (
+    ID                   VARCHAR(36)   PRIMARY KEY,
+    STORE_ID             VARCHAR(64)   NOT NULL UNIQUE,
+    METADATA_VERSION     INTEGER       NOT NULL,
+    COMPLETED_LEVEL      VARCHAR(50)   NOT NULL,
+    TARGET_LEVEL         VARCHAR(50),
+    STATUS               VARCHAR(20)   NOT NULL,
+    ACTIVE_RUN_ID        VARCHAR(36),
+    FAILURE_SUMMARY      VARCHAR(1024),
+    UPDATED_AT           TIMESTAMPTZ   NOT NULL
+);
+
+-- Durable operation state and optional resume checkpoint.
+CREATE TABLE IF NOT EXISTS "MIGRATION_PROGRESS" (
+    ID                    VARCHAR(36)  PRIMARY KEY,
+    MIGRATION_STATE_ID    VARCHAR(36)  NOT NULL,
+    RUN_ID                VARCHAR(36)  NOT NULL,
+    TARGET_LEVEL          VARCHAR(50)  NOT NULL,
+    OPERATION_ID          VARCHAR(255) NOT NULL,
+    OPERATION_ORDER       INTEGER      NOT NULL,
+    STATUS                VARCHAR(20)  NOT NULL,
+    CHECKPOINT_DATA       TEXT,
+    UPDATED_AT            TIMESTAMPTZ  NOT NULL,
+    FOREIGN KEY (MIGRATION_STATE_ID) REFERENCES "MIGRATION_STATE" (ID) ON DELETE CASCADE,
+    UNIQUE (MIGRATION_STATE_ID, TARGET_LEVEL, OPERATION_ID)
+);
+
 -- Table to store Organization Units
 CREATE TABLE "ORGANIZATION_UNIT" (
     DEPLOYMENT_ID       VARCHAR(255) NOT NULL,

@@ -1,0 +1,229 @@
+// Copyright 2026 The ThunderID Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package engine
+
+import (
+	"context"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+type testOperation struct {
+	definition OperationDefinition
+}
+
+func (o testOperation) Definition() OperationDefinition {
+	return o.definition
+}
+
+func (o testOperation) CheckReadiness(context.Context, ReadAccess, PlanContext) (ReadinessResult, error) {
+	return ReadinessResult{State: ReadinessReady, Summary: "Test operation is ready"}, nil
+}
+
+func (o testOperation) ResolveScopes(context.Context, ReadAccess) ([]Scope, error) {
+	return []Scope{{Type: o.definition.ScopeType, ID: string(o.definition.StoreID)}}, nil
+}
+
+func (o testOperation) PreVerify(context.Context, ReadAccess, Scope) (VerificationResult, error) {
+	return VerificationResult{State: VerificationSource, Summary: "Test source is valid"}, nil
+}
+
+func (o testOperation) Execute(context.Context, OperationExecution) error {
+	return nil
+}
+
+func (o testOperation) PostVerify(context.Context, ReadAccess, Scope) (VerificationResult, error) {
+	return VerificationResult{State: VerificationTarget, Summary: "Test target is valid"}, nil
+}
+
+func TestPlanRegistryAcceptsMatchingPlan(t *testing.T) {
+	manifest := changedStoreManifest(StoreIDEntityDB)
+	operation := validPlanOperation(StoreIDEntityDB)
+	plan := MigrationPlan{
+		TargetVersion: manifest.ReleaseVersion,
+		Operations:    []Operation{operation},
+	}
+
+	registry, err := NewPlanRegistry(manifest, plan)
+
+	require.NoError(t, err)
+	require.NotNil(t, registry)
+	registered := registry.Plan()
+	assert.Equal(t, plan.TargetVersion, registered.TargetVersion)
+	require.Len(t, registered.Operations, 1)
+	assert.Equal(t, operation.Definition(), registered.Operations[0].Definition())
+
+	registered.Operations = nil
+	assert.Len(t, registry.Plan().Operations, 1)
+}
+
+func TestPlanRegistryAcceptsNoChangePlan(t *testing.T) {
+	manifest := validTestManifest()
+
+	registry, err := NewPlanRegistry(manifest, MigrationPlan{
+		TargetVersion: manifest.ReleaseVersion,
+	})
+
+	require.NoError(t, err)
+	assert.Empty(t, registry.Plan().Operations)
+}
+
+func TestPlanRegistryRejectsInvalidPlan(t *testing.T) {
+	tests := []struct {
+		name       string
+		mutate     func(*ReleaseManifest, *MigrationPlan)
+		errorMatch string
+	}{
+		{
+			name: "invalid manifest",
+			mutate: func(manifest *ReleaseManifest, _ *MigrationPlan) {
+				manifest.ManifestVersion++
+			},
+			errorMatch: "invalid release manifest",
+		},
+		{
+			name: "noncanonical target version",
+			mutate: func(_ *ReleaseManifest, plan *MigrationPlan) {
+				plan.TargetVersion = "1.1"
+			},
+			errorMatch: "target version",
+		},
+		{
+			name: "target version mismatch",
+			mutate: func(_ *ReleaseManifest, plan *MigrationPlan) {
+				plan.TargetVersion = "1.2.0"
+			},
+			errorMatch: "manifest release version",
+		},
+		{
+			name: "nil operation",
+			mutate: func(_ *ReleaseManifest, plan *MigrationPlan) {
+				plan.Operations = []Operation{nil}
+			},
+			errorMatch: "is nil",
+		},
+		{
+			name: "duplicate operation ID",
+			mutate: func(_ *ReleaseManifest, plan *MigrationPlan) {
+				plan.Operations = append(plan.Operations, plan.Operations[0])
+			},
+			errorMatch: "duplicate operation ID",
+		},
+		{
+			name: "changed store without operation",
+			mutate: func(_ *ReleaseManifest, plan *MigrationPlan) {
+				plan.Operations = nil
+			},
+			errorMatch: "requires at least one",
+		},
+		{
+			name: "operation for unchanged store",
+			mutate: func(manifest *ReleaseManifest, plan *MigrationPlan) {
+				manifest.Stores[0].Changed = false
+				manifest.Stores[0].RequiredLevel = manifest.Stores[0].AcceptedSourceLevel
+			},
+			errorMatch: "unchanged store",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			manifest := changedStoreManifest(StoreIDConfigDB)
+			plan := MigrationPlan{
+				TargetVersion: manifest.ReleaseVersion,
+				Operations:    []Operation{validPlanOperation(StoreIDConfigDB)},
+			}
+			test.mutate(&manifest, &plan)
+
+			registry, err := NewPlanRegistry(manifest, plan)
+
+			require.Error(t, err)
+			assert.Nil(t, registry)
+			assert.Contains(t, err.Error(), test.errorMatch)
+		})
+	}
+}
+
+func TestPlanRegistryRejectsInvalidOperationDefinition(t *testing.T) {
+	tests := []struct {
+		name       string
+		mutate     func(*OperationDefinition)
+		errorMatch string
+	}{
+		{name: "missing ID", mutate: func(definition *OperationDefinition) {
+			definition.ID = " "
+		}, errorMatch: "ID is required"},
+		{name: "long ID", mutate: func(definition *OperationDefinition) {
+			definition.ID = OperationID(string(make([]byte, maxOperationIDLength+1)))
+		}, errorMatch: "ID exceeds"},
+		{name: "missing description", mutate: func(definition *OperationDefinition) {
+			definition.Description = ""
+		}, errorMatch: "description"},
+		{name: "unknown writable store", mutate: func(definition *OperationDefinition) {
+			definition.StoreID = "unknown"
+		}, errorMatch: "targets undeclared"},
+		{name: "invalid interruption mode", mutate: func(definition *OperationDefinition) {
+			definition.InterruptionMode = "unknown"
+		}, errorMatch: "interruption mode"},
+		{name: "invalid scope", mutate: func(definition *OperationDefinition) {
+			definition.ScopeType = "unknown"
+		}, errorMatch: "scope type"},
+		{name: "unknown read store", mutate: func(definition *OperationDefinition) {
+			definition.ReadStoreIDs = []StoreID{"unknown"}
+		}, errorMatch: "reads undeclared"},
+		{name: "writable store repeated", mutate: func(definition *OperationDefinition) {
+			definition.ReadStoreIDs = []StoreID{StoreIDConfigDB}
+		}, errorMatch: "repeats its writable store"},
+		{name: "duplicate read store", mutate: func(definition *OperationDefinition) {
+			definition.ReadStoreIDs = []StoreID{StoreIDEntityDB, StoreIDEntityDB}
+		}, errorMatch: "duplicate read store"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			manifest := changedStoreManifest(StoreIDConfigDB)
+			operation := validPlanOperation(StoreIDConfigDB)
+			definition := operation.Definition()
+			test.mutate(&definition)
+			plan := MigrationPlan{
+				TargetVersion: manifest.ReleaseVersion,
+				Operations:    []Operation{testOperation{definition: definition}},
+			}
+
+			registry, err := NewPlanRegistry(manifest, plan)
+
+			require.Error(t, err)
+			assert.Nil(t, registry)
+			assert.Contains(t, err.Error(), test.errorMatch)
+		})
+	}
+}
+
+func changedStoreManifest(storeID StoreID) ReleaseManifest {
+	manifest := validTestManifest()
+	for index := range manifest.Stores {
+		if manifest.Stores[index].ID == storeID {
+			manifest.Stores[index].Changed = true
+			manifest.Stores[index].RequiredLevel = manifest.ReleaseVersion
+		}
+	}
+	return manifest
+}
+
+func validPlanOperation(storeID StoreID) testOperation {
+	readStoreID := StoreIDEntityDB
+	if storeID == readStoreID {
+		readStoreID = StoreIDConfigDB
+	}
+	return testOperation{definition: OperationDefinition{
+		ID:               OperationID("1.1.0/" + string(storeID) + "/example"),
+		Description:      "Apply the example migration",
+		StoreID:          storeID,
+		ReadStoreIDs:     []StoreID{readStoreID},
+		InterruptionMode: InterruptionModeAtomic,
+		ScopeType:        ScopeTypeStore,
+	}}
+}

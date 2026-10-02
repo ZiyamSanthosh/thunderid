@@ -9,6 +9,7 @@ import (
 
 	mock "github.com/stretchr/testify/mock"
 	"github.com/thunder-id/thunderid/internal/system/database/model"
+	"github.com/thunder-id/thunderid/internal/system/database/provider"
 	"github.com/thunder-id/thunderid/pkg/thunderidengine/providers"
 )
 
@@ -466,6 +467,63 @@ func (_c *DBClientInterfaceMock_QueryContext_Call) Return(stringToIfaceVals []ma
 }
 
 func (_c *DBClientInterfaceMock_QueryContext_Call) RunAndReturn(run func(ctx context.Context, query model.DBQuery, args ...interface{}) ([]map[string]interface{}, error)) *DBClientInterfaceMock_QueryContext_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// WithSession provides a mock function for the type DBClientInterfaceMock
+func (_mock *DBClientInterfaceMock) WithSession(ctx context.Context, fn func(provider.DBSessionInterface) error) error {
+	ret := _mock.Called(ctx, fn)
+
+	if len(ret) == 0 {
+		panic("no return value specified for WithSession")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, func(provider.DBSessionInterface) error) error); ok {
+		r0 = returnFunc(ctx, fn)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// DBClientInterfaceMock_WithSession_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'WithSession'
+type DBClientInterfaceMock_WithSession_Call struct {
+	*mock.Call
+}
+
+// WithSession is a helper method to define mock.On call
+//   - ctx context.Context
+//   - fn func(provider.DBSessionInterface) error
+func (_e *DBClientInterfaceMock_Expecter) WithSession(ctx interface{}, fn interface{}) *DBClientInterfaceMock_WithSession_Call {
+	return &DBClientInterfaceMock_WithSession_Call{Call: _e.mock.On("WithSession", ctx, fn)}
+}
+
+func (_c *DBClientInterfaceMock_WithSession_Call) Run(run func(ctx context.Context, fn func(provider.DBSessionInterface) error)) *DBClientInterfaceMock_WithSession_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 func(provider.DBSessionInterface) error
+		if args[1] != nil {
+			arg1 = args[1].(func(provider.DBSessionInterface) error)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *DBClientInterfaceMock_WithSession_Call) Return(err error) *DBClientInterfaceMock_WithSession_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *DBClientInterfaceMock_WithSession_Call) RunAndReturn(run func(ctx context.Context, fn func(provider.DBSessionInterface) error) error) *DBClientInterfaceMock_WithSession_Call {
 	_c.Call.Return(run)
 	return _c
 }

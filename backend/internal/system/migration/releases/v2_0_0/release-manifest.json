@@ -1,0 +1,32 @@
+{
+  "manifestVersion": 1,
+  "releaseVersion": "2.0.0",
+  "migrationMetadataVersion": 1,
+  "migrationDocumentation": "https://thunderid.dev/docs/migrations",
+  "stores": [
+    {
+      "id": "configdb",
+      "acceptedSourceLevel": "1.0.0",
+      "requiredLevel": "2.0.0",
+      "changed": true
+    },
+    {
+      "id": "entitydb",
+      "acceptedSourceLevel": "1.0.0",
+      "requiredLevel": "1.0.0",
+      "changed": false
+    },
+    {
+      "id": "runtime_transient",
+      "acceptedSourceLevel": "1.0.0",
+      "requiredLevel": "1.0.0",
+      "changed": false
+    },
+    {
+      "id": "runtime_persistent",
+      "acceptedSourceLevel": "1.0.0",
+      "requiredLevel": "2.0.0",
+      "changed": true
+    }
+  ]
+}

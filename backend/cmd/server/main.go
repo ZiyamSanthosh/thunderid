@@ -33,6 +33,7 @@ import (
 	"github.com/thunder-id/thunderid/internal/system/log"
 	"github.com/thunder-id/thunderid/internal/system/mcp"
 	"github.com/thunder-id/thunderid/internal/system/middleware"
+	"github.com/thunder-id/thunderid/internal/system/migration/engine"
 	"github.com/thunder-id/thunderid/internal/system/revocationcache"
 	"github.com/thunder-id/thunderid/internal/system/security"
 )
@@ -70,6 +71,34 @@ func main() {
 	// server home is known and the file path can be resolved.
 	if err := logger.Configure(cfg.Log.BuildOutputOptions(serverHome)); err != nil {
 		logger.Fatal(ctx, "Failed to configure log output", log.Error(err))
+	}
+
+	if isMigrationInvocation() {
+		result, commandErr := runMigrationCommand(ctx, flag.Args(), cfg, provider.GetDBProvider())
+		closeErr := provider.GetDBProviderCloser().Close()
+		if result != nil {
+			logMigrationCommandResult(ctx, logger, result, commandErr == nil)
+		}
+		if commandErr != nil {
+			logger.Fatal(ctx, "Migration command failed", log.Error(commandErr))
+		}
+		if closeErr != nil {
+			logger.Fatal(ctx, "Failed to close migration database connections", log.Error(closeErr))
+		}
+		return
+	}
+
+	startupCompatibility, err := runStartupCompatibilityCheck(ctx, cfg, provider.GetDBProvider())
+	if err != nil {
+		logger.Fatal(ctx, "Failed to check database compatibility before startup", log.Error(err))
+	}
+	if startupCompatibility == nil {
+		logger.Warn(ctx, "Migration compatibility startup gate is not available for the configured database providers")
+	} else {
+		logMigrationCompatibility(ctx, logger, *startupCompatibility)
+		if !startupCompatibility.Compatible() {
+			logger.Fatal(ctx, "ThunderID cannot start because its databases are not compatible with this release")
+		}
 	}
 
 	// Initialize the cache manager.
@@ -153,6 +182,153 @@ func main() {
 	<-sigChan
 	logger.Info(ctx, "Shutting down server...")
 	gracefulShutdown(ctx, logger, server, cacheManager, revocationSyncer, backchannelDispatcher)
+}
+
+func logMigrationCommandResult(
+	ctx context.Context,
+	logger *log.Logger,
+	result *migrationCommandResult,
+	successful bool,
+) {
+	logMigrationInitialization(ctx, logger, result.initialization)
+	if result.compatibility != nil {
+		logMigrationCompatibility(ctx, logger, *result.compatibility)
+	}
+	if result.preflight != nil {
+		logMigrationPreflight(ctx, logger, *result.preflight)
+	}
+	if result.application != nil {
+		logMigrationApplication(ctx, logger, *result.application, successful)
+	}
+	logger.Info(ctx, "Migration command result",
+		log.String("action", result.action), log.Bool("successful", successful))
+}
+
+func logMigrationInitialization(
+	ctx context.Context,
+	logger *log.Logger,
+	results []engine.InitializationResult,
+) {
+	for _, initialization := range results {
+		logger.Info(ctx, "Migration metadata initialized",
+			log.String("store", string(initialization.State.StoreID)),
+			log.String("completedLevel", initialization.State.CompletedLevel),
+			log.Bool("created", initialization.Created))
+	}
+}
+
+func logMigrationCompatibility(
+	ctx context.Context,
+	logger *log.Logger,
+	report engine.CompatibilityReport,
+) {
+	for _, store := range report.Stores {
+		fields := []log.Field{
+			log.String("store", string(store.StoreID)),
+			log.Bool("compatible", store.Compatible()),
+			log.String("completedLevel", store.CompletedLevel),
+			log.String("requiredLevel", store.RequiredLevel),
+			log.String("status", string(store.Status)),
+			log.String("reason", string(store.Reason)),
+		}
+		if store.Err != nil {
+			fields = append(fields, log.Error(store.Err))
+		}
+		logger.Info(ctx, "Migration compatibility checked", fields...)
+	}
+	logger.Info(ctx, "Migration compatibility status", log.Bool("compatible", report.Compatible()))
+	if report.NextMigrationRelease != "" {
+		logger.Info(ctx, "Migration route available",
+			log.String("nextMigrationRelease", report.NextMigrationRelease),
+			log.String("migrationRoute", strings.Join(report.MigrationRoute, ",")))
+	} else if report.RouteErr != nil {
+		logger.Info(ctx, "Migration route unavailable", log.Error(report.RouteErr))
+	}
+}
+
+func logMigrationPreflight(
+	ctx context.Context,
+	logger *log.Logger,
+	report engine.MigrationPreflightReport,
+) {
+	for _, store := range report.Stores {
+		fields := []log.Field{
+			log.String("store", string(store.StoreID)),
+			log.String("state", string(store.State)),
+			log.String("completedLevel", store.CompletedLevel),
+			log.String("acceptedSourceLevel", store.AcceptedSourceLevel),
+			log.String("requiredLevel", store.RequiredLevel),
+			log.String("reason", string(store.Reason)),
+		}
+		if store.Err != nil {
+			fields = append(fields, log.Error(store.Err))
+		}
+		logger.Info(ctx, "Migration preflight store checked", fields...)
+	}
+	for _, operation := range report.Operations {
+		fields := []log.Field{
+			log.String("operation", string(operation.OperationID)),
+			log.String("store", string(operation.StoreID)),
+			log.String("state", string(operation.State)),
+			log.String("summary", operation.Summary),
+		}
+		if operation.Err != nil {
+			fields = append(fields, log.Error(operation.Err))
+		}
+		logger.Info(ctx, "Migration preflight operation checked", fields...)
+		for _, finding := range operation.Findings {
+			logger.Info(ctx, "Migration preflight finding",
+				log.String("operation", string(operation.OperationID)),
+				log.String("code", finding.Code),
+				log.String("message", finding.Message),
+				log.String("remediation", finding.Remediation))
+		}
+	}
+	logger.Info(ctx, "Migration preflight status",
+		log.String("targetVersion", report.TargetVersion),
+		log.Bool("ready", report.Ready()))
+}
+
+func logMigrationApplication(
+	ctx context.Context,
+	logger *log.Logger,
+	result engine.MigrationRunResult,
+	successful bool,
+) {
+	for _, resumption := range result.Resumptions {
+		logger.Info(ctx, "Migration store resumed",
+			log.String("store", string(resumption.State.StoreID)),
+			log.String("runID", resumption.State.ActiveRunID),
+			log.String("targetLevel", resumption.State.TargetLevel))
+	}
+	for _, execution := range result.Operations {
+		logger.Info(ctx, "Migration operation completed",
+			log.String("operation", execution.Progress.OperationID),
+			log.String("runID", execution.Progress.RunID),
+			log.Bool("executionSkipped", execution.ExecutionSkipped))
+	}
+	for _, finalization := range result.Finalizations {
+		logger.Info(ctx, "Migration store finalized",
+			log.String("store", string(finalization.State.StoreID)),
+			log.String("completedLevel", finalization.State.CompletedLevel),
+			log.Bool("finalized", finalization.Finalized))
+	}
+	message := "Migration apply completed"
+	if result.Resumed {
+		message = "Migration resume completed"
+	}
+	if !successful {
+		message = "Migration apply incomplete"
+		if result.Resumed {
+			message = "Migration resume incomplete"
+		}
+	}
+	logger.Info(ctx, message,
+		log.String("runID", result.RunID),
+		log.String("targetVersion", result.Preflight.TargetVersion),
+		log.Bool("alreadyAtTarget", result.AlreadyAtTarget),
+		log.Int("operations", len(result.Operations)),
+		log.Int("finalizedStores", len(result.Finalizations)))
 }
 
 // initRevocationCache builds the Resource Server token-revocation enforcer and its background syncer

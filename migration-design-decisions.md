@@ -11,7 +11,7 @@ Design work is parked after the fundamentals below were agreed:
 
 - embedded release requirements, independent per-store state and a read-only terminating startup gate;
 - adjacent published-release migrations, with each target artifact owning one transition;
-- one trust-based `initialize` command, fixed `1.0.0` registration for absent metadata tables and
+- one trust-based `initialize` command, fixed `1.0.0` registration for untracked databases and
   manifest-target registration for missing rows in existing current-script tables;
 - compiled SQL and programmatic operations, scopes, readiness and exact pre/post-verification;
 - engine-owned ordering, reservations, transactions, metadata, batch/checkpoint orchestration,
@@ -57,8 +57,9 @@ The external file is not an input to startup compatibility checking or migration
 
 ### Manifest responsibility
 
-The manifest is the release compatibility contract. It declares what the release requires and the
-immediately preceding release it accepts. It does not encode executable migration logic.
+The manifest is the release compatibility contract. It declares the exact database level accepted
+and required for each logical store. It does not infer compatibility from the previous binary
+version and does not encode executable migration logic.
 Developer-authored pre-verification, execution and post-verification functions belong to the
 compiled migration registry. Release validation cross-checks that registry against the manifest.
 
@@ -68,7 +69,6 @@ compiled migration registry. Release validation cross-checks that registry again
 {
   "manifestVersion": 1,
   "releaseVersion": "1.2.1",
-  "acceptedSourceVersion": "1.2.0",
   "migrationMetadataVersion": 1,
   "migrationDocumentation": "https://thunderid.dev/docs/migrations/1.2.0-to-1.2.1",
   "stores": [
@@ -104,12 +104,11 @@ compiled migration registry. Release validation cross-checks that registry again
 |---|---:|---|
 | `manifestVersion` | Yes | Version of this JSON contract. It allows future manifest evolution without guessing its shape. |
 | `releaseVersion` | Yes | ThunderID version containing this manifest. It must equal the normalized version from `version.txt`. |
-| `acceptedSourceVersion` | Yes | Immediately preceding published ThunderID version from which this release accepts an upgrade. |
 | `migrationMetadataVersion` | Yes | Migration-table format that the release creates and understands. It is compared with `MIGRATION_STATE.METADATA_VERSION`. |
 | `migrationDocumentation` | Yes | Release-specific documentation used in preflight output and startup refusal messages. |
 | `stores` | Yes | Complete list of logical stores supported by this release. The array is used so duplicate identifiers can be rejected explicitly. |
 | `stores[].id` | Yes | Stable store identifier shared by configuration, database state, migration definitions and diagnostics. |
-| `stores[].acceptedSourceLevel` | Yes | Exact completed level this target accepts for that store. It is the level required by the immediately preceding release. |
+| `stores[].acceptedSourceLevel` | Yes | Exact completed database-representation level this target accepts for that store. Releases without changes to that store retain its existing level. |
 | `stores[].requiredLevel` | Yes | Exact completed level the store must have before this release can serve. |
 | `stores[].changed` | Yes | Explicit administrator-facing declaration of whether this release changes the store. |
 
@@ -124,7 +123,9 @@ reject the manifest when `changed` is inconsistent with the levels or compiled m
 The manifest does not contain operation ordering, SQL, checkpoint formats or implementation
 function names. Those belong to the compiled migration plan, which is a separate design decision.
 This manifest remains sufficient for startup compatibility checking, fresh initialization,
-adjacent-release source validation, operator diagnostics and release tooling.
+per-store migration source validation, operator diagnostics and release tooling. Mapping an
+incompatible database state to the next ThunderID migration artifact is a separate release-catalog
+responsibility.
 
 ### Manifest validation
 
@@ -135,8 +136,6 @@ The release build and tests reject a manifest when:
 - a store identifier is duplicated or unknown;
 - a version is not in canonical normalized semantic-version form;
 - `releaseVersion` differs from the normalized `version.txt` value;
-- `acceptedSourceVersion` is not the immediately preceding published release;
-- a store's `acceptedSourceLevel` differs from the level required by that preceding release;
 - an unchanged store changes its required level;
 - a changed store does not advance to the current `releaseVersion`;
 - a changed store has no compiled migration operations;
@@ -146,6 +145,11 @@ The release build and tests reject a manifest when:
 ## Decision 2: Database-side migration state
 
 **Status:** Agreed, including the detailed columns, constraints and lifecycle below.
+
+**Implementation note:** The first migration-engine increment uses a minimal subset of this model.
+Fields and constraints needed only by later recovery, scoped-backfill or ZDM behavior are tracked in
+[migration-engine-implementation-backlog.md](migration-engine-implementation-backlog.md) and will be
+added only when the corresponding behavior is implemented.
 
 Each SQL database namespace that contains one or more ThunderID logical stores contains two system
 metadata tables. A SQL database namespace means one SQLite database file, or one PostgreSQL database
@@ -271,9 +275,11 @@ Required constraints:
 
 Progress rows are retained throughout the migration run, including temporarily after an individual
 store reaches `clean`, so a multi-store report can describe the complete run. After every operation
-and scope required for a store has passed post-verification, one database transaction advances that
-store's `COMPLETED_LEVEL`, clears its active fields and changes its state to `clean`; this transaction
-does not yet delete the completed progress rows.
+and scope required for a store has completed, one database transaction validates the completed
+progress set, advances that store's `COMPLETED_LEVEL`, clears its active fields and changes its state
+to `clean`; this transaction does not yet delete the completed progress rows. Each progress record is
+marked completed only after that operation's immediate post-verification succeeds in the same
+transaction as its mutation.
 
 After the run reaches its final success or failure outcome, the migration process reads the retained
 progress, builds the complete human-readable report and delivers it to the chosen output. If report
@@ -299,7 +305,7 @@ Fresh or legacy initialization
                     v
               in_progress
                /       \
-      verified failure  all post-verification passes
+      verified failure  all operations complete
              v                         |
            failed                      v
              |                       clean
@@ -347,7 +353,7 @@ operation order and timestamps are omitted where they do not clarify the scenari
 The database still reports `1.0.0` as its last completed level. Startup terminates because the state
 is not clean. A migration resume verifies the completed `production` scope, verifies and continues
 the `partners` scope from its last committed checkpoint, and advances the store to `1.1.0` only
-after store-wide post-verification passes.
+after every required operation scope has completed successfully.
 
 ### Scenario A: one physical database contains every logical store
 
@@ -543,10 +549,11 @@ The gate never:
 - acquires credentials capable of altering schema solely for startup checking.
 
 Initialization stamps trusted levels without structural/content verification. During migration,
-structural and content correctness is established by
-migration post-verification before `COMPLETED_LEVEL` advances. Repeating those expensive checks on
-every startup would duplicate the migration process. Startup trusts a clean authoritative state row
-only after validating its metadata format and exact required level.
+structural and content correctness is established by each operation's immediate post-verification
+before its progress is marked completed. Store finalization validates the complete progress set
+before `COMPLETED_LEVEL` advances. Repeating those checks on every startup would duplicate the
+migration process. Startup trusts a clean authoritative state row only after validating its metadata
+format and exact required level.
 
 ### Configuration and initialization relationship
 
@@ -630,11 +637,11 @@ globally ordered operations so that each store retains independent completion an
 
 ### Release-plan structure
 
-Each target release compiles one explicit plan for the immediately preceding release it accepts:
+Each target release compiles one explicit plan for the per-store source levels declared by its
+manifest:
 
 ```go
 type MigrationPlan struct {
-    SourceVersion string
     TargetVersion string
     Operations    []Operation
 }
@@ -650,7 +657,6 @@ The plan is constructed explicitly:
 ```go
 func BuildMigrationPlan() MigrationPlan {
     return MigrationPlan{
-        SourceVersion: "1.2.0",
         TargetVersion: "1.2.1",
         Operations: []Operation{
             addClientTypeColumn(),
@@ -665,8 +671,9 @@ Automatic package initialization, reflection and filesystem discovery are not us
 operations. Explicit construction makes the complete order visible in review and deterministic in
 tests.
 
-The plan has no separate identifier. The normalized source-to-target version pair is its identity.
-An empty operation list is valid only when the embedded manifest marks every store unchanged.
+The plan has no separate identifier. Its target version and the manifest's per-store accepted source
+levels identify the transition. An empty operation list is valid only when the embedded manifest
+marks every store unchanged.
 
 ### Plan validation
 
@@ -689,19 +696,12 @@ a package instead of modifying the package belonging to an already published rel
 
 ```text
 backend/internal/system/migration/
-├── contract/
-│   └── shared plan, operation and verification types
 ├── engine/
-│   └── version-neutral orchestration
+│   └── version-neutral contracts, metadata and orchestration
 ├── current/
 │   └── explicit binding to the release being built
 └── releases/
-    ├── v1_1_0/
-    │   ├── release-manifest.json
-    │   ├── release.go
-    │   ├── plan.go
-    │   └── config_add_client_type.go
-    └── v1_2_0/
+    └── v2_0_0/
         ├── release-manifest.json
         ├── release.go
         ├── plan.go
@@ -734,11 +734,11 @@ The `current` package contains an explicit import and binding to exactly one rel
 package current
 
 import (
-    "github.com/thunder-id/thunderid/internal/system/migration/contract"
-    release "github.com/thunder-id/thunderid/internal/system/migration/releases/v1_2_0"
+    "github.com/thunder-id/thunderid/internal/system/migration/engine"
+    release "github.com/thunder-id/thunderid/internal/system/migration/releases/v2_0_0"
 )
 
-func Definition() contract.ReleaseDefinition {
+func Definition() *engine.ReleaseDefinition {
     return release.Definition()
 }
 ```
@@ -1024,24 +1024,23 @@ CheckReadiness(
 ) (ReadinessResult, error)
 ```
 
-`PlanContext` exposes only the validated source and target versions, the operation's position and
-the identifiers of preceding operations. It does not allow the readiness check to execute or
-simulate those operations.
+`PlanContext` exposes only the validated target version, the operation's position and the identifiers
+of preceding operations. Accepted database levels come from the validated release manifest. The
+context does not allow the readiness check to execute or simulate operations.
 
 The engine constructs an immutable context for each operation:
 
 ```go
 type PlanContext struct {
-    sourceVersion         string
     targetVersion         string
     operationIndex        int
     precedingOperationIDs []OperationID
 }
 ```
 
-Read-only methods expose `SourceVersion`, `TargetVersion`, `OperationIndex`, a copied list of
-`PrecedingOperationIDs` and a `Precedes(OperationID)` lookup. `OperationID` is a distinct string
-type. The context contains plan structure only. It does not contain database clients, transactions,
+Read-only methods expose `TargetVersion`, `OperationIndex`, a copied list of
+`PrecedingOperationIDs` and a `Precedes(OperationID)` lookup. `OperationID` is a distinct string type.
+The context contains plan structure only. It does not contain database clients, transactions,
 migration progress, execution functions, runtime services or assumed results of preceding
 operations. Live database observations remain available through `ReadAccess`.
 
@@ -1264,8 +1263,9 @@ Continue to the next globally ordered operation
 
 An operation cannot advance its store level. After the last operation owned by a store completes,
 the engine performs a separate store-finalization check. It advances that store only after every
-operation and scope owned by the store has exact target verification. Deployment-scoped work must
-therefore complete for every discovered deployment before the store becomes clean.
+operation and scope owned by the store has completed progress produced after its own immediate
+post-verification. Deployment-scoped work must therefore complete for every discovered deployment
+before the store becomes clean.
 
 #### Verification of partially completed scopes
 
@@ -1384,7 +1384,8 @@ then compares them with retained progress:
 
 - duplicate or malformed scopes are rejected;
 - every retained progress scope must still be recognized by the resolver;
-- completed scopes must still verify as exact target;
+- completed scopes retain their completed progress as authoritative evidence because their mutation,
+  immediate post-verification and progress completion committed atomically;
 - incomplete scopes follow the pre-verification table above; and
 - a newly discovered scope is allowed only when it verifies as source or exact target.
 
@@ -1393,9 +1394,7 @@ deployment inventory.
 
 `ResolveScopes` returns the complete scope set, including scopes whose data is already at target. It
 must not filter the result down to apparently pending scopes. Before operation completion, the engine
-resolves the set again. A changed, missing, duplicate or malformed scope prevents completion. The
-operation's store-wide post-verification remains the final proof that no required deployment or
-batch was omitted.
+resolves the set again. A changed, missing, duplicate or malformed scope prevents completion.
 
 #### Failure boundary
 
@@ -1416,9 +1415,11 @@ recovery path from Stage 2.
 **Status:** Agreed.
 
 A logical store reaches its required migration level only after every operation assigned to it has
-been reached in global plan order, every required scope and deployment has completed, completed
-scopes still pass exact post-verification, final scope resolution finds no change, and no failed or
-incomplete progress remains for the store.
+been reached in global plan order, every required scope and deployment has completed, and no failed
+or incomplete progress remains for the store. Finalization does not rerun earlier operation
+post-verifiers because a later operation may intentionally change an earlier operation's immediate
+target representation. A separately designed final store verifier may be introduced if a migration
+requires validation of the complete final representation.
 
 The engine then performs one conditional store-finalization transaction. It verifies that the
 reservation belongs to the active run, writes the required `COMPLETED_LEVEL` and
@@ -1609,7 +1610,7 @@ The proposed migration-management commands are:
 |---|---:|---|
 | `thunderid migration status` | No | Show embedded target information, store levels, active or failed run state, and pending report metadata. |
 | `thunderid migration check` | No | Run the complete optional preflight and produce an aggregate readiness report. |
-| `thunderid migration initialize` | Yes | Register fixed baseline 1.0.0 when tables are absent, or manifest target levels for missing rows in existing tables; preserve existing records. |
+| `thunderid migration initialize` | Yes | Register the fixed pre-framework level for an untracked database, or manifest target levels for missing rows in existing tables; preserve existing records. |
 | `thunderid migration apply` | Yes | Apply a new adjacent-release transition from clean accepted source levels. |
 | `thunderid migration resume` | Yes | Resume one recognized failed run using its retained progress. |
 | `thunderid migration report` | No | Reconstruct and redeliver a retained report without executing migration. |
@@ -1624,27 +1625,28 @@ The current fresh-creation scripts create both migration metadata tables, initia
 
 | State inspected before writes | Action |
 |---|---|
-| Both metadata tables absent | Create both tables and insert clean baseline `1.0.0` rows for the namespace's configured stores. |
+| Both metadata tables absent | Create both tables and insert clean rows at the fixed pre-framework database level `1.0.0` for each configured store. |
 | Both supported tables exist, a store row absent | Insert a clean row at that store's embedded manifest `requiredLevel`. |
 | A valid store row exists | Preserve its level and status and report current state; initialization never migrates or resets it. |
 | Partial tables, unsupported structure or inconsistent records | Refuse blind stamping and report incomplete/damaged metadata. |
 
 No fresh-schema or legacy baseline validator is required for initialization. These are trusted
 starting declarations, not proof of schema/data correctness. Administrators must use the current
-creation scripts for fresh databases and must not create/empty metadata manually to bypass migration.
-All untracked pre-framework installations are assumed to be valid `1.0.0` migration inputs.
+creation scripts for fresh databases and must not create or empty metadata manually to bypass
+migration. The fixed pre-framework level is `1.0.0`. ThunderID 1.0.0 and 1.0.1 databases are both
+registered at level `1.0.0` because 1.0.1 did not change the relevant database representation.
+`COMPLETED_LEVEL` records database compatibility, not the exact binary version that previously
+served the database. A release that does not change a store retains that store's level.
 
 Inspect the route before creating tables. Create both tables and every required baseline row in one
 transaction per SQLite file or PostgreSQL database/schema namespace, so a failed legacy initialization
 cannot leave empty tables that a retry stamps at target. Across namespaces, retain successful commits,
 report partial failure and retry remaining namespaces without rewriting existing rows.
 
-Any migration-aware binary can initialize the fixed baseline. If it is behind the invoked binary's
-requirements, startup remains blocked and guidance directs the administrator through each owning
-adjacent-release artifact. Reporting a complete route requires release-path information in the binary
-or release documentation; the target manifest alone does not describe every historical hop.
-A no-change release may have required level `1.0.0`; clean baseline stamping can then allow startup
-without schema/data verification. This is an accepted consequence of the trust-based policy.
+An untracked database is always registered at the fixed pre-framework level, regardless of the
+executing binary's manifest. This prevents a later binary from labeling a legacy database at a newer
+accepted source level and skipping intermediate migrations. The compatibility gate and migration
+plan must then establish a complete route from `1.0.0` to the target store level.
 
 SQLite and PostgreSQL follow the same path: fresh scripts create application and empty metadata
 tables, setup initializes records, then bootstrap runs. Existing installations never rerun full
@@ -1708,7 +1710,8 @@ migrate initialize
 ```
 
 Setup invokes initialization for fresh databases; start remains read-only. Both metadata tables
-absent select the agreed fixed `1.0.0` trust-based registration path, not historical detection.
+absent select the agreed fixed `1.0.0` trust-based registration path. Initialization does not attempt
+to detect the exact prior binary version.
 
 Invoking a migration wrapper without an action prints usage and performs no write. Each wrapper
 propagates the executable's exit code unchanged and must not turn a failed operation into a warning.
@@ -1827,7 +1830,6 @@ Command: `./migrate.sh status --output json`, with the option and fields still p
 {
   "command": "status",
   "binaryVersion": "1.1.0",
-  "acceptedSourceVersion": "1.0.0",
   "migrationDocumentation": "https://thunderid.dev/docs/migrations/1.0.0-to-1.1.0",
   "compatibility": "incompatible",
   "migrationRequired": true,
@@ -1911,8 +1913,8 @@ Store: entity
 Reason: migration metadata is missing; its level is unestablished
 
 For a fresh database, use setup or migration initialize.
-For an untracked legacy installation, use migration initialize to register the fixed 1.0.0 baseline.
-Adoption must verify the complete recognized baseline before recording a level.
+For an untracked legacy installation, use migration initialize to register the fixed 1.0.0 database
+level.
 For an installation already using migration metadata, investigate missing or damaged state.
 No changes made. Apply was not started.
 ```
@@ -2190,8 +2192,8 @@ The fundamentals are settled. Continue with these unresolved design choices only
 3. **Abandon safeguards.** Finalize exact run selection, recognized restored/corrected states,
    conditional metadata cleanup and retry after partial multi-namespace cleanup.
 4. **Historical path guidance.** Define how a later artifact or published documentation maps a newly
-   registered fixed `1.0.0` baseline through every required adjacent-release artifact. Resolve the
-   partial multi-store failed-hop wording without implying a rollback to one product version.
+   registered fixed `1.0.0` baseline through every required migration transition. Resolve the partial
+   multi-store failed-hop wording without implying a rollback to one product version.
 5. **Public command contracts.** Finalize argument syntax, JSON schemas, manual-action notice shape,
    report-file input/output, exit codes and error precedence. Behavioral intent and examples are
    already agreed; this step freezes the public automation contract.

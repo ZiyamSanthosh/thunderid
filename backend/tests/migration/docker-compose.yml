@@ -1,0 +1,45 @@
+services:
+  source-schema:
+    image: ${SOURCE_THUNDERID_IMAGE}
+    user: "0:0"
+    working_dir: /opt/thunderid
+    environment:
+      SOURCE_PRODUCT_VERSION: ${SOURCE_PRODUCT_VERSION}
+    command: ["/bin/sh", "/test/extract-source-schema.sh"]
+    volumes:
+      - source-schemas:/source-schemas
+      - ./scripts/extract-source-schema.sh:/test/extract-source-schema.sh:ro
+    restart: "no"
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: migration_user
+      POSTGRES_PASSWORD: migration_password
+      POSTGRES_DB: migration_admin
+      MIGRATION_DATABASE_LAYOUT: ${MIGRATION_DATABASE_LAYOUT:-separate}
+    depends_on:
+      source-schema:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /var/lib/postgresql/data/.source-schema-initialized && test \"$$(cat /proc/1/comm)\" = postgres && pg_isready -U migration_user -d migration_admin"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    ports:
+      - "127.0.0.1::5432"
+    volumes:
+      - source-schemas:/source-schemas:ro
+      - ./scripts/postgres-init.sh:/docker-entrypoint-initdb.d/01-source-schema.sh:ro
+
+  migration-runner:
+    build:
+      context: ../..
+      dockerfile: tests/migration/target.Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+volumes:
+  source-schemas:
