@@ -6,6 +6,7 @@
 package harness
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"net"
@@ -96,6 +97,27 @@ func (e Environment) RunMigrationCommandExpectFailure(t *testing.T, action strin
 	output, err := command.CombinedOutput()
 	require.Error(t, err, "docker %s unexpectedly succeeded", strings.Join(arguments, " "))
 	t.Logf("docker %s failed as expected:\n%s", strings.Join(arguments, " "), output)
+	return string(output)
+}
+
+func (e Environment) RunServerExpectCompatibilityFailure(t *testing.T) string {
+	t.Helper()
+	arguments := []string{
+		"compose", "run", "--rm", "--no-deps",
+		"--entrypoint", "/opt/thunderid/thunderid", "migration-runner",
+		"-serverHome", "/opt/thunderid",
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, "docker", arguments...)
+	command.Dir = e.directory
+	command.Env = e.dockerEnv
+	output, err := command.CombinedOutput()
+	if ctx.Err() != nil {
+		t.Fatalf("ThunderID startup did not reject the incompatible databases within 30 seconds:\n%s", output)
+	}
+	require.Error(t, err, "ThunderID unexpectedly started with incompatible databases")
+	t.Logf("ThunderID startup failed as expected:\n%s", output)
 	return string(output)
 }
 

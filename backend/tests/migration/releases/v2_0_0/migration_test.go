@@ -25,6 +25,7 @@ func TestPostgresSharedDatabaseMigration(t *testing.T) {
 func runPostgresMigrationSuite(t *testing.T, configFile string) {
 	t.Helper()
 	environment := migrationharness.Start(t, filepath.Join(releaseTestDirectory(t), configFile))
+	verifyCompatibilityGate(t, environment)
 	verifyRemoveRevocationReasonCheck(t, environment)
 	verifyCreateAuthorizationPDPConnection(t, environment)
 	verifyReleaseState(t, environment)

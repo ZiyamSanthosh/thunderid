@@ -15,6 +15,14 @@ type testOperation struct {
 	definition OperationDefinition
 }
 
+type rollbackTestOperation struct {
+	testOperation
+}
+
+func (rollbackTestOperation) Rollback(context.Context, OperationExecution, error) error {
+	return nil
+}
+
 func (o testOperation) Definition() OperationDefinition {
 	return o.definition
 }
@@ -69,6 +77,22 @@ func TestPlanRegistryAcceptsNoChangePlan(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Empty(t, registry.Plan().Operations)
+}
+
+func TestPlanRegistryAcceptsOptionalRollbackForResumableOperation(t *testing.T) {
+	manifest := changedStoreManifest(StoreIDEntityDB)
+	operation := validPlanOperation(StoreIDEntityDB)
+	operation.definition.InterruptionMode = InterruptionModeResumable
+
+	registry, err := NewPlanRegistry(manifest, MigrationPlan{
+		TargetVersion: manifest.ReleaseVersion,
+		Operations:    []Operation{rollbackTestOperation{testOperation: operation}},
+	})
+
+	require.NoError(t, err)
+	require.Len(t, registry.Plan().Operations, 1)
+	_, supportsRollback := registry.Plan().Operations[0].(RollbackCapableOperation)
+	assert.True(t, supportsRollback)
 }
 
 func TestPlanRegistryRejectsInvalidPlan(t *testing.T) {
@@ -126,6 +150,14 @@ func TestPlanRegistryRejectsInvalidPlan(t *testing.T) {
 				manifest.Stores[0].RequiredLevel = manifest.Stores[0].AcceptedSourceLevel
 			},
 			errorMatch: "unchanged store",
+		},
+		{
+			name: "rollback on atomic operation",
+			mutate: func(_ *ReleaseManifest, plan *MigrationPlan) {
+				operation := plan.Operations[0].(testOperation)
+				plan.Operations[0] = rollbackTestOperation{testOperation: operation}
+			},
+			errorMatch: "atomic operations cannot define rollback behavior",
 		},
 	}
 

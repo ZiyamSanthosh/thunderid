@@ -249,7 +249,7 @@ func logMigrationCompatibility(
 func logMigrationPreflight(
 	ctx context.Context,
 	logger *log.Logger,
-	report engine.MigrationPreflightReport,
+	report engine.PreflightReport,
 ) {
 	for _, store := range report.Stores {
 		fields := []log.Field{
@@ -263,7 +263,7 @@ func logMigrationPreflight(
 		if store.Err != nil {
 			fields = append(fields, log.Error(store.Err))
 		}
-		logger.Info(ctx, "Migration preflight store checked", fields...)
+		logger.Info(ctx, "Migration store assessed", fields...)
 	}
 	for _, operation := range report.Operations {
 		fields := []log.Field{

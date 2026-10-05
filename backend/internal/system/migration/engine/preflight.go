@@ -177,14 +177,12 @@ func (r OperationReadinessReport) Ready() bool {
 	return r.Err == nil && (r.State == ReadinessReady || r.State == ReadinessDeferred)
 }
 
-// PreflightReport contains operation readiness results in migration-plan order.
-type PreflightReport struct {
+type operationReadinessReport struct {
 	TargetVersion string
 	Operations    []OperationReadinessReport
 }
 
-// Ready reports whether every operation permits the plan to proceed.
-func (r PreflightReport) Ready() bool {
+func (r operationReadinessReport) Ready() bool {
 	for _, operation := range r.Operations {
 		if !operation.Ready() {
 			return false
@@ -193,17 +191,15 @@ func (r PreflightReport) Ready() bool {
 	return true
 }
 
-// PreflightChecker executes read-only readiness checks for a validated release plan.
-type PreflightChecker struct {
+type operationReadinessChecker struct {
 	plan   MigrationPlan
 	stores map[StoreID]ReadStore
 }
 
-// NewPreflightChecker creates a checker with an independent plan and store-access map.
-func NewPreflightChecker(
+func newOperationReadinessChecker(
 	release ReleaseDefinition,
 	stores map[StoreID]ReadStore,
-) (*PreflightChecker, error) {
+) (*operationReadinessChecker, error) {
 	registry, err := NewPlanRegistry(release.Manifest, release.Plan)
 	if err != nil {
 		return nil, fmt.Errorf("create migration preflight checker: %w", err)
@@ -212,29 +208,28 @@ func NewPreflightChecker(
 	for storeID, store := range stores {
 		storeCopy[storeID] = store
 	}
-	return &PreflightChecker{plan: registry.Plan(), stores: storeCopy}, nil
+	return &operationReadinessChecker{plan: registry.Plan(), stores: storeCopy}, nil
 }
 
-// Check executes every independent readiness check and aggregates its result.
-func (c *PreflightChecker) Check(ctx context.Context) PreflightReport {
+func (c *operationReadinessChecker) check(ctx context.Context) operationReadinessReport {
 	return c.checkStores(ctx, nil, nil)
 }
 
-func (c *PreflightChecker) checkStores(
+func (c *operationReadinessChecker) checkStores(
 	ctx context.Context,
 	includedStores map[StoreID]struct{},
 	blockedStores map[StoreID]struct{},
-) PreflightReport {
+) operationReadinessReport {
 	return c.checkPendingStores(ctx, includedStores, blockedStores, nil)
 }
 
-func (c *PreflightChecker) checkPendingStores(
+func (c *operationReadinessChecker) checkPendingStores(
 	ctx context.Context,
 	includedStores map[StoreID]struct{},
 	blockedStores map[StoreID]struct{},
 	completedOperations map[OperationID]struct{},
-) PreflightReport {
-	report := PreflightReport{
+) operationReadinessReport {
+	report := operationReadinessReport{
 		TargetVersion: c.plan.TargetVersion,
 		Operations:    make([]OperationReadinessReport, 0, len(c.plan.Operations)),
 	}
@@ -255,8 +250,9 @@ func (c *PreflightChecker) checkPendingStores(
 			if _, included := includedStores[definition.StoreID]; !included {
 				if _, blocked := blockedStores[definition.StoreID]; blocked {
 					resultsByID[definition.ID] = failedReadinessReport(definition,
-						"The operation's writable store is blocked by preflight", "store_preflight_blocked",
-						fmt.Sprintf("Store %q must pass store-level preflight", definition.StoreID), nil)
+						"The operation's writable store is blocked by its migration assessment",
+						"store_assessment_blocked",
+						fmt.Sprintf("Store %q must pass its migration assessment", definition.StoreID), nil)
 				} else {
 					resultsByID[definition.ID] = OperationReadinessReport{
 						OperationID: definition.ID, Description: definition.Description,
@@ -269,9 +265,9 @@ func (c *PreflightChecker) checkPendingStores(
 		}
 		blockedStoreID := blockedDeclaredStore(definition, blockedStores)
 		if blockedStoreID != "" {
-			result := failedReadinessReport(definition, "A declared store is blocked by preflight",
-				"store_preflight_blocked",
-				fmt.Sprintf("Store %q must pass store-level preflight before this operation can be checked",
+			result := failedReadinessReport(definition, "A declared store is blocked by its migration assessment",
+				"store_assessment_blocked",
+				fmt.Sprintf("Store %q must pass its migration assessment before this operation can be checked",
 					blockedStoreID), nil)
 			report.Operations = append(report.Operations, result)
 			resultsByID[definition.ID] = result
@@ -341,44 +337,44 @@ func blockedDeclaredStore(
 	return ""
 }
 
-// StorePreflightState classifies a logical store before migration execution.
-type StorePreflightState string
+// StoreMigrationAssessmentState classifies a logical store before migration execution.
+type StoreMigrationAssessmentState string
 
 const (
-	// StorePreflightAtTarget means that the store already satisfies the target release.
-	StorePreflightAtTarget StorePreflightState = "at_target"
-	// StorePreflightMigrationRequired means that the store is at the accepted source level.
-	StorePreflightMigrationRequired StorePreflightState = "migration_required"
-	// StorePreflightBlocked means that the store is not a recognized migration source or target.
-	StorePreflightBlocked StorePreflightState = "blocked"
+	// StoreAssessmentAtTarget means that the store already satisfies the target release.
+	StoreAssessmentAtTarget StoreMigrationAssessmentState = "at_target"
+	// StoreAssessmentMigrationRequired means that the store is at the accepted source level.
+	StoreAssessmentMigrationRequired StoreMigrationAssessmentState = "migration_required"
+	// StoreAssessmentBlocked means that the store is not a recognized migration source or target.
+	StoreAssessmentBlocked StoreMigrationAssessmentState = "blocked"
 )
 
-// StorePreflightReport contains the migration applicability result for one logical store.
-type StorePreflightReport struct {
+// StoreMigrationAssessment contains the migration applicability result for one logical store.
+type StoreMigrationAssessment struct {
 	StoreID             StoreID
 	AcceptedSourceLevel string
 	RequiredLevel       string
 	CompletedLevel      string
 	Status              Status
-	State               StorePreflightState
+	State               StoreMigrationAssessmentState
 	Reason              CompatibilityReason
 	Err                 error
 }
 
 // Ready reports whether the store is either already complete or can be migrated by this release.
-func (r StorePreflightReport) Ready() bool {
-	return r.State == StorePreflightAtTarget || r.State == StorePreflightMigrationRequired
+func (r StoreMigrationAssessment) Ready() bool {
+	return r.State == StoreAssessmentAtTarget || r.State == StoreAssessmentMigrationRequired
 }
 
-// MigrationPreflightReport combines store applicability and operation readiness.
-type MigrationPreflightReport struct {
+// PreflightReport combines store applicability and operation readiness.
+type PreflightReport struct {
 	TargetVersion string
-	Stores        []StorePreflightReport
+	Stores        []StoreMigrationAssessment
 	Operations    []OperationReadinessReport
 }
 
 // Ready reports whether the migration can proceed without a known preflight blocker.
-func (r MigrationPreflightReport) Ready() bool {
+func (r PreflightReport) Ready() bool {
 	if len(r.Stores) == 0 {
 		return false
 	}
@@ -395,40 +391,40 @@ func (r MigrationPreflightReport) Ready() bool {
 	return true
 }
 
-// MigrationPreflightChecker combines store-level applicability with operation readiness.
-type MigrationPreflightChecker struct {
+// PreflightChecker combines store migration applicability with operation readiness.
+type PreflightChecker struct {
 	manifest          ReleaseManifest
 	compatibilityGate *CompatibilityGate
-	operationChecker  *PreflightChecker
+	operationChecker  *operationReadinessChecker
 }
 
-// NewMigrationPreflightChecker creates the complete read-only checker for one release.
-func NewMigrationPreflightChecker(
+// NewPreflightChecker creates the complete read-only checker for one release.
+func NewPreflightChecker(
 	release ReleaseDefinition,
 	stores map[StoreID]ReadStore,
-) (*MigrationPreflightChecker, error) {
+) (*PreflightChecker, error) {
 	compatibilityGate, err := NewCompatibilityGate(release.Manifest)
 	if err != nil {
 		return nil, fmt.Errorf("create migration preflight checker: %w", err)
 	}
-	operationChecker, err := NewPreflightChecker(release, stores)
+	operationChecker, err := newOperationReadinessChecker(release, stores)
 	if err != nil {
 		return nil, err
 	}
-	return &MigrationPreflightChecker{
+	return &PreflightChecker{
 		manifest: release.Manifest, compatibilityGate: compatibilityGate, operationChecker: operationChecker,
 	}, nil
 }
 
 // Check evaluates store applicability and then checks operations for stores requiring migration.
-func (c *MigrationPreflightChecker) Check(
+func (c *PreflightChecker) Check(
 	ctx context.Context,
 	metadataStores map[StoreID]*MetadataStore,
-) MigrationPreflightReport {
+) PreflightReport {
 	compatibility := c.compatibilityGate.Check(ctx, metadataStores)
-	report := MigrationPreflightReport{
+	report := PreflightReport{
 		TargetVersion: c.manifest.ReleaseVersion,
-		Stores:        make([]StorePreflightReport, 0, len(c.manifest.Stores)),
+		Stores:        make([]StoreMigrationAssessment, 0, len(c.manifest.Stores)),
 	}
 	requirements := make(map[StoreID]StoreRequirement, len(c.manifest.Stores))
 	for _, requirement := range c.manifest.Stores {
@@ -439,25 +435,25 @@ func (c *MigrationPreflightChecker) Check(
 	blockedStores := make(map[StoreID]struct{})
 	for _, storeCompatibility := range compatibility.Stores {
 		requirement := requirements[storeCompatibility.StoreID]
-		storeReport := StorePreflightReport{
+		storeAssessment := StoreMigrationAssessment{
 			StoreID: storeCompatibility.StoreID, AcceptedSourceLevel: requirement.AcceptedSourceLevel,
 			RequiredLevel: requirement.RequiredLevel, CompletedLevel: storeCompatibility.CompletedLevel,
 			Status: storeCompatibility.Status, Reason: storeCompatibility.Reason, Err: storeCompatibility.Err,
 		}
 		switch {
 		case storeCompatibility.Compatible():
-			storeReport.State = StorePreflightAtTarget
-			storeReport.Reason = CompatibilityReasonNone
+			storeAssessment.State = StoreAssessmentAtTarget
+			storeAssessment.Reason = CompatibilityReasonNone
 		case storeCompatibility.Reason == CompatibilityReasonLevelMismatch && requirement.Changed &&
 			storeCompatibility.CompletedLevel == requirement.AcceptedSourceLevel:
-			storeReport.State = StorePreflightMigrationRequired
-			storeReport.Reason = CompatibilityReasonNone
+			storeAssessment.State = StoreAssessmentMigrationRequired
+			storeAssessment.Reason = CompatibilityReasonNone
 			migrationStores[requirement.ID] = struct{}{}
 		default:
-			storeReport.State = StorePreflightBlocked
+			storeAssessment.State = StoreAssessmentBlocked
 			blockedStores[requirement.ID] = struct{}{}
 		}
-		report.Stores = append(report.Stores, storeReport)
+		report.Stores = append(report.Stores, storeAssessment)
 	}
 
 	operationReport := c.operationChecker.checkStores(ctx, migrationStores, blockedStores)

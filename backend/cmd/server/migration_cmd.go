@@ -34,7 +34,7 @@ type migrationCommandResult struct {
 	action         string
 	initialization []engine.InitializationResult
 	compatibility  *engine.CompatibilityReport
-	preflight      *engine.MigrationPreflightReport
+	preflight      *engine.PreflightReport
 	application    *engine.MigrationRunResult
 }
 
@@ -341,14 +341,14 @@ func runMigrationCheck(
 	ctx context.Context,
 	release engine.ReleaseDefinition,
 	namespaces []migrationNamespace,
-) (engine.MigrationPreflightReport, error) {
+) (engine.PreflightReport, error) {
 	metadataStores, stores, err := migrationReadResources(namespaces)
 	if err != nil {
-		return engine.MigrationPreflightReport{}, err
+		return engine.PreflightReport{}, err
 	}
-	checker, err := engine.NewMigrationPreflightChecker(release, stores)
+	checker, err := engine.NewPreflightChecker(release, stores)
 	if err != nil {
-		return engine.MigrationPreflightReport{}, fmt.Errorf("create migration preflight checker: %w", err)
+		return engine.PreflightReport{}, fmt.Errorf("create migration preflight checker: %w", err)
 	}
 	return checker.Check(ctx, metadataStores), nil
 }

@@ -250,7 +250,7 @@ func TestPreflightCheckerAggregatesReadinessAndDependencyFailures(t *testing.T) 
 		TargetVersion: manifest.ReleaseVersion,
 		Operations:    []Operation{ready, blocked, deferred},
 	}}
-	checker, err := NewPreflightChecker(release, map[StoreID]ReadStore{
+	checker, err := newOperationReadinessChecker(release, map[StoreID]ReadStore{
 		StoreIDEntityDB: {
 			DatabaseType: DatabaseTypePostgres,
 			Client:       providermock.NewDBClientInterfaceMock(t),
@@ -258,7 +258,7 @@ func TestPreflightCheckerAggregatesReadinessAndDependencyFailures(t *testing.T) 
 	})
 	require.NoError(t, err)
 
-	report := checker.Check(context.Background())
+	report := checker.check(context.Background())
 
 	assert.False(t, report.Ready())
 	assert.Equal(t, manifest.ReleaseVersion, report.TargetVersion)
@@ -289,7 +289,7 @@ func TestPreflightCheckerConvertsCheckErrorsAndInvalidResultsToBlockers(t *testi
 		TargetVersion: manifest.ReleaseVersion,
 		Operations:    []Operation{checkFailure, invalidResult},
 	}}
-	checker, err := NewPreflightChecker(release, map[StoreID]ReadStore{
+	checker, err := newOperationReadinessChecker(release, map[StoreID]ReadStore{
 		StoreIDEntityDB: {
 			DatabaseType: DatabaseTypePostgres,
 			Client:       providermock.NewDBClientInterfaceMock(t),
@@ -297,7 +297,7 @@ func TestPreflightCheckerConvertsCheckErrorsAndInvalidResultsToBlockers(t *testi
 	})
 	require.NoError(t, err)
 
-	report := checker.Check(context.Background())
+	report := checker.check(context.Background())
 
 	assert.False(t, report.Ready())
 	require.Len(t, report.Operations, 2)
@@ -309,13 +309,13 @@ func TestPreflightCheckerConvertsCheckErrorsAndInvalidResultsToBlockers(t *testi
 
 func TestPreflightCheckerAcceptsEmptyPlan(t *testing.T) {
 	manifest := validTestManifest()
-	checker, err := NewPreflightChecker(ReleaseDefinition{
+	checker, err := newOperationReadinessChecker(ReleaseDefinition{
 		Manifest: manifest,
 		Plan:     MigrationPlan{TargetVersion: manifest.ReleaseVersion},
 	}, nil)
 	require.NoError(t, err)
 
-	report := checker.Check(context.Background())
+	report := checker.check(context.Background())
 
 	assert.True(t, report.Ready())
 	assert.Empty(t, report.Operations)
@@ -337,7 +337,7 @@ func TestMigrationPreflightCheckerAcceptsSourceAndRunsAffectedOperations(t *test
 	metadataStores, stores := preflightStores(t, manifest, map[StoreID]string{
 		StoreIDEntityDB: "1.0.0",
 	})
-	checker, err := NewMigrationPreflightChecker(release, stores)
+	checker, err := NewPreflightChecker(release, stores)
 	require.NoError(t, err)
 
 	report := checker.Check(context.Background(), metadataStores)
@@ -345,7 +345,7 @@ func TestMigrationPreflightCheckerAcceptsSourceAndRunsAffectedOperations(t *test
 	assert.True(t, report.Ready())
 	assert.True(t, operationCalled)
 	require.Len(t, report.Stores, 4)
-	assert.Equal(t, StorePreflightMigrationRequired, report.Stores[1].State)
+	assert.Equal(t, StoreAssessmentMigrationRequired, report.Stores[1].State)
 	require.Len(t, report.Operations, 1)
 	assert.Equal(t, ReadinessReady, report.Operations[0].State)
 }
@@ -366,14 +366,14 @@ func TestMigrationPreflightCheckerSkipsOperationsWhenStoreIsBlocked(t *testing.T
 	metadataStores, stores := preflightStores(t, manifest, map[StoreID]string{
 		StoreIDEntityDB: "0.9.0",
 	})
-	checker, err := NewMigrationPreflightChecker(release, stores)
+	checker, err := NewPreflightChecker(release, stores)
 	require.NoError(t, err)
 
 	report := checker.Check(context.Background(), metadataStores)
 
 	assert.False(t, report.Ready())
 	assert.False(t, operationCalled)
-	assert.Equal(t, StorePreflightBlocked, report.Stores[1].State)
+	assert.Equal(t, StoreAssessmentBlocked, report.Stores[1].State)
 	assert.Equal(t, CompatibilityReasonLevelMismatch, report.Stores[1].Reason)
 	assert.Empty(t, report.Operations)
 }
@@ -411,7 +411,7 @@ func TestMigrationPreflightCheckerContinuesIndependentOperations(t *testing.T) {
 		StoreIDConfigDB: "0.9.0",
 		StoreIDEntityDB: "1.0.0",
 	})
-	checker, err := NewMigrationPreflightChecker(release, stores)
+	checker, err := NewPreflightChecker(release, stores)
 	require.NoError(t, err)
 
 	report := checker.Check(context.Background(), metadataStores)

@@ -122,7 +122,7 @@ The following ideas were removed from the initial schema. They are not automatic
 | Structured failure code and failure timestamp | Commands need machine-readable remediation or reliable failure-time reporting. |
 | Run start, operation start and completion timestamps | Operational reporting or stale-run recovery has a defined use for them. |
 | Checkpoint representation version | A checkpoint format must remain readable across different migration-engine versions. |
-| Deployment or batch scope columns | The engine implements independently resumable scoped or partitioned backfills. |
+| `SCOPE_ID` progress column | The engine implements independently resumable deployment-scoped or partitioned backfills. Scope type remains part of the immutable operation definition. |
 | Run and status indexes | Measured query plans show that metadata lookups require them. Metadata tables are expected to remain small. |
 | Compound database `CHECK` constraints | A rule is stable across engine versions and database enforcement materially improves correctness. |
 | Additional migration tables | A new durable concept cannot be represented clearly in the two existing metadata tables. |
@@ -139,6 +139,9 @@ These capabilities belong to the second implementation phase, after the basic en
 - phase-aware compatibility between old and new binaries;
 - capability fencing and restricted-mode behavior;
 - bounded and throttled backfills;
+- a resumable executor that persists scope checkpoints and invokes optional operation rollback after execution or
+  immediate post-verification failure;
+- programmatic operations wired with the normal ThunderID services they explicitly require;
 - change capture for records that remain writable during backfill;
 - ordering and conflict handling without adding migration-only versions to every business table;
 - transactional outbox support where application-level capture is required;

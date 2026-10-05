@@ -27,7 +27,8 @@ func TestMigrationStateControllerReservesAcceptedSource(t *testing.T) {
 		testStateID, string(StoreIDConfigDB), 1, "1.0.0", string(StatusClean)).
 		Return(int64(1), nil).Once()
 	transactioner := &testTransactioner{}
-	controller, err := NewMigrationStateController(manifest, newTestMetadataStore(t, dbClient), transactioner)
+	controller, err := NewMigrationStateController(
+		stateControllerTestRelease(manifest), newTestMetadataStore(t, dbClient), transactioner)
 	require.NoError(t, err)
 	controller.now = func() time.Time { return reservedAt }
 
@@ -51,7 +52,7 @@ func TestMigrationStateControllerPreservesStoreAlreadyAtTarget(t *testing.T) {
 	dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(StoreIDConfigDB)).
 		Return([]map[string]interface{}{row}, nil).Once()
 	controller, err := NewMigrationStateController(
-		manifest, newTestMetadataStore(t, dbClient), &testTransactioner{})
+		stateControllerTestRelease(manifest), newTestMetadataStore(t, dbClient), &testTransactioner{})
 	require.NoError(t, err)
 
 	results, err := controller.Reserve(context.Background(), []StoreID{StoreIDConfigDB}, testRunID)
@@ -73,7 +74,7 @@ func TestMigrationStateControllerReportsReservationConflict(t *testing.T) {
 		testStateID, string(StoreIDConfigDB), 1, "1.0.0", string(StatusClean)).
 		Return(int64(0), nil).Once()
 	controller, err := NewMigrationStateController(
-		manifest, newTestMetadataStore(t, dbClient), &testTransactioner{})
+		stateControllerTestRelease(manifest), newTestMetadataStore(t, dbClient), &testTransactioner{})
 	require.NoError(t, err)
 
 	results, err := controller.Reserve(context.Background(), []StoreID{StoreIDConfigDB}, testRunID)
@@ -85,7 +86,7 @@ func TestMigrationStateControllerReportsReservationConflict(t *testing.T) {
 
 func TestMigrationStateControllerRejectsInvalidReservationRequests(t *testing.T) {
 	manifest := changedStoreManifest(StoreIDConfigDB)
-	controller, err := NewMigrationStateController(manifest,
+	controller, err := NewMigrationStateController(stateControllerTestRelease(manifest),
 		newTestMetadataStore(t, providermock.NewDBClientInterfaceMock(t)), &testTransactioner{})
 	require.NoError(t, err)
 	tests := []struct {
@@ -118,11 +119,12 @@ func TestNewMigrationStateControllerValidatesDependencies(t *testing.T) {
 	dbClient := providermock.NewDBClientInterfaceMock(t)
 	metadataStore := newTestMetadataStore(t, dbClient)
 
-	invalidManifest := manifest
-	invalidManifest.ManifestVersion++
-	_, manifestErr := NewMigrationStateController(invalidManifest, metadataStore, &testTransactioner{})
-	_, metadataStoreErr := NewMigrationStateController(manifest, nil, &testTransactioner{})
-	_, transactionerErr := NewMigrationStateController(manifest, metadataStore, nil)
+	release := stateControllerTestRelease(manifest)
+	invalidRelease := release
+	invalidRelease.Manifest.ManifestVersion++
+	_, manifestErr := NewMigrationStateController(invalidRelease, metadataStore, &testTransactioner{})
+	_, metadataStoreErr := NewMigrationStateController(release, nil, &testTransactioner{})
+	_, transactionerErr := NewMigrationStateController(release, metadataStore, nil)
 
 	require.Error(t, manifestErr)
 	require.Error(t, metadataStoreErr)
@@ -138,7 +140,8 @@ func TestMigrationStateControllerCancelsUnusedReservation(t *testing.T) {
 		reserved.CompletedLevel, reserved.TargetLevel, string(StatusInProgress), reserved.ActiveRunID).
 		Return(int64(1), nil).Once()
 	controller, err := NewMigrationStateController(
-		changedStoreManifest(StoreIDConfigDB), newTestMetadataStore(t, dbClient), &testTransactioner{})
+		stateControllerTestRelease(changedStoreManifest(StoreIDConfigDB)),
+		newTestMetadataStore(t, dbClient), &testTransactioner{})
 	require.NoError(t, err)
 	controller.now = func() time.Time { return cancelledAt }
 
@@ -159,7 +162,8 @@ func TestMigrationStateControllerReportsCancellationConflict(t *testing.T) {
 		mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(int64(0), nil).Once()
 	controller, err := NewMigrationStateController(
-		changedStoreManifest(StoreIDConfigDB), newTestMetadataStore(t, dbClient), &testTransactioner{})
+		stateControllerTestRelease(changedStoreManifest(StoreIDConfigDB)),
+		newTestMetadataStore(t, dbClient), &testTransactioner{})
 	require.NoError(t, err)
 
 	_, err = controller.CancelReservations(context.Background(), []State{reserved}, testRunID)
@@ -177,7 +181,8 @@ func TestMigrationStateControllerMarksReservedStoreFailed(t *testing.T) {
 		testStateID, string(StoreIDConfigDB), 1, "1.0.0", "1.1.0", string(StatusInProgress), testRunID).
 		Return(int64(1), nil).Once()
 	controller, err := NewMigrationStateController(
-		changedStoreManifest(StoreIDConfigDB), newTestMetadataStore(t, dbClient), &testTransactioner{})
+		stateControllerTestRelease(changedStoreManifest(StoreIDConfigDB)),
+		newTestMetadataStore(t, dbClient), &testTransactioner{})
 	require.NoError(t, err)
 	controller.now = func() time.Time { return failedAt }
 
@@ -209,7 +214,8 @@ func TestMigrationStateControllerResumesFailedStore(t *testing.T) {
 		failed.FailureSummary, failed.UpdatedAt).
 		Return(int64(1), nil).Once()
 	controller, err := NewMigrationStateController(
-		changedStoreManifest(StoreIDConfigDB), newTestMetadataStore(t, dbClient), &testTransactioner{})
+		stateControllerTestRelease(changedStoreManifest(StoreIDConfigDB)),
+		newTestMetadataStore(t, dbClient), &testTransactioner{})
 	require.NoError(t, err)
 	controller.now = func() time.Time { return resumedAt }
 
@@ -225,7 +231,8 @@ func TestMigrationStateControllerResumesFailedStore(t *testing.T) {
 func TestMigrationStateControllerValidatesTransitionRequests(t *testing.T) {
 	dbClient := providermock.NewDBClientInterfaceMock(t)
 	controller, err := NewMigrationStateController(
-		changedStoreManifest(StoreIDConfigDB), newTestMetadataStore(t, dbClient), &testTransactioner{})
+		stateControllerTestRelease(changedStoreManifest(StoreIDConfigDB)),
+		newTestMetadataStore(t, dbClient), &testTransactioner{})
 	require.NoError(t, err)
 	reserved := reservedTestState(StoreIDConfigDB)
 	wrongRun := reserved
@@ -250,5 +257,143 @@ func reservedTestState(storeID StoreID) State {
 		ID: testStateID, StoreID: storeID, MetadataVersion: 1,
 		CompletedLevel: "1.0.0", TargetLevel: "1.1.0", Status: StatusInProgress,
 		ActiveRunID: testRunID, UpdatedAt: time.Now().UTC(),
+	}
+}
+
+func stateControllerTestRelease(manifest ReleaseManifest) ReleaseDefinition {
+	operations := make([]Operation, 0)
+	for _, requirement := range manifest.Stores {
+		if requirement.Changed {
+			operations = append(operations, validPlanOperation(requirement.ID))
+		}
+	}
+	return ReleaseDefinition{
+		Manifest: manifest,
+		Plan:     MigrationPlan{TargetVersion: manifest.ReleaseVersion, Operations: operations},
+	}
+}
+
+func TestMigrationStateControllerFinalizesReservedStore(t *testing.T) {
+	release := stateControllerTestRelease(changedStoreManifest(StoreIDConfigDB))
+	operation := release.Plan.Operations[0].Definition()
+	dbClient := providermock.NewDBClientInterfaceMock(t)
+	startedAt := time.Date(2026, time.October, 1, 8, 0, 0, 0, time.UTC)
+	finalizedAt := startedAt.Add(time.Minute)
+	expectReservedState(dbClient, StoreIDConfigDB, release.Manifest.ReleaseVersion, testRunID, startedAt)
+	dbClient.On("QueryContext", mock.Anything, queryListMigrationProgress, testStateID, testRunID).
+		Return([]map[string]interface{}{completedProgressRow(
+			operation.ID, 0, release.Manifest.ReleaseVersion, startedAt,
+		)}, nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryFinalizeMigrationState,
+		release.Manifest.ReleaseVersion, string(StatusClean), finalizedAt,
+		testStateID, string(StoreIDConfigDB), 1, "1.0.0", string(StatusInProgress), testRunID).
+		Return(int64(1), nil).Once()
+	transactioner := &testTransactioner{}
+	controller := newTestFinalizationController(t, release, dbClient, transactioner)
+	controller.now = func() time.Time { return finalizedAt }
+
+	result, err := controller.Finalize(context.Background(), StoreIDConfigDB, testRunID)
+
+	require.NoError(t, err)
+	assert.True(t, result.Finalized)
+	assert.False(t, result.AlreadyAtTarget)
+	assert.Equal(t, StatusClean, result.State.Status)
+	assert.Equal(t, release.Manifest.ReleaseVersion, result.State.CompletedLevel)
+	assert.Empty(t, result.State.ActiveRunID)
+	assert.Equal(t, finalizedAt, result.State.UpdatedAt)
+	assert.Equal(t, 1, transactioner.calls)
+}
+
+func TestMigrationStateControllerFinalizationPreservesStoreAlreadyAtTarget(t *testing.T) {
+	release := stateControllerTestRelease(changedStoreManifest(StoreIDConfigDB))
+	dbClient := providermock.NewDBClientInterfaceMock(t)
+	row := validStateRow(time.Now().UTC())
+	row["completed_level"] = release.Manifest.ReleaseVersion
+	dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(StoreIDConfigDB)).
+		Return([]map[string]interface{}{row}, nil).Once()
+	controller := newTestFinalizationController(t, release, dbClient, &testTransactioner{})
+
+	result, err := controller.Finalize(context.Background(), StoreIDConfigDB, testRunID)
+
+	require.NoError(t, err)
+	assert.False(t, result.Finalized)
+	assert.True(t, result.AlreadyAtTarget)
+}
+
+func TestMigrationStateControllerFinalizationRequiresCompleteProgress(t *testing.T) {
+	release := stateControllerTestRelease(changedStoreManifest(StoreIDConfigDB))
+	dbClient := providermock.NewDBClientInterfaceMock(t)
+	updatedAt := time.Now().UTC()
+	expectReservedState(dbClient, StoreIDConfigDB, release.Manifest.ReleaseVersion, testRunID, updatedAt)
+	dbClient.On("QueryContext", mock.Anything, queryListMigrationProgress, testStateID, testRunID).
+		Return([]map[string]interface{}{}, nil).Once()
+	controller := newTestFinalizationController(t, release, dbClient, &testTransactioner{})
+
+	result, err := controller.Finalize(context.Background(), StoreIDConfigDB, testRunID)
+
+	require.Error(t, err)
+	assert.False(t, result.Finalized)
+	assert.ErrorContains(t, err, "expected 1")
+}
+
+func TestMigrationStateControllerFinalizationReportsConditionalUpdateConflict(t *testing.T) {
+	release := stateControllerTestRelease(changedStoreManifest(StoreIDConfigDB))
+	operation := release.Plan.Operations[0].Definition()
+	dbClient := providermock.NewDBClientInterfaceMock(t)
+	updatedAt := time.Now().UTC()
+	expectReservedState(dbClient, StoreIDConfigDB, release.Manifest.ReleaseVersion, testRunID, updatedAt)
+	dbClient.On("QueryContext", mock.Anything, queryListMigrationProgress, testStateID, testRunID).
+		Return([]map[string]interface{}{completedProgressRow(
+			operation.ID, 0, release.Manifest.ReleaseVersion, updatedAt,
+		)}, nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryFinalizeMigrationState, mock.Anything, mock.Anything,
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(int64(0), nil).Once()
+	controller := newTestFinalizationController(t, release, dbClient, &testTransactioner{})
+
+	_, err := controller.Finalize(context.Background(), StoreIDConfigDB, testRunID)
+
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrFinalizationConflict))
+}
+
+func TestMigrationStateControllerFinalizationRejectsInvalidRequests(t *testing.T) {
+	release := stateControllerTestRelease(changedStoreManifest(StoreIDConfigDB))
+	dbClient := providermock.NewDBClientInterfaceMock(t)
+	controller := newTestFinalizationController(t, release, dbClient, &testTransactioner{})
+
+	_, runIDErr := controller.Finalize(context.Background(), StoreIDConfigDB, "invalid")
+	_, unchangedStoreErr := controller.Finalize(context.Background(), StoreIDEntityDB, testRunID)
+	_, unknownStoreErr := controller.Finalize(context.Background(), "unknown", testRunID)
+
+	require.Error(t, runIDErr)
+	assert.ErrorContains(t, unchangedStoreErr, "does not require migration")
+	assert.ErrorContains(t, unknownStoreErr, "is not declared")
+}
+
+func newTestFinalizationController(
+	t *testing.T,
+	release ReleaseDefinition,
+	dbClient *providermock.DBClientInterfaceMock,
+	transactioner *testTransactioner,
+) *MigrationStateController {
+	t.Helper()
+	controller, err := NewMigrationStateController(
+		release, newTestMetadataStore(t, dbClient), transactioner)
+	require.NoError(t, err)
+	return controller
+}
+
+func completedProgressRow(
+	operationID OperationID,
+	operationOrder int,
+	targetLevel string,
+	updatedAt time.Time,
+) map[string]interface{} {
+	return map[string]interface{}{
+		"id": testProgressID, "migration_state_id": testStateID, "run_id": testRunID,
+		"target_level": targetLevel, "operation_id": string(operationID),
+		"operation_order": int32(operationOrder), "status": string(StatusCompleted),
+		"checkpoint_data": nil, "updated_at": updatedAt,
 	}
 }

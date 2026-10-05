@@ -33,7 +33,7 @@ type MigrationNamespace struct {
 // MigrationRunResult describes one attempted migration application.
 type MigrationRunResult struct {
 	RunID           string
-	Preflight       MigrationPreflightReport
+	Preflight       PreflightReport
 	Reservations    []ReservationResult
 	Resumptions     []ResumeResult
 	Operations      []AtomicExecutionResult
@@ -47,7 +47,7 @@ type migrationResumeContext struct {
 	activeStores        map[StoreID]struct{}
 	failedByNamespace   map[int][]State
 	completedOperations map[OperationID]struct{}
-	storeReports        []StorePreflightReport
+	storeAssessments    []StoreMigrationAssessment
 }
 
 type migrationNamespaceRuntime struct {
@@ -57,14 +57,13 @@ type migrationNamespaceRuntime struct {
 	locker        MigrationExecutionLocker
 	controller    *MigrationStateController
 	executor      *AtomicOperationExecutor
-	finalizer     *StoreFinalizer
 }
 
 // MigrationCoordinator owns the complete basic migration run across all database namespaces.
 type MigrationCoordinator struct {
 	release    ReleaseDefinition
 	plan       MigrationPlan
-	preflight  *MigrationPreflightChecker
+	preflight  *PreflightChecker
 	namespaces []migrationNamespaceRuntime
 	newID      func() (string, error)
 }
@@ -149,13 +148,13 @@ func NewMigrationCoordinator(
 	sort.SliceStable(runtimes, func(left, right int) bool {
 		return requirements[runtimes[left].storeIDs[0]] < requirements[runtimes[right].storeIDs[0]]
 	})
-	preflight, err := NewMigrationPreflightChecker(release, stores)
+	preflight, err := NewPreflightChecker(release, stores)
 	if err != nil {
 		return nil, fmt.Errorf("create migration coordinator: %w", err)
 	}
 	for index := range runtimes {
 		controller, err := NewMigrationStateController(
-			release.Manifest, runtimes[index].metadataStore, runtimes[index].transactioner)
+			release, runtimes[index].metadataStore, runtimes[index].transactioner)
 		if err != nil {
 			return nil, err
 		}
@@ -164,14 +163,8 @@ func NewMigrationCoordinator(
 		if err != nil {
 			return nil, err
 		}
-		finalizer, err := NewStoreFinalizer(
-			release, runtimes[index].metadataStore, runtimes[index].transactioner)
-		if err != nil {
-			return nil, err
-		}
 		runtimes[index].controller = controller
 		runtimes[index].executor = executor
-		runtimes[index].finalizer = finalizer
 	}
 
 	return &MigrationCoordinator{
@@ -264,7 +257,7 @@ func (c *MigrationCoordinator) apply(ctx context.Context) (MigrationRunResult, e
 		if lastOperationByStore[definition.StoreID] != operationOrder {
 			continue
 		}
-		finalization, finalizeErr := c.namespaces[namespaceIndex].finalizer.Finalize(
+		finalization, finalizeErr := c.namespaces[namespaceIndex].controller.Finalize(
 			ctx, definition.StoreID, runID)
 		if finalizeErr != nil {
 			return result, errors.Join(finalizeErr, c.markFailed(ctx, reservedStores, runID, finalizeErr))
@@ -287,9 +280,9 @@ func (c *MigrationCoordinator) Resume(ctx context.Context) (MigrationRunResult, 
 
 func (c *MigrationCoordinator) resume(ctx context.Context) (MigrationRunResult, error) {
 	resume, err := c.inspectResumableRun(ctx)
-	result := MigrationRunResult{RunID: resume.runID, Preflight: MigrationPreflightReport{
+	result := MigrationRunResult{RunID: resume.runID, Preflight: PreflightReport{
 		TargetVersion: c.release.Manifest.ReleaseVersion,
-		Stores:        resume.storeReports,
+		Stores:        resume.storeAssessments,
 	}, Resumed: true}
 	if err != nil {
 		return result, err
@@ -344,7 +337,7 @@ func (c *MigrationCoordinator) resume(ctx context.Context) (MigrationRunResult, 
 		if lastOperationByStore[definition.StoreID] != operationOrder {
 			continue
 		}
-		finalization, finalizeErr := c.namespaces[namespaceIndex].finalizer.Finalize(
+		finalization, finalizeErr := c.namespaces[namespaceIndex].controller.Finalize(
 			ctx, definition.StoreID, resume.runID)
 		if finalizeErr != nil {
 			return result, errors.Join(finalizeErr,
@@ -373,7 +366,7 @@ func (c *MigrationCoordinator) inspectResumableRun(ctx context.Context) (migrati
 		activeStores:        make(map[StoreID]struct{}),
 		failedByNamespace:   make(map[int][]State),
 		completedOperations: make(map[OperationID]struct{}),
-		storeReports:        make([]StorePreflightReport, 0, len(c.release.Manifest.Stores)),
+		storeAssessments:    make([]StoreMigrationAssessment, 0, len(c.release.Manifest.Stores)),
 	}
 	namespaceByStore := c.namespaceIndexes()
 	states := make(map[StoreID]State)
@@ -391,14 +384,14 @@ func (c *MigrationCoordinator) inspectResumableRun(ctx context.Context) (migrati
 			return resume, fmt.Errorf("inspect migration resume state for store %q: metadata version %d is not supported",
 				requirement.ID, state.MetadataVersion)
 		}
-		report := StorePreflightReport{
+		assessment := StoreMigrationAssessment{
 			StoreID: requirement.ID, AcceptedSourceLevel: requirement.AcceptedSourceLevel,
 			RequiredLevel: requirement.RequiredLevel, CompletedLevel: state.CompletedLevel,
 			Status: state.Status,
 		}
 		if state.Status == StatusClean && state.CompletedLevel == requirement.RequiredLevel {
-			report.State = StorePreflightAtTarget
-			resume.storeReports = append(resume.storeReports, report)
+			assessment.State = StoreAssessmentAtTarget
+			resume.storeAssessments = append(resume.storeAssessments, assessment)
 			continue
 		}
 		if !requirement.Changed {
@@ -421,8 +414,8 @@ func (c *MigrationCoordinator) inspectResumableRun(ctx context.Context) (migrati
 		} else if state.ActiveRunID != resume.runID {
 			return resume, fmt.Errorf("inspect migration resume state: active stores belong to different runs")
 		}
-		report.State = StorePreflightMigrationRequired
-		resume.storeReports = append(resume.storeReports, report)
+		assessment.State = StoreAssessmentMigrationRequired
+		resume.storeAssessments = append(resume.storeAssessments, assessment)
 		resume.activeStores[requirement.ID] = struct{}{}
 		if state.Status == StatusFailed {
 			resume.failedByNamespace[namespaceIndex] = append(resume.failedByNamespace[namespaceIndex], *state)
@@ -557,10 +550,10 @@ func (c *MigrationCoordinator) markFailed(
 	return errors.Join(errs...)
 }
 
-func migrationStoreSet(report MigrationPreflightReport) map[StoreID]struct{} {
+func migrationStoreSet(report PreflightReport) map[StoreID]struct{} {
 	stores := make(map[StoreID]struct{})
 	for _, store := range report.Stores {
-		if store.State == StorePreflightMigrationRequired {
+		if store.State == StoreAssessmentMigrationRequired {
 			stores[store.StoreID] = struct{}{}
 		}
 	}

@@ -18,6 +18,9 @@ var ErrReservationConflict = errors.New("migration store reservation conflict")
 // ErrRunStateConflict means that a reserved store changed before a run-state transition.
 var ErrRunStateConflict = errors.New("migration run state conflict")
 
+// ErrFinalizationConflict means that migration state changed before it could be finalized.
+var ErrFinalizationConflict = errors.New("migration store finalization conflict")
+
 // ReservationResult describes one store after a reservation attempt.
 type ReservationResult struct {
 	State           State
@@ -31,9 +34,17 @@ type ResumeResult struct {
 	Resumed bool
 }
 
+// FinalizationResult describes one store after a finalization attempt.
+type FinalizationResult struct {
+	State           State
+	Finalized       bool
+	AlreadyAtTarget bool
+}
+
 // MigrationStateController manages reservation, cancellation and failure state transitions.
 type MigrationStateController struct {
 	manifest      ReleaseManifest
+	plan          MigrationPlan
 	metadataStore *MetadataStore
 	transactioner providers.Transactioner
 	now           func() time.Time
@@ -41,11 +52,12 @@ type MigrationStateController struct {
 
 // NewMigrationStateController creates a state controller for one physical database namespace.
 func NewMigrationStateController(
-	manifest ReleaseManifest,
+	release ReleaseDefinition,
 	metadataStore *MetadataStore,
 	transactioner providers.Transactioner,
 ) (*MigrationStateController, error) {
-	if err := manifest.Validate(); err != nil {
+	registry, err := NewPlanRegistry(release.Manifest, release.Plan)
+	if err != nil {
 		return nil, fmt.Errorf("create migration state controller: %w", err)
 	}
 	if metadataStore == nil {
@@ -55,7 +67,7 @@ func NewMigrationStateController(
 		return nil, errors.New("create migration state controller: transactioner is required")
 	}
 	return &MigrationStateController{
-		manifest: manifest, metadataStore: metadataStore, transactioner: transactioner,
+		manifest: release.Manifest, plan: registry.Plan(), metadataStore: metadataStore, transactioner: transactioner,
 		now: func() time.Time { return time.Now().UTC() },
 	}, nil
 }
@@ -320,4 +332,157 @@ func (r *MigrationStateController) Resume(
 		return nil, fmt.Errorf("resume migration stores: %w", err)
 	}
 	return results, nil
+}
+
+// Finalize verifies all operation progress and conditionally completes one reserved store.
+func (r *MigrationStateController) Finalize(
+	ctx context.Context,
+	storeID StoreID,
+	runID string,
+) (FinalizationResult, error) {
+	if !isUUIDv7(runID) {
+		return FinalizationResult{}, errors.New("finalize migration store: run ID must be a canonical UUIDv7")
+	}
+	requirement, expectedProgress, err := r.finalizationRequirements(storeID)
+	if err != nil {
+		return FinalizationResult{}, err
+	}
+
+	result := FinalizationResult{}
+	err = r.transactioner.Transact(ctx, func(txCtx context.Context) error {
+		state, err := r.metadataStore.GetState(txCtx, storeID)
+		if err != nil {
+			return err
+		}
+		if state == nil {
+			return fmt.Errorf("finalize migration store %q: migration state is missing", storeID)
+		}
+		if state.Status == StatusClean && state.CompletedLevel == requirement.RequiredLevel {
+			result = FinalizationResult{State: *state, AlreadyAtTarget: true}
+			return nil
+		}
+		if err := validateFinalizationReservation(storeID, state, runID); err != nil {
+			return err
+		}
+		if state.TargetLevel != requirement.RequiredLevel {
+			return fmt.Errorf("finalize migration store %q: target level %q does not match required level %q",
+				storeID, state.TargetLevel, requirement.RequiredLevel)
+		}
+
+		progress, err := r.metadataStore.ListProgress(txCtx, state.ID, runID)
+		if err != nil {
+			return err
+		}
+		if err := validateCompletedProgress(storeID, state, progress, expectedProgress); err != nil {
+			return err
+		}
+		finalizedAt := r.now()
+		finalized, err := r.metadataStore.FinalizeState(txCtx, *state, finalizedAt)
+		if err != nil {
+			return err
+		}
+		if !finalized {
+			return fmt.Errorf("%w for store %q", ErrFinalizationConflict, storeID)
+		}
+		state.CompletedLevel = state.TargetLevel
+		state.TargetLevel = ""
+		state.Status = StatusClean
+		state.ActiveRunID = ""
+		state.FailureSummary = ""
+		state.UpdatedAt = finalizedAt
+		result = FinalizationResult{State: *state, Finalized: true}
+		return nil
+	})
+	if err != nil {
+		return FinalizationResult{}, fmt.Errorf("finalize migration store %q: %w", storeID, err)
+	}
+	return result, nil
+}
+
+func validateFinalizationReservation(storeID StoreID, state *State, runID string) error {
+	if state.Status != StatusInProgress {
+		return fmt.Errorf("finalize migration store %q: status is %q instead of %q",
+			storeID, state.Status, StatusInProgress)
+	}
+	if state.ActiveRunID != runID {
+		return fmt.Errorf("finalize migration store %q: store is reserved by a different run", storeID)
+	}
+	return nil
+}
+
+func (r *MigrationStateController) finalizationRequirements(
+	storeID StoreID,
+) (StoreRequirement, map[string]int, error) {
+	var requirement StoreRequirement
+	found := false
+	for _, candidate := range r.manifest.Stores {
+		if candidate.ID == storeID {
+			requirement = candidate
+			found = true
+			break
+		}
+	}
+	if !found {
+		return StoreRequirement{}, nil, fmt.Errorf("finalize migration store: store %q is not declared", storeID)
+	}
+	if !requirement.Changed {
+		return StoreRequirement{}, nil, fmt.Errorf("finalize migration store: store %q does not require migration", storeID)
+	}
+
+	expected := make(map[string]int)
+	for index, operation := range r.plan.Operations {
+		definition := operation.Definition()
+		if definition.StoreID != storeID {
+			continue
+		}
+		if definition.InterruptionMode != InterruptionModeAtomic || definition.ScopeType != ScopeTypeStore {
+			return StoreRequirement{}, nil, fmt.Errorf(
+				"finalize migration store %q: operation %q is not supported by the basic executor",
+				storeID, definition.ID)
+		}
+		expected[string(definition.ID)] = index
+	}
+	if len(expected) == 0 {
+		return StoreRequirement{}, nil, fmt.Errorf("finalize migration store %q: no operations are declared", storeID)
+	}
+	return requirement, expected, nil
+}
+
+func validateCompletedProgress(
+	storeID StoreID,
+	state *State,
+	progress []Progress,
+	expected map[string]int,
+) error {
+	if len(progress) != len(expected) {
+		return fmt.Errorf("finalize migration store %q: found %d completed progress records, expected %d",
+			storeID, len(progress), len(expected))
+	}
+	seen := make(map[string]struct{}, len(progress))
+	for _, item := range progress {
+		expectedOrder, exists := expected[item.OperationID]
+		if !exists {
+			return fmt.Errorf("finalize migration store %q: progress references unknown operation %q",
+				storeID, item.OperationID)
+		}
+		if _, duplicate := seen[item.OperationID]; duplicate {
+			return fmt.Errorf("finalize migration store %q: progress repeats operation %q",
+				storeID, item.OperationID)
+		}
+		if item.MigrationStateID != state.ID || item.RunID != state.ActiveRunID ||
+			item.TargetLevel != state.TargetLevel {
+			return fmt.Errorf("finalize migration store %q: operation %q progress does not belong to the active run",
+				storeID, item.OperationID)
+		}
+		if item.OperationOrder != expectedOrder {
+			return fmt.Errorf("finalize migration store %q: operation %q has order %d instead of %d",
+				storeID, item.OperationID, item.OperationOrder, expectedOrder)
+		}
+		if item.Status != StatusCompleted {
+			return fmt.Errorf("finalize migration store %q: operation %q status is %q instead of %q",
+				storeID, item.OperationID, item.Status, StatusCompleted)
+		}
+		seen[item.OperationID] = struct{}{}
+	}
+	return nil
 }

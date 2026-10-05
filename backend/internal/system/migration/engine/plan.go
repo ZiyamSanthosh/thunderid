@@ -55,10 +55,36 @@ type Operation interface {
 	PostVerify(context.Context, ReadAccess, Scope) (VerificationResult, error)
 }
 
+// RollbackCapableOperation optionally restores changes made by a non-atomic operation scope after execution fails.
+// The original execution error is provided so the implementation can select the appropriate recovery behavior.
+type RollbackCapableOperation interface {
+	Operation
+	Rollback(context.Context, OperationExecution, error) error
+}
+
 // MigrationPlan declares the ordered operations compiled into one target release.
 type MigrationPlan struct {
 	TargetVersion string
 	Operations    []Operation
+}
+
+// ReleaseDefinition binds one validated manifest to its compiled migration plan.
+type ReleaseDefinition struct {
+	Manifest ReleaseManifest
+	Plan     MigrationPlan
+}
+
+// NewReleaseDefinition parses and validates one immutable release definition.
+func NewReleaseDefinition(manifestData []byte, plan MigrationPlan) (*ReleaseDefinition, error) {
+	manifest, err := LoadReleaseManifest(manifestData)
+	if err != nil {
+		return nil, err
+	}
+	registry, err := NewPlanRegistry(*manifest, plan)
+	if err != nil {
+		return nil, err
+	}
+	return &ReleaseDefinition{Manifest: *manifest, Plan: registry.Plan()}, nil
 }
 
 // PlanRegistry holds one manifest-validated migration plan.
@@ -108,6 +134,10 @@ func validateMigrationPlan(manifest ReleaseManifest, plan MigrationPlan) error {
 		definition := operation.Definition()
 		if err := validateOperationDefinition(definition, manifestStores); err != nil {
 			return fmt.Errorf("operation at index %d: %w", index, err)
+		}
+		if _, supportsRollback := operation.(RollbackCapableOperation); supportsRollback &&
+			definition.InterruptionMode == InterruptionModeAtomic {
+			return fmt.Errorf("operation %q: atomic operations cannot define rollback behavior", definition.ID)
 		}
 		if _, exists := operationIDs[definition.ID]; exists {
 			return fmt.Errorf("duplicate operation ID %q", definition.ID)

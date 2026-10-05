@@ -21,3 +21,21 @@ func Definition() (*engine.ReleaseDefinition, error) {
 	}
 	return engine.NewReleaseDefinition(manifestData, plan)
 }
+
+func migrationPlan() (engine.MigrationPlan, error) {
+	removeReasonCheck, err := newRemoveRevocationReasonCheckOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	createAuthorizationPDPConnection, err := newCreateAuthorizationPDPConnectionOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	return engine.MigrationPlan{
+		TargetVersion: "2.0.0",
+		Operations: []engine.Operation{
+			removeReasonCheck,
+			createAuthorizationPDPConnection,
+		},
+	}, nil
+}
