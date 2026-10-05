@@ -50,8 +50,8 @@ func TestCreateAuthorizationPDPConnectionOperationDefinition(t *testing.T) {
 	definition := operation.Definition()
 	assert.Equal(t, engine.OperationID("2.0.0/configdb/02_create_authorization_pdp_connection"), definition.ID)
 	assert.Equal(t, engine.StoreIDConfigDB, definition.StoreID)
+	assert.Equal(t, engine.OperationKindSchemaChange, definition.Kind)
 	assert.Equal(t, engine.InterruptionModeAtomic, definition.InterruptionMode)
-	assert.Equal(t, engine.ScopeTypeStore, definition.ScopeType)
 
 	implementation, err := operation.(*engine.SQLOperation).Implementation(engine.DatabaseTypePostgres)
 	require.NoError(t, err)
@@ -60,10 +60,11 @@ func TestCreateAuthorizationPDPConnectionOperationDefinition(t *testing.T) {
 	assert.Contains(t, implementation.Statements[1].Query, "CREATE UNIQUE INDEX")
 	assert.Contains(t, implementation.Statements[1].Query, authorizationPDPConnectionIndex)
 
-	scopes, err := operation.ResolveScopes(context.Background(), authorizationPDPTargetAccess())
+	targets, err := operation.ResolveTargets(
+		context.Background(), authorizationPDPTargetAccess(),
+		engine.MigrationSelection{DeploymentIDs: []string{"deployment-a", "deployment-b"}})
 	require.NoError(t, err)
-	require.Len(t, scopes, 1)
-	assert.Equal(t, string(engine.StoreIDConfigDB), scopes[0].ID)
+	require.Equal(t, []engine.ExecutionTarget{{}}, targets)
 }
 
 func TestCreateAuthorizationPDPConnectionReadiness(t *testing.T) {
@@ -121,25 +122,25 @@ func TestCreateAuthorizationPDPConnectionReadiness(t *testing.T) {
 func TestCreateAuthorizationPDPConnectionVerification(t *testing.T) {
 	operation, err := newCreateAuthorizationPDPConnectionOperation()
 	require.NoError(t, err)
-	scope := engine.Scope{Type: engine.ScopeTypeStore, ID: string(engine.StoreIDConfigDB)}
+	target := engine.ExecutionTarget{}
 
 	source, err := operation.PreVerify(context.Background(), authorizationPDPReadAccess{
 		rows: map[string][]engine.QueryRow{
 			postgresQueryAuthorizationPDPConnectionTable.GetID(): {},
 		},
-	}, scope)
+	}, target)
 	require.NoError(t, err)
 	assert.Equal(t, engine.VerificationSource, source.State)
 
-	target, err := operation.PostVerify(context.Background(), authorizationPDPTargetAccess(), scope)
+	targetResult, err := operation.PostVerify(context.Background(), authorizationPDPTargetAccess(), target)
 	require.NoError(t, err)
-	assert.Equal(t, engine.VerificationTarget, target.State)
+	assert.Equal(t, engine.VerificationTarget, targetResult.State)
 
 	invalidRows := authorizationPDPTargetRows()
 	invalidRows[postgresQueryAuthorizationPDPConnectionPrimaryKey.GetID()] = []engine.QueryRow{{
 		"column_name": "deployment_id", "ordinal_position": int64(1),
 	}}
-	invalid, err := operation.PreVerify(context.Background(), authorizationPDPReadAccess{rows: invalidRows}, scope)
+	invalid, err := operation.PreVerify(context.Background(), authorizationPDPReadAccess{rows: invalidRows}, target)
 	require.NoError(t, err)
 	assert.Equal(t, engine.VerificationInvalid, invalid.State)
 }

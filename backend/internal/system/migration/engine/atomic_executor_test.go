@@ -17,6 +17,18 @@ import (
 	"github.com/thunder-id/thunderid/tests/mocks/database/providermock"
 )
 
+type deploymentTargetTestOperation struct {
+	testOperation
+}
+
+func (o deploymentTargetTestOperation) ResolveTargets(
+	context.Context,
+	ReadAccess,
+	MigrationSelection,
+) ([]ExecutionTarget, error) {
+	return []ExecutionTarget{{DeploymentID: "deployment-a"}}, nil
+}
+
 func TestAtomicOperationExecutorExecutesAndCompletesProgress(t *testing.T) {
 	dbClient := providermock.NewDBClientInterfaceMock(t)
 	operation := atomicTestOperation(t, VerificationSource, VerificationTarget)
@@ -38,7 +50,7 @@ func TestAtomicOperationExecutorExecutesAndCompletesProgress(t *testing.T) {
 	executor.newID = sequenceIDs(testProgressID)
 	executor.now = func() time.Time { return executedAt }
 
-	result, err := executor.Execute(context.Background(), operation, testRunID, 3)
+	result, err := executor.Execute(context.Background(), operation, MigrationSelection{}, testRunID, 3)
 
 	require.NoError(t, err)
 	assert.False(t, result.ExecutionSkipped)
@@ -62,7 +74,7 @@ func TestAtomicOperationExecutorSkipsVerifiedTarget(t *testing.T) {
 	executor.newID = sequenceIDs(testProgressID)
 	executor.now = func() time.Time { return executedAt }
 
-	result, err := executor.Execute(context.Background(), operation, testRunID, 0)
+	result, err := executor.Execute(context.Background(), operation, MigrationSelection{}, testRunID, 0)
 
 	require.NoError(t, err)
 	assert.True(t, result.ExecutionSkipped)
@@ -82,7 +94,7 @@ func TestAtomicOperationExecutorRejectsInvalidPreVerification(t *testing.T) {
 	executor.newID = sequenceIDs(testProgressID)
 	executor.now = func() time.Time { return executedAt }
 
-	result, err := executor.Execute(context.Background(), operation, testRunID, 0)
+	result, err := executor.Execute(context.Background(), operation, MigrationSelection{}, testRunID, 0)
 
 	require.Error(t, err)
 	assert.Empty(t, result.Progress.ID)
@@ -99,7 +111,7 @@ func TestAtomicOperationExecutorRequiresMatchingReservation(t *testing.T) {
 	executor := newTestAtomicExecutor(t, dbClient, &testTransactioner{})
 	executor.newID = sequenceIDs(testProgressID)
 
-	_, err := executor.Execute(context.Background(), operation, testRunID, 0)
+	_, err := executor.Execute(context.Background(), operation, MigrationSelection{}, testRunID, 0)
 
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "reserved by a different run")
@@ -110,22 +122,25 @@ func TestAtomicOperationExecutorRejectsUnsupportedExecution(t *testing.T) {
 	executor := newTestAtomicExecutor(t, dbClient, &testTransactioner{})
 	operation := testOperation{definition: OperationDefinition{
 		ID: "2.0.0/entitydb/resumable", Description: "Resumable operation",
-		StoreID: StoreIDEntityDB, InterruptionMode: InterruptionModeResumable, ScopeType: ScopeTypeStore,
+		StoreID: StoreIDEntityDB, Kind: OperationKindDataChange,
+		InterruptionMode: InterruptionModeResumable,
 	}}
 
-	_, nilOperationErr := executor.Execute(context.Background(), nil, testRunID, 0)
-	_, runIDErr := executor.Execute(context.Background(), operation, "invalid", 0)
-	_, orderErr := executor.Execute(context.Background(), operation, testRunID, -1)
-	_, interruptionErr := executor.Execute(context.Background(), operation, testRunID, 0)
+	_, nilOperationErr := executor.Execute(context.Background(), nil, MigrationSelection{}, testRunID, 0)
+	_, runIDErr := executor.Execute(context.Background(), operation, MigrationSelection{}, "invalid", 0)
+	_, orderErr := executor.Execute(context.Background(), operation, MigrationSelection{}, testRunID, -1)
+	_, interruptionErr := executor.Execute(
+		context.Background(), operation, MigrationSelection{}, testRunID, 0)
 	operation.definition.InterruptionMode = InterruptionModeAtomic
-	operation.definition.ScopeType = ScopeTypeDeployment
-	_, scopeErr := executor.Execute(context.Background(), operation, testRunID, 0)
+	_, deploymentTargetErr := executor.Execute(context.Background(),
+		deploymentTargetTestOperation{testOperation: operation},
+		MigrationSelection{DeploymentIDs: []string{"deployment-a"}}, testRunID, 0)
 
 	require.Error(t, nilOperationErr)
 	require.Error(t, runIDErr)
 	require.Error(t, orderErr)
 	assert.ErrorContains(t, interruptionErr, "must be atomic")
-	assert.ErrorContains(t, scopeErr, "supports only store scope")
+	assert.ErrorContains(t, deploymentTargetErr, "does not support deployment-targeted execution")
 }
 
 func TestNewAtomicOperationExecutorValidatesDependencies(t *testing.T) {
@@ -150,14 +165,14 @@ func atomicTestOperation(
 ) *SQLOperation {
 	t.Helper()
 	config := validSQLOperationConfig()
-	config.PreVerifier = func(context.Context, ReadAccess, Scope) (VerificationResult, error) {
+	config.PreVerifier = func(context.Context, ReadAccess, ExecutionTarget) (VerificationResult, error) {
 		result := VerificationResult{State: preState, Summary: "Pre-verification result"}
 		if preState == VerificationInvalid {
 			result.Findings = []Finding{{Code: "invalid_source", Message: "Source state is invalid"}}
 		}
 		return result, nil
 	}
-	config.PostVerifier = func(context.Context, ReadAccess, Scope) (VerificationResult, error) {
+	config.PostVerifier = func(context.Context, ReadAccess, ExecutionTarget) (VerificationResult, error) {
 		return VerificationResult{State: postState, Summary: "Post-verification result"}, nil
 	}
 	operation, err := NewSQLOperation(config)
@@ -206,7 +221,7 @@ func TestAtomicOperationExecutorReturnsIDGenerationFailure(t *testing.T) {
 	executor.newID = func() (string, error) { return "", errors.New("random source failed") }
 
 	_, err := executor.Execute(context.Background(),
-		atomicTestOperation(t, VerificationSource, VerificationTarget), testRunID, 0)
+		atomicTestOperation(t, VerificationSource, VerificationTarget), MigrationSelection{}, testRunID, 0)
 
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "random source failed")

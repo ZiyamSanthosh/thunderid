@@ -69,14 +69,14 @@ func TestSQLOperationProvidesValidatedLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, ReadinessReady, readiness.State)
 
-	scopes, err := operation.ResolveScopes(context.Background(), nil)
+	targets, err := operation.ResolveTargets(context.Background(), nil, MigrationSelection{})
 	require.NoError(t, err)
-	require.Equal(t, []Scope{{Type: ScopeTypeStore, ID: string(StoreIDEntityDB)}}, scopes)
+	require.Equal(t, []ExecutionTarget{{}}, targets)
 
-	preVerification, err := operation.PreVerify(context.Background(), nil, scopes[0])
+	preVerification, err := operation.PreVerify(context.Background(), nil, targets[0])
 	require.NoError(t, err)
 	assert.Equal(t, VerificationSource, preVerification.State)
-	postVerification, err := operation.PostVerify(context.Background(), nil, scopes[0])
+	postVerification, err := operation.PostVerify(context.Background(), nil, targets[0])
 	require.NoError(t, err)
 	assert.Equal(t, VerificationTarget, postVerification.State)
 
@@ -100,17 +100,17 @@ func TestSQLOperationExecutesProviderStatementsInOrder(t *testing.T) {
 		},
 		{
 			ID: "set-value", Query: "UPDATE example SET migrated = $1",
-			Args: func(scope Scope) ([]interface{}, error) {
-				return []interface{}{scope.ID}, nil
+			Args: func(target ExecutionTarget) ([]interface{}, error) {
+				return []interface{}{target.DeploymentID}, nil
 			},
 		},
 	}}
 	operation, err := NewSQLOperation(config)
 	require.NoError(t, err)
 	access := &recordingExecutionAccess{databaseType: DatabaseTypePostgres}
-	scope := Scope{Type: ScopeTypeStore, ID: string(StoreIDEntityDB)}
+	target := ExecutionTarget{DeploymentID: "deployment-a"}
 
-	err = operation.Execute(context.Background(), newOperationExecution(access, scope))
+	err = operation.Execute(context.Background(), newOperationExecution(access, target))
 
 	require.NoError(t, err)
 	require.Len(t, access.calls, 2)
@@ -119,7 +119,7 @@ func TestSQLOperationExecutesProviderStatementsInOrder(t *testing.T) {
 	assert.Equal(t, "ALTER TABLE example ADD COLUMN migrated BOOLEAN", access.calls[0].query.Query)
 	assert.Empty(t, access.calls[0].args)
 	assert.Equal(t, "2.0.0/entitydb/example/set-value", access.calls[1].query.ID)
-	assert.Equal(t, []interface{}{string(StoreIDEntityDB)}, access.calls[1].args)
+	assert.Equal(t, []interface{}{"deployment-a"}, access.calls[1].args)
 }
 
 func TestSQLOperationExecutionFailures(t *testing.T) {
@@ -127,21 +127,20 @@ func TestSQLOperationExecutionFailures(t *testing.T) {
 		operation, err := NewSQLOperation(validSQLOperationConfig())
 		require.NoError(t, err)
 
-		err = operation.Execute(context.Background(), newOperationExecution(nil,
-			Scope{Type: ScopeTypeStore, ID: string(StoreIDEntityDB)}))
+		err = operation.Execute(context.Background(), newOperationExecution(nil, ExecutionTarget{}))
 
 		assert.ErrorContains(t, err, "execution access is required")
 	})
 
-	t.Run("invalid scope", func(t *testing.T) {
+	t.Run("invalid target", func(t *testing.T) {
 		operation, err := NewSQLOperation(validSQLOperationConfig())
 		require.NoError(t, err)
 
 		err = operation.Execute(context.Background(), newOperationExecution(
 			&recordingExecutionAccess{databaseType: DatabaseTypePostgres},
-			Scope{Type: ScopeTypeStore, ID: string(StoreIDConfigDB)}))
+			ExecutionTarget{DeploymentID: " deployment-a"}))
 
-		assert.ErrorContains(t, err, "must use store ID")
+		assert.ErrorContains(t, err, "surrounding whitespace")
 	})
 
 	t.Run("database type unavailable", func(t *testing.T) {
@@ -149,8 +148,7 @@ func TestSQLOperationExecutionFailures(t *testing.T) {
 		require.NoError(t, err)
 		access := &recordingExecutionAccess{databaseTypeErr: errors.New("provider unavailable")}
 
-		err = operation.Execute(context.Background(), newOperationExecution(access,
-			Scope{Type: ScopeTypeStore, ID: string(StoreIDEntityDB)}))
+		err = operation.Execute(context.Background(), newOperationExecution(access, ExecutionTarget{}))
 
 		assert.ErrorContains(t, err, "provider unavailable")
 		assert.Empty(t, access.calls)
@@ -160,7 +158,7 @@ func TestSQLOperationExecutionFailures(t *testing.T) {
 		config := validSQLOperationConfig()
 		config.Implementations[DatabaseTypePostgres] = SQLImplementation{Statements: []SQLStatement{{
 			ID: "statement", Query: "UPDATE example SET migrated = TRUE",
-			Args: func(Scope) ([]interface{}, error) {
+			Args: func(ExecutionTarget) ([]interface{}, error) {
 				return nil, errors.New("arguments unavailable")
 			},
 		}}}
@@ -168,8 +166,7 @@ func TestSQLOperationExecutionFailures(t *testing.T) {
 		require.NoError(t, err)
 		access := &recordingExecutionAccess{databaseType: DatabaseTypePostgres}
 
-		err = operation.Execute(context.Background(), newOperationExecution(access,
-			Scope{Type: ScopeTypeStore, ID: string(StoreIDEntityDB)}))
+		err = operation.Execute(context.Background(), newOperationExecution(access, ExecutionTarget{}))
 
 		assert.ErrorContains(t, err, "arguments unavailable")
 		assert.Empty(t, access.calls)
@@ -183,8 +180,7 @@ func TestSQLOperationExecutionFailures(t *testing.T) {
 			executeErr:   errors.New("statement failed"),
 		}
 
-		err = operation.Execute(context.Background(), newOperationExecution(access,
-			Scope{Type: ScopeTypeStore, ID: string(StoreIDEntityDB)}))
+		err = operation.Execute(context.Background(), newOperationExecution(access, ExecutionTarget{}))
 
 		assert.ErrorContains(t, err, "statement failed")
 		require.Len(t, access.calls, 1)
@@ -208,9 +204,12 @@ func TestNewSQLOperationRejectsIncompleteContracts(t *testing.T) {
 		{name: "missing readiness", mutate: func(config *SQLOperationConfig) {
 			config.ReadinessChecker = nil
 		}, errorMatch: "readiness checker"},
-		{name: "missing scope resolver", mutate: func(config *SQLOperationConfig) {
-			config.ScopeResolver = nil
-		}, errorMatch: "scope resolver"},
+		{name: "missing target resolver", mutate: func(config *SQLOperationConfig) {
+			config.TargetResolver = nil
+		}, errorMatch: "data-change operation requires a target resolver"},
+		{name: "schema change with target resolver", mutate: func(config *SQLOperationConfig) {
+			config.Definition.Kind = OperationKindSchemaChange
+		}, errorMatch: "schema-change operation cannot define a target resolver"},
 		{name: "missing pre-verifier", mutate: func(config *SQLOperationConfig) {
 			config.PreVerifier = nil
 		}, errorMatch: "pre-verifier"},
@@ -259,44 +258,74 @@ func TestNewSQLOperationRejectsIncompleteContracts(t *testing.T) {
 	}
 }
 
-func TestSQLOperationRejectsInvalidScopesAndVerification(t *testing.T) {
-	t.Run("invalid resolved scope", func(t *testing.T) {
+func TestSchemaChangeSQLOperationUsesCompleteStoreTarget(t *testing.T) {
+	config := validSQLOperationConfig()
+	config.Definition.Kind = OperationKindSchemaChange
+	config.TargetResolver = nil
+	operation, err := NewSQLOperation(config)
+	require.NoError(t, err)
+
+	targets, err := operation.ResolveTargets(context.Background(), nil,
+		MigrationSelection{DeploymentIDs: []string{"deployment-a", "deployment-b"}})
+
+	require.NoError(t, err)
+	assert.Equal(t, []ExecutionTarget{{}}, targets)
+}
+
+func TestSQLOperationRejectsInvalidTargetsAndVerification(t *testing.T) {
+	t.Run("mixed complete-store and deployment targets", func(t *testing.T) {
 		config := validSQLOperationConfig()
-		config.ScopeResolver = func(context.Context, ReadAccess) ([]Scope, error) {
-			return []Scope{{Type: ScopeTypeStore, ID: string(StoreIDConfigDB)}}, nil
+		config.TargetResolver = func(
+			context.Context,
+			ReadAccess,
+			MigrationSelection,
+		) ([]ExecutionTarget, error) {
+			return []ExecutionTarget{{}, {DeploymentID: "deployment-a"}}, nil
 		}
 		operation, err := NewSQLOperation(config)
 		require.NoError(t, err)
 
-		scopes, err := operation.ResolveScopes(context.Background(), nil)
+		targets, err := operation.ResolveTargets(context.Background(), nil, MigrationSelection{})
 
 		require.Error(t, err)
-		assert.Nil(t, scopes)
-		assert.ErrorContains(t, err, "must use store ID")
+		assert.Nil(t, targets)
+		assert.ErrorContains(t, err, "cannot combine")
 	})
 
-	t.Run("scope resolution error", func(t *testing.T) {
+	t.Run("target resolution error", func(t *testing.T) {
 		config := validSQLOperationConfig()
-		config.ScopeResolver = func(context.Context, ReadAccess) ([]Scope, error) {
+		config.TargetResolver = func(
+			context.Context,
+			ReadAccess,
+			MigrationSelection,
+		) ([]ExecutionTarget, error) {
 			return nil, errors.New("query failed")
 		}
 		operation, err := NewSQLOperation(config)
 		require.NoError(t, err)
 
-		_, err = operation.ResolveScopes(context.Background(), nil)
+		_, err = operation.ResolveTargets(context.Background(), nil, MigrationSelection{})
 		assert.ErrorContains(t, err, "query failed")
+	})
+
+	t.Run("invalid migration selection", func(t *testing.T) {
+		operation, err := NewSQLOperation(validSQLOperationConfig())
+		require.NoError(t, err)
+
+		_, err = operation.ResolveTargets(context.Background(), nil,
+			MigrationSelection{DeploymentIDs: []string{"deployment-a", "deployment-a"}})
+		assert.ErrorContains(t, err, "repeats deployment ID")
 	})
 
 	t.Run("invalid verification result", func(t *testing.T) {
 		config := validSQLOperationConfig()
-		config.PreVerifier = func(context.Context, ReadAccess, Scope) (VerificationResult, error) {
+		config.PreVerifier = func(context.Context, ReadAccess, ExecutionTarget) (VerificationResult, error) {
 			return VerificationResult{State: VerificationInvalid, Summary: "Invalid"}, nil
 		}
 		operation, err := NewSQLOperation(config)
 		require.NoError(t, err)
 
-		_, err = operation.PreVerify(context.Background(), nil,
-			Scope{Type: ScopeTypeStore, ID: string(StoreIDEntityDB)})
+		_, err = operation.PreVerify(context.Background(), nil, ExecutionTarget{})
 		assert.ErrorContains(t, err, "requires at least one finding")
 	})
 }
@@ -306,15 +335,20 @@ func validSQLOperationConfig() SQLOperationConfig {
 		Definition: OperationDefinition{
 			ID: "2.0.0/entitydb/example", Description: "Apply the example migration",
 			StoreID: StoreIDEntityDB, ReadStoreIDs: []StoreID{StoreIDConfigDB},
-			InterruptionMode: InterruptionModeAtomic, ScopeType: ScopeTypeStore,
+			Kind:             OperationKindDataChange,
+			InterruptionMode: InterruptionModeAtomic,
 		},
 		ReadinessChecker: func(context.Context, ReadAccess, PlanContext) (ReadinessResult, error) {
 			return ReadinessResult{State: ReadinessReady, Summary: "Operation is ready"}, nil
 		},
-		ScopeResolver: func(context.Context, ReadAccess) ([]Scope, error) {
-			return []Scope{{Type: ScopeTypeStore, ID: string(StoreIDEntityDB)}}, nil
+		TargetResolver: func(
+			context.Context,
+			ReadAccess,
+			MigrationSelection,
+		) ([]ExecutionTarget, error) {
+			return []ExecutionTarget{{}}, nil
 		},
-		PreVerifier: func(context.Context, ReadAccess, Scope) (VerificationResult, error) {
+		PreVerifier: func(context.Context, ReadAccess, ExecutionTarget) (VerificationResult, error) {
 			return VerificationResult{State: VerificationSource, Summary: "Source is valid"}, nil
 		},
 		Implementations: map[DatabaseType]SQLImplementation{
@@ -324,7 +358,7 @@ func validSQLOperationConfig() SQLOperationConfig {
 				}},
 			},
 		},
-		PostVerifier: func(context.Context, ReadAccess, Scope) (VerificationResult, error) {
+		PostVerifier: func(context.Context, ReadAccess, ExecutionTarget) (VerificationResult, error) {
 			return VerificationResult{State: VerificationTarget, Summary: "Target is valid"}, nil
 		},
 	}

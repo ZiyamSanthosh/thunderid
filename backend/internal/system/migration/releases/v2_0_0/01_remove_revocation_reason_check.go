@@ -45,8 +45,8 @@ func newRemoveRevocationReasonCheckOperation() (engine.Operation, error) {
 			ID:               "2.0.0/runtime_persistent/01_remove_revocation_reason_check",
 			Description:      "Remove the fixed revoked-token reason constraint",
 			StoreID:          engine.StoreIDRuntimePersistent,
+			Kind:             engine.OperationKindSchemaChange,
 			InterruptionMode: engine.InterruptionModeAtomic,
-			ScopeType:        engine.ScopeTypeStore,
 		},
 		ReadinessChecker: func(
 			ctx context.Context,
@@ -68,15 +68,10 @@ func newRemoveRevocationReasonCheckOperation() (engine.Operation, error) {
 			}
 			return engine.ReadinessResult{State: engine.ReadinessReady, Summary: inspection.summary}, nil
 		},
-		ScopeResolver: func(context.Context, engine.ReadAccess) ([]engine.Scope, error) {
-			return []engine.Scope{{
-				Type: engine.ScopeTypeStore, ID: string(engine.StoreIDRuntimePersistent),
-			}}, nil
-		},
 		PreVerifier: func(
 			ctx context.Context,
 			access engine.ReadAccess,
-			_ engine.Scope,
+			_ engine.ExecutionTarget,
 		) (engine.VerificationResult, error) {
 			return verifyRevokedTokenReason(ctx, access)
 		},
@@ -91,7 +86,7 @@ func newRemoveRevocationReasonCheckOperation() (engine.Operation, error) {
 		PostVerifier: func(
 			ctx context.Context,
 			access engine.ReadAccess,
-			_ engine.Scope,
+			_ engine.ExecutionTarget,
 		) (engine.VerificationResult, error) {
 			return verifyRevokedTokenReason(ctx, access)
 		},

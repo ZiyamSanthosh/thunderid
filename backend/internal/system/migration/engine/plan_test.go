@@ -31,11 +31,15 @@ func (o testOperation) CheckReadiness(context.Context, ReadAccess, PlanContext) 
 	return ReadinessResult{State: ReadinessReady, Summary: "Test operation is ready"}, nil
 }
 
-func (o testOperation) ResolveScopes(context.Context, ReadAccess) ([]Scope, error) {
-	return []Scope{{Type: o.definition.ScopeType, ID: string(o.definition.StoreID)}}, nil
+func (o testOperation) ResolveTargets(
+	context.Context,
+	ReadAccess,
+	MigrationSelection,
+) ([]ExecutionTarget, error) {
+	return []ExecutionTarget{{}}, nil
 }
 
-func (o testOperation) PreVerify(context.Context, ReadAccess, Scope) (VerificationResult, error) {
+func (o testOperation) PreVerify(context.Context, ReadAccess, ExecutionTarget) (VerificationResult, error) {
 	return VerificationResult{State: VerificationSource, Summary: "Test source is valid"}, nil
 }
 
@@ -43,7 +47,7 @@ func (o testOperation) Execute(context.Context, OperationExecution) error {
 	return nil
 }
 
-func (o testOperation) PostVerify(context.Context, ReadAccess, Scope) (VerificationResult, error) {
+func (o testOperation) PostVerify(context.Context, ReadAccess, ExecutionTarget) (VerificationResult, error) {
 	return VerificationResult{State: VerificationTarget, Summary: "Test target is valid"}, nil
 }
 
@@ -197,12 +201,12 @@ func TestPlanRegistryRejectsInvalidOperationDefinition(t *testing.T) {
 		{name: "unknown writable store", mutate: func(definition *OperationDefinition) {
 			definition.StoreID = "unknown"
 		}, errorMatch: "targets undeclared"},
+		{name: "invalid operation kind", mutate: func(definition *OperationDefinition) {
+			definition.Kind = "unknown"
+		}, errorMatch: "operation kind"},
 		{name: "invalid interruption mode", mutate: func(definition *OperationDefinition) {
 			definition.InterruptionMode = "unknown"
 		}, errorMatch: "interruption mode"},
-		{name: "invalid scope", mutate: func(definition *OperationDefinition) {
-			definition.ScopeType = "unknown"
-		}, errorMatch: "scope type"},
 		{name: "unknown read store", mutate: func(definition *OperationDefinition) {
 			definition.ReadStoreIDs = []StoreID{"unknown"}
 		}, errorMatch: "reads undeclared"},
@@ -255,7 +259,7 @@ func validPlanOperation(storeID StoreID) testOperation {
 		Description:      "Apply the example migration",
 		StoreID:          storeID,
 		ReadStoreIDs:     []StoreID{readStoreID},
+		Kind:             OperationKindDataChange,
 		InterruptionMode: InterruptionModeAtomic,
-		ScopeType:        ScopeTypeStore,
 	}}
 }

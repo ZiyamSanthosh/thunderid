@@ -22,18 +22,18 @@ The current implementation contains:
   manifest targets;
 - a read-only compatibility gate that evaluates every manifest store and aggregates failures;
 - a validated migration plan registry with ordered operations and per-operation store, interruption
-  and progress-scope declarations;
+  and execution-target declarations;
 - a required provider-neutral operation readiness contract with immutable plan context and
   standardized ready, deferred and blocked results;
 - an engine-owned preflight runner that provides declaration-scoped read access, validates every
   operation result, propagates blocked dependencies and aggregates findings in plan order;
-- validated scope and verification contracts plus an immutable atomic `SQLOperation` that requires
+- validated execution-target and verification contracts plus an immutable atomic `SQLOperation` that requires
   an explicit ordered SQL implementation for every registered database provider;
 - engine-owned execution access that permits reads only from declared stores and writes only to an
   operation's owning store;
 - an engine-owned operation execution envelope, with `SQLOperation` selecting its explicit provider
   implementation and executing its statements in declared order;
-- an atomic store-scope executor that reuses ThunderID's transactioner to verify reservation
+- an atomic complete-store executor that reuses ThunderID's transactioner to verify reservation
   ownership, pre-verify, execute or skip, post-verify and complete operation progress in one
   transaction;
 - transactional store finalization that validates completed operation progress and conditionally
@@ -47,7 +47,7 @@ The current implementation contains:
   tables or preventing serving traffic;
 - a basic migration coordinator that generates one run identifier, reserves database namespaces in
   deterministic manifest order, repeats operation readiness after reservation, executes atomic
-  store-scoped operations in global plan order, finalizes each store after its last operation and
+  complete-store operations in global plan order, finalizes each store after its last operation and
   distinguishes pre-execution cancellation from durable execution failure;
 - recovery for failed and abandoned atomic runs through `migration resume`, including run ownership
   and route validation, reuse of completed progress, readiness checks for only pending operations
@@ -112,6 +112,18 @@ and one database shared by all four logical stores. The implementation:
 
 Partially shared layouts use the same grouping behavior and remain covered by command-level tests.
 
+## Execution hosting and orchestration
+
+Migration implementations remain part of the target ThunderID binary. The migration engine must
+not depend on a Control Plane upgrade coordinator. Product-native Control Plane coordination is a
+future enhancement above the engine.
+
+The default operational model is a dedicated migration process or job started from the target
+ThunderID binary while old and target serving instances remain available. A later hosted mode may
+allow one elected target instance to serve traffic and run the background coordinator concurrently.
+Both modes use the same plans, metadata and database execution locks. Only one coordinator may own
+a physical database namespace at a time; this restriction does not prevent application traffic.
+
 ## Deferred metadata additions
 
 The following ideas were removed from the initial schema. They are not automatically required.
@@ -122,7 +134,7 @@ The following ideas were removed from the initial schema. They are not automatic
 | Structured failure code and failure timestamp | Commands need machine-readable remediation or reliable failure-time reporting. |
 | Run start, operation start and completion timestamps | Operational reporting or stale-run recovery has a defined use for them. |
 | Checkpoint representation version | A checkpoint format must remain readable across different migration-engine versions. |
-| `SCOPE_ID` progress column | The engine implements independently resumable deployment-scoped or partitioned backfills. Scope type remains part of the immutable operation definition. |
+| `TARGET_ID` progress column | The engine implements independently resumable deployment-targeted migrations. |
 | Run and status indexes | Measured query plans show that metadata lookups require them. Metadata tables are expected to remain small. |
 | Compound database `CHECK` constraints | A rule is stable across engine versions and database enforcement materially improves correctness. |
 | Additional migration tables | A new durable concept cannot be represented clearly in the two existing metadata tables. |
@@ -135,18 +147,34 @@ them in every supported database.
 
 These capabilities belong to the second implementation phase, after the basic engine works:
 
-- expand-and-contract migration phases;
+- durable `expand`, `migrate` and `contract` phases;
+- a required operation-phase declaration that assigns every operation to `expand`, `migrate` or
+  `contract`, with plan validation that preserves phase order;
+- explicit phase execution and resume commands;
+- an automatic ZDM path that may run `expand` and `migrate` in order but stops at `contract_ready`;
+- an explicit contract gate that requires external confirmation that all old readers and writers
+  have been removed, in addition to engine-owned database verification;
+- a later decision on target serving during `migrate`; the base implementation waits for migration,
+  catch-up and verification, while an advanced mode requires verified dual-read or partial-data
+  compatibility;
 - phase-aware compatibility between old and new binaries;
 - capability fencing and restricted-mode behavior;
 - bounded and throttled backfills;
-- a resumable executor that persists scope checkpoints and invokes optional operation rollback after execution or
+- a resumable executor that persists target checkpoints and invokes optional operation rollback after execution or
   immediate post-verification failure;
 - programmatic operations wired with the normal ThunderID services they explicitly require;
-- change capture for records that remain writable during backfill;
+- change capture for every affected record set that remains writable during backfill, including but
+  not limited to login and token-related data;
 - ordering and conflict handling without adding migration-only versions to every business table;
 - transactional outbox support where application-level capture is required;
 - activation, observation and contract steps; and
 - mixed-version and interruption integration tests.
+
+The initial in-place ZDM increment may migrate a shared database as one unit. Deployment-selective
+migration is a required follow-up increment after that base works, enabling CP/DP environments to
+independently migrate chosen `DEPLOYMENT_ID` values. It requires target-aware progress,
+deployment-level readiness and resume behavior, but must not require the migration engine to manage
+traffic or deploy ThunderID instances.
 
 ## Database-copy ZDM backlog
 

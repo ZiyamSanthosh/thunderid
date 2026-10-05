@@ -435,7 +435,7 @@ func (r *MigrationStateController) finalizationRequirements(
 		if definition.StoreID != storeID {
 			continue
 		}
-		if definition.InterruptionMode != InterruptionModeAtomic || definition.ScopeType != ScopeTypeStore {
+		if definition.InterruptionMode != InterruptionModeAtomic {
 			return StoreRequirement{}, nil, fmt.Errorf(
 				"finalize migration store %q: operation %q is not supported by the basic executor",
 				storeID, definition.ID)

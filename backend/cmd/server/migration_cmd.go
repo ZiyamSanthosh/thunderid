@@ -203,7 +203,7 @@ func runMigrationApply(
 	if err != nil {
 		return engine.MigrationRunResult{}, fmt.Errorf("create migration coordinator: %w", err)
 	}
-	result, err := coordinator.Apply(ctx)
+	result, err := coordinator.Apply(ctx, engine.MigrationSelection{})
 	if err != nil {
 		return result, fmt.Errorf("apply migration: %w", err)
 	}

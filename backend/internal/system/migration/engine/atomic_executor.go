@@ -19,7 +19,7 @@ type AtomicExecutionResult struct {
 	ExecutionSkipped bool
 }
 
-// AtomicOperationExecutor runs one store-scoped operation and its progress update in one transaction.
+// AtomicOperationExecutor runs one operation target and its progress update in one transaction.
 type AtomicOperationExecutor struct {
 	metadataStore *MetadataStore
 	transactioner providers.Transactioner
@@ -57,6 +57,7 @@ func NewAtomicOperationExecutor(
 func (e *AtomicOperationExecutor) Execute(
 	ctx context.Context,
 	operation Operation,
+	selection MigrationSelection,
 	runID string,
 	operationOrder int,
 ) (AtomicExecutionResult, error) {
@@ -73,23 +74,28 @@ func (e *AtomicOperationExecutor) Execute(
 	if definition.InterruptionMode != InterruptionModeAtomic {
 		return AtomicExecutionResult{}, fmt.Errorf("execute operation %q: interruption mode must be atomic", definition.ID)
 	}
-	if definition.ScopeType != ScopeTypeStore {
-		return AtomicExecutionResult{}, fmt.Errorf("execute operation %q: basic atomic executor supports only store scope",
-			definition.ID)
-	}
 
 	readAccess, err := newOperationReadAccess(definition, e.stores)
 	if err != nil {
 		return AtomicExecutionResult{}, fmt.Errorf("execute operation %q: %w", definition.ID, err)
 	}
-	scopes, err := operation.ResolveScopes(ctx, readAccess)
+	targets, err := operation.ResolveTargets(ctx, readAccess, selection)
 	if err != nil {
 		return AtomicExecutionResult{}, err
 	}
-	if err := validateScopes(definition, scopes); err != nil {
+	if err := validateExecutionTargets(definition, targets); err != nil {
 		return AtomicExecutionResult{}, err
 	}
-	scope := scopes[0]
+	if len(targets) != 1 {
+		return AtomicExecutionResult{}, fmt.Errorf(
+			"execute operation %q: basic atomic executor requires exactly one execution target", definition.ID)
+	}
+	target := targets[0]
+	if target.DeploymentID != "" {
+		return AtomicExecutionResult{}, fmt.Errorf(
+			"execute operation %q: basic atomic executor does not support deployment-targeted execution",
+			definition.ID)
+	}
 
 	progressID, err := e.newID()
 	if err != nil {
@@ -119,40 +125,40 @@ func (e *AtomicOperationExecutor) Execute(
 			return err
 		}
 
-		verification, err := operation.PreVerify(txCtx, executionAccess, scope)
+		verification, err := operation.PreVerify(txCtx, executionAccess, target)
 		if err != nil {
 			return err
 		}
 		if err := verification.validate(); err != nil {
-			return fmt.Errorf("execute operation %q scope %q: invalid pre-verification result: %w",
-				definition.ID, scope.ID, err)
+			return fmt.Errorf("execute operation %q target %q: invalid pre-verification result: %w",
+				definition.ID, executionTargetName(target), err)
 		}
 		switch verification.State {
 		case VerificationSource:
-			if err := operation.Execute(txCtx, newOperationExecution(executionAccess, scope)); err != nil {
+			if err := operation.Execute(txCtx, newOperationExecution(executionAccess, target)); err != nil {
 				return err
 			}
 		case VerificationTarget:
 			result.ExecutionSkipped = true
 		case VerificationInvalid:
-			return fmt.Errorf("execute operation %q scope %q: pre-verification is invalid: %s",
-				definition.ID, scope.ID, verification.Summary)
+			return fmt.Errorf("execute operation %q target %q: pre-verification is invalid: %s",
+				definition.ID, executionTargetName(target), verification.Summary)
 		default:
-			return fmt.Errorf("execute operation %q scope %q: unsupported pre-verification state %q",
-				definition.ID, scope.ID, verification.State)
+			return fmt.Errorf("execute operation %q target %q: unsupported pre-verification state %q",
+				definition.ID, executionTargetName(target), verification.State)
 		}
 
-		verification, err = operation.PostVerify(txCtx, executionAccess, scope)
+		verification, err = operation.PostVerify(txCtx, executionAccess, target)
 		if err != nil {
 			return err
 		}
 		if err := verification.validate(); err != nil {
-			return fmt.Errorf("execute operation %q scope %q: invalid post-verification result: %w",
-				definition.ID, scope.ID, err)
+			return fmt.Errorf("execute operation %q target %q: invalid post-verification result: %w",
+				definition.ID, executionTargetName(target), err)
 		}
 		if verification.State != VerificationTarget {
-			return fmt.Errorf("execute operation %q scope %q: post-verification returned %q instead of %q",
-				definition.ID, scope.ID, verification.State, VerificationTarget)
+			return fmt.Errorf("execute operation %q target %q: post-verification returned %q instead of %q",
+				definition.ID, executionTargetName(target), verification.State, VerificationTarget)
 		}
 
 		progress.Status = StatusCompleted

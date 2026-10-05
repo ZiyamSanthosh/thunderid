@@ -90,8 +90,8 @@ func newCreateAuthorizationPDPConnectionOperation() (engine.Operation, error) {
 			ID:               "2.0.0/configdb/02_create_authorization_pdp_connection",
 			Description:      "Create the authorization PDP connection table",
 			StoreID:          engine.StoreIDConfigDB,
+			Kind:             engine.OperationKindSchemaChange,
 			InterruptionMode: engine.InterruptionModeAtomic,
-			ScopeType:        engine.ScopeTypeStore,
 		},
 		ReadinessChecker: func(
 			ctx context.Context,
@@ -113,13 +113,10 @@ func newCreateAuthorizationPDPConnectionOperation() (engine.Operation, error) {
 			}
 			return engine.ReadinessResult{State: engine.ReadinessReady, Summary: inspection.summary}, nil
 		},
-		ScopeResolver: func(context.Context, engine.ReadAccess) ([]engine.Scope, error) {
-			return []engine.Scope{{Type: engine.ScopeTypeStore, ID: string(engine.StoreIDConfigDB)}}, nil
-		},
 		PreVerifier: func(
 			ctx context.Context,
 			access engine.ReadAccess,
-			_ engine.Scope,
+			_ engine.ExecutionTarget,
 		) (engine.VerificationResult, error) {
 			return verifyAuthorizationPDPConnection(ctx, access)
 		},
@@ -134,7 +131,7 @@ func newCreateAuthorizationPDPConnectionOperation() (engine.Operation, error) {
 		PostVerifier: func(
 			ctx context.Context,
 			access engine.ReadAccess,
-			_ engine.Scope,
+			_ engine.ExecutionTarget,
 		) (engine.VerificationResult, error) {
 			return verifyAuthorizationPDPConnection(ctx, access)
 		},

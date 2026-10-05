@@ -13,6 +13,16 @@ import (
 // OperationID is the stable identifier of one operation within a migration plan.
 type OperationID string
 
+// OperationKind describes how an operation affects its owning store.
+type OperationKind string
+
+const (
+	// OperationKindSchemaChange changes the physical schema once for the complete store.
+	OperationKindSchemaChange OperationKind = "schema_change"
+	// OperationKindDataChange changes data for targets resolved from the migration selection.
+	OperationKindDataChange OperationKind = "data_change"
+)
+
 // InterruptionMode defines how the engine may recover an interrupted operation.
 type InterruptionMode string
 
@@ -23,17 +33,11 @@ const (
 	InterruptionModeResumable InterruptionMode = "resumable"
 )
 
-// ScopeType defines the unit of progress tracked for an operation.
-type ScopeType string
-
-const (
-	// ScopeTypeStore tracks one operation for its complete logical store.
-	ScopeTypeStore ScopeType = "store"
-	// ScopeTypeDeployment tracks independent operation progress for each deployment.
-	ScopeTypeDeployment ScopeType = "deployment"
-	// ScopeTypeBatch tracks independent operation progress for stable data partitions.
-	ScopeTypeBatch ScopeType = "batch"
-)
+// MigrationSelection identifies the deployments selected for one migration run.
+// An empty deployment list means that the migration targets the complete store.
+type MigrationSelection struct {
+	DeploymentIDs []string
+}
 
 // OperationDefinition declares the static contract of one migration operation.
 type OperationDefinition struct {
@@ -41,21 +45,21 @@ type OperationDefinition struct {
 	Description      string
 	StoreID          StoreID
 	ReadStoreIDs     []StoreID
+	Kind             OperationKind
 	InterruptionMode InterruptionMode
-	ScopeType        ScopeType
 }
 
 // Operation exposes the static definition and read-only readiness check required by the engine.
 type Operation interface {
 	Definition() OperationDefinition
 	CheckReadiness(context.Context, ReadAccess, PlanContext) (ReadinessResult, error)
-	ResolveScopes(context.Context, ReadAccess) ([]Scope, error)
-	PreVerify(context.Context, ReadAccess, Scope) (VerificationResult, error)
+	ResolveTargets(context.Context, ReadAccess, MigrationSelection) ([]ExecutionTarget, error)
+	PreVerify(context.Context, ReadAccess, ExecutionTarget) (VerificationResult, error)
 	Execute(context.Context, OperationExecution) error
-	PostVerify(context.Context, ReadAccess, Scope) (VerificationResult, error)
+	PostVerify(context.Context, ReadAccess, ExecutionTarget) (VerificationResult, error)
 }
 
-// RollbackCapableOperation optionally restores changes made by a non-atomic operation scope after execution fails.
+// RollbackCapableOperation optionally restores changes made by a non-atomic operation target after execution fails.
 // The original execution error is provided so the implementation can select the appropriate recovery behavior.
 type RollbackCapableOperation interface {
 	Operation
@@ -174,16 +178,14 @@ func validateOperationDefinition(
 	if _, exists := manifestStores[definition.StoreID]; !exists {
 		return fmt.Errorf("operation %q targets undeclared store %q", definition.ID, definition.StoreID)
 	}
+	if definition.Kind != OperationKindSchemaChange && definition.Kind != OperationKindDataChange {
+		return fmt.Errorf("operation %q has unsupported operation kind %q", definition.ID, definition.Kind)
+	}
 	if definition.InterruptionMode != InterruptionModeAtomic &&
 		definition.InterruptionMode != InterruptionModeResumable {
 		return fmt.Errorf("operation %q has unsupported interruption mode %q",
 			definition.ID, definition.InterruptionMode)
 	}
-	if definition.ScopeType != ScopeTypeStore && definition.ScopeType != ScopeTypeDeployment &&
-		definition.ScopeType != ScopeTypeBatch {
-		return fmt.Errorf("operation %q has unsupported scope type %q", definition.ID, definition.ScopeType)
-	}
-
 	readStores := make(map[StoreID]struct{}, len(definition.ReadStoreIDs))
 	for _, storeID := range definition.ReadStoreIDs {
 		if _, exists := manifestStores[storeID]; !exists {

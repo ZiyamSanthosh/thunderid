@@ -53,8 +53,8 @@ func TestRemoveRevocationReasonCheckOperationDefinition(t *testing.T) {
 	require.NoError(t, err)
 	definition := operation.Definition()
 	assert.Equal(t, engine.StoreIDRuntimePersistent, definition.StoreID)
+	assert.Equal(t, engine.OperationKindSchemaChange, definition.Kind)
 	assert.Equal(t, engine.InterruptionModeAtomic, definition.InterruptionMode)
-	assert.Equal(t, engine.ScopeTypeStore, definition.ScopeType)
 
 	implementation, err := operation.(*engine.SQLOperation).Implementation(engine.DatabaseTypePostgres)
 	require.NoError(t, err)
@@ -63,10 +63,11 @@ func TestRemoveRevocationReasonCheckOperationDefinition(t *testing.T) {
 	assert.Contains(t, implementation.Statements[1].Query, "pg_constraint")
 	assert.Contains(t, implementation.Statements[1].Query, legacyRevokedTokenReasonConstraint)
 
-	scopes, err := operation.ResolveScopes(context.Background(), operationReadAccess{})
+	targets, err := operation.ResolveTargets(
+		context.Background(), operationReadAccess{},
+		engine.MigrationSelection{DeploymentIDs: []string{"deployment-a", "deployment-b"}})
 	require.NoError(t, err)
-	require.Len(t, scopes, 1)
-	assert.Equal(t, string(engine.StoreIDRuntimePersistent), scopes[0].ID)
+	require.Equal(t, []engine.ExecutionTarget{{}}, targets)
 }
 
 func TestRemoveRevocationReasonCheckReadiness(t *testing.T) {
@@ -157,29 +158,29 @@ func TestRemoveRevocationReasonCheckReadiness(t *testing.T) {
 func TestRemoveRevocationReasonCheckVerification(t *testing.T) {
 	operation, err := newRemoveRevocationReasonCheckOperation()
 	require.NoError(t, err)
-	scope := engine.Scope{Type: engine.ScopeTypeStore, ID: string(engine.StoreIDRuntimePersistent)}
+	target := engine.ExecutionTarget{}
 
 	source, err := operation.PreVerify(context.Background(), operationReadAccess{
 		columnRows: revokedTokenReasonColumnRows(),
 		constraintRows: []engine.QueryRow{{
 			"constraint_name": legacyRevokedTokenReasonConstraint,
 		}},
-	}, scope)
+	}, target)
 	require.NoError(t, err)
 	assert.Equal(t, engine.VerificationSource, source.State)
 
-	target, err := operation.PostVerify(context.Background(), operationReadAccess{
+	targetResult, err := operation.PostVerify(context.Background(), operationReadAccess{
 		columnRows: revokedTokenReasonColumnRows(),
-	}, scope)
+	}, target)
 	require.NoError(t, err)
-	assert.Equal(t, engine.VerificationTarget, target.State)
+	assert.Equal(t, engine.VerificationTarget, targetResult.State)
 
 	invalid, err := operation.PreVerify(context.Background(), operationReadAccess{
 		columnRows: []engine.QueryRow{{
 			"is_nullable": "YES", "data_type": "character varying",
 			"character_maximum_length": int64(30),
 		}},
-	}, scope)
+	}, target)
 	require.NoError(t, err)
 	assert.Equal(t, engine.VerificationInvalid, invalid.State)
 }

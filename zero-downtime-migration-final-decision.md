@@ -206,6 +206,25 @@ COMPLETE
 A failure moves the affected store or migration run to a durable failed or interrupted state. The
 engine resumes from verified checkpoints instead of assuming that the whole release rolled back.
 
+### Migration phase purposes
+
+Every migration operation declares one of these phases. Operation kind and phase are independent:
+schema and data operations may appear in more than one phase.
+
+| Phase | Purpose | Typical work |
+|---|---|---|
+| `expand` | Prepare a representation that source and target versions can safely share. | Add compatible tables, columns and indexes; relax old constraints; install change-capture infrastructure; seed required defaults or reference data. |
+| `migrate` | Move historical data and captured live changes into the target representation, then prove that it is ready. | Run bounded backfills and transformations; replay and reconcile captured changes; migrate selected deployments; validate counts and invariants. |
+| `contract` | Remove the obsolete representation only after every old reader and writer is gone and rollback no longer depends on it. | Drop old tables, columns and indexes; enforce final constraints; remove compatibility or capture objects; delete temporary migration data. |
+
+The base ZDM workflow runs `expand` and `migrate` before target traffic, then stops at
+`CONTRACT_READY`. It runs `contract` only after explicit authorization. CP/DP environments may run
+and verify `expand` and `migrate` separately.
+
+Allowing target-serving instances to accept production traffic while `migrate` is still running is
+not required for the base ZDM implementation. It remains a later design decision and is allowed only
+when dual-read behavior or another verified compatibility rule makes partially migrated data safe.
+
 ### Meaning of completion before serving
 
 All pre-serving operations required by the target release must complete before that release accepts

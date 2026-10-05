@@ -33,11 +33,19 @@ func (o readinessTestOperation) CheckReadiness(
 	return o.check(ctx, access, planContext)
 }
 
-func (o readinessTestOperation) ResolveScopes(context.Context, ReadAccess) ([]Scope, error) {
-	return []Scope{{Type: o.definition.ScopeType, ID: string(o.definition.StoreID)}}, nil
+func (o readinessTestOperation) ResolveTargets(
+	context.Context,
+	ReadAccess,
+	MigrationSelection,
+) ([]ExecutionTarget, error) {
+	return []ExecutionTarget{{}}, nil
 }
 
-func (o readinessTestOperation) PreVerify(context.Context, ReadAccess, Scope) (VerificationResult, error) {
+func (o readinessTestOperation) PreVerify(
+	context.Context,
+	ReadAccess,
+	ExecutionTarget,
+) (VerificationResult, error) {
 	return VerificationResult{State: VerificationSource, Summary: "Test source is valid"}, nil
 }
 
@@ -45,7 +53,11 @@ func (o readinessTestOperation) Execute(context.Context, OperationExecution) err
 	return nil
 }
 
-func (o readinessTestOperation) PostVerify(context.Context, ReadAccess, Scope) (VerificationResult, error) {
+func (o readinessTestOperation) PostVerify(
+	context.Context,
+	ReadAccess,
+	ExecutionTarget,
+) (VerificationResult, error) {
 	return VerificationResult{State: VerificationTarget, Summary: "Test target is valid"}, nil
 }
 
@@ -390,7 +402,8 @@ func TestMigrationPreflightCheckerContinuesIndependentOperations(t *testing.T) {
 	configOperation := readinessTestOperation{
 		definition: OperationDefinition{
 			ID: "migrate-configdb", Description: "Migrate configdb", StoreID: StoreIDConfigDB,
-			InterruptionMode: InterruptionModeAtomic, ScopeType: ScopeTypeStore,
+			Kind:             OperationKindDataChange,
+			InterruptionMode: InterruptionModeAtomic,
 		},
 		check: func(context.Context, ReadAccess, PlanContext) (ReadinessResult, error) {
 			return ReadinessResult{State: ReadinessReady, Summary: "Config migration is ready"}, nil
@@ -448,6 +461,7 @@ func preflightStores(
 func readinessDefinition(operationID OperationID) OperationDefinition {
 	return OperationDefinition{
 		ID: operationID, Description: "Test operation", StoreID: StoreIDEntityDB,
-		InterruptionMode: InterruptionModeAtomic, ScopeType: ScopeTypeStore,
+		Kind:             OperationKindDataChange,
+		InterruptionMode: InterruptionModeAtomic,
 	}
 }

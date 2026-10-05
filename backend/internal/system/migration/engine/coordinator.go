@@ -84,7 +84,7 @@ func NewMigrationCoordinator(
 	plan := registry.Plan()
 	for _, operation := range plan.Operations {
 		definition := operation.Definition()
-		if definition.InterruptionMode != InterruptionModeAtomic || definition.ScopeType != ScopeTypeStore {
+		if definition.InterruptionMode != InterruptionModeAtomic {
 			return nil, fmt.Errorf(
 				"create migration coordinator: operation %q is not supported by the basic executor",
 				definition.ID)
@@ -174,17 +174,26 @@ func NewMigrationCoordinator(
 }
 
 // Apply runs preflight, reserves affected stores, executes operations in plan order and finalizes each store.
-func (c *MigrationCoordinator) Apply(ctx context.Context) (MigrationRunResult, error) {
+func (c *MigrationCoordinator) Apply(
+	ctx context.Context,
+	selection MigrationSelection,
+) (MigrationRunResult, error) {
 	var result MigrationRunResult
 	err := c.withExecutionLocks(ctx, 0, func(lockCtx context.Context) error {
 		var applyErr error
-		result, applyErr = c.apply(lockCtx)
+		result, applyErr = c.apply(lockCtx, selection)
 		return applyErr
 	})
 	return result, err
 }
 
-func (c *MigrationCoordinator) apply(ctx context.Context) (MigrationRunResult, error) {
+func (c *MigrationCoordinator) apply(
+	ctx context.Context,
+	selection MigrationSelection,
+) (MigrationRunResult, error) {
+	if err := validateMigrationSelection(selection); err != nil {
+		return MigrationRunResult{}, fmt.Errorf("apply migration: %w", err)
+	}
 	metadataStores := c.metadataStoresByStore()
 	result := MigrationRunResult{Preflight: c.preflight.Check(ctx, metadataStores)}
 	if !result.Preflight.Ready() {
@@ -249,7 +258,7 @@ func (c *MigrationCoordinator) apply(ctx context.Context) (MigrationRunResult, e
 		}
 		namespaceIndex := namespaceByStore[definition.StoreID]
 		execution, executeErr := c.namespaces[namespaceIndex].executor.Execute(
-			ctx, operation, runID, operationOrder)
+			ctx, operation, selection, runID, operationOrder)
 		if executeErr != nil {
 			return result, errors.Join(executeErr, c.markFailed(ctx, reservedStores, runID, executeErr))
 		}
@@ -327,7 +336,7 @@ func (c *MigrationCoordinator) resume(ctx context.Context) (MigrationRunResult, 
 		namespaceIndex := namespaceByStore[definition.StoreID]
 		if _, completed := resume.completedOperations[definition.ID]; !completed {
 			execution, executeErr := c.namespaces[namespaceIndex].executor.Execute(
-				ctx, operation, resume.runID, operationOrder)
+				ctx, operation, MigrationSelection{}, resume.runID, operationOrder)
 			if executeErr != nil {
 				return result, errors.Join(executeErr,
 					c.markFailed(ctx, resume.activeStores, resume.runID, executeErr))

@@ -57,13 +57,27 @@ func TestMigrationCoordinatorRequiresExecutionLockBeforeDatabaseInspection(t *te
 	}})
 	require.NoError(t, err)
 
-	applyResult, applyErr := coordinator.Apply(context.Background())
+	applyResult, applyErr := coordinator.Apply(context.Background(), MigrationSelection{})
 	resumeResult, resumeErr := coordinator.Resume(context.Background())
 
 	require.ErrorIs(t, applyErr, ErrMigrationExecutionLocked)
 	assert.Empty(t, applyResult.RunID)
 	require.ErrorIs(t, resumeErr, ErrMigrationExecutionLocked)
 	assert.Empty(t, resumeResult.RunID)
+}
+
+func TestMigrationCoordinatorRejectsInvalidMigrationSelection(t *testing.T) {
+	release := coordinatorTestRelease()
+	dbClient := providermock.NewDBClientInterfaceMock(t)
+	coordinator := newTestMigrationCoordinator(t, release, dbClient, &testTransactioner{})
+
+	result, err := coordinator.Apply(context.Background(), MigrationSelection{
+		DeploymentIDs: []string{"deployment-a", "deployment-a"},
+	})
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "repeats deployment ID")
+	assert.Empty(t, result.RunID)
 }
 
 func (o *coordinatorReadinessOperation) CheckReadiness(
@@ -116,7 +130,7 @@ func TestMigrationCoordinatorAppliesBasicMigration(t *testing.T) {
 	coordinator := newTestMigrationCoordinator(t, release, dbClient, transactioner)
 	coordinator.newID = sequenceIDs(testRunID)
 
-	result, err := coordinator.Apply(context.Background())
+	result, err := coordinator.Apply(context.Background(), MigrationSelection{})
 
 	require.NoError(t, err)
 	assert.Equal(t, testRunID, result.RunID)
@@ -141,7 +155,7 @@ func TestMigrationCoordinatorReturnsWithoutRunWhenAlreadyAtTarget(t *testing.T) 
 		return "", nil
 	}
 
-	result, err := coordinator.Apply(context.Background())
+	result, err := coordinator.Apply(context.Background(), MigrationSelection{})
 
 	require.NoError(t, err)
 	assert.True(t, result.AlreadyAtTarget)
@@ -167,7 +181,7 @@ func TestMigrationCoordinatorDoesNotReserveBlockedPreflight(t *testing.T) {
 	}
 	coordinator := newTestMigrationCoordinator(t, release, dbClient, &testTransactioner{})
 
-	result, err := coordinator.Apply(context.Background())
+	result, err := coordinator.Apply(context.Background(), MigrationSelection{})
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrMigrationPreflightBlocked)
@@ -199,7 +213,7 @@ func TestMigrationCoordinatorCancelsReservationsWhenRevalidationBlocks(t *testin
 	coordinator := newTestMigrationCoordinator(t, release, dbClient, transactioner)
 	coordinator.newID = sequenceIDs(testRunID)
 
-	result, err := coordinator.Apply(context.Background())
+	result, err := coordinator.Apply(context.Background(), MigrationSelection{})
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrMigrationPreflightBlocked)
@@ -241,7 +255,7 @@ func TestMigrationCoordinatorMarksStoreFailedAfterExecutionError(t *testing.T) {
 	coordinator := newTestMigrationCoordinator(t, release, dbClient, transactioner)
 	coordinator.newID = sequenceIDs(testRunID)
 
-	result, err := coordinator.Apply(context.Background())
+	result, err := coordinator.Apply(context.Background(), MigrationSelection{})
 
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "operation failed")
@@ -545,7 +559,7 @@ func TestMigrationCoordinatorReportsRunIDGenerationFailure(t *testing.T) {
 	coordinator := newTestMigrationCoordinator(t, release, dbClient, &testTransactioner{})
 	coordinator.newID = func() (string, error) { return "", errors.New("random source failed") }
 
-	result, err := coordinator.Apply(context.Background())
+	result, err := coordinator.Apply(context.Background(), MigrationSelection{})
 
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "random source failed")
