@@ -21,6 +21,9 @@ The current implementation contains:
 - a transactional PostgreSQL initialization service for the fixed pre-framework baseline and fresh
   manifest targets;
 - a read-only compatibility gate that evaluates every manifest store and aggregates failures;
+- a phase-aware serving compatibility gate that keeps source binaries eligible through expansion,
+  migration and the `contract_ready` boundary, admits target binaries from `contract_ready`, and
+  rejects source binaries once contract starts;
 - a validated migration plan registry with ordered operations and per-operation store, interruption
   and execution-target declarations;
 - release-plan-owned `Expand`, `Migrate` and `Contract` operation groups, with canonical phase order
@@ -74,8 +77,12 @@ The current implementation contains:
   classifies stores as already at the phase boundary, migration-required or blocked and aggregates
   operation-specific readiness findings;
 - a PostgreSQL `migration apply` command that runs an explicitly selected phase as a dedicated
-  execution of the ThunderID binary without starting serving components; omitting the phase retains
-  `expand` as the default;
+  execution of the ThunderID binary without starting serving components;
+- a safe automatic `migration apply` workflow that holds one execution lock while running `expand`
+  and `migrate` in order, then stops before contract; explicit phase arguments retain manual CP/DP
+  control;
+- an explicit `migration apply contract` path that cannot be reached by the default workflow or the
+  generic phase-execution API and retains engine-owned contract preflight checks;
 - a read-only PostgreSQL startup compatibility gate that runs before caches, bootstrap, background
   workers and request listeners, while unsupported development database providers remain outside
   the Phase 1 gate;
@@ -161,13 +168,11 @@ them in every supported database.
 
 These capabilities belong to the second implementation phase, after the basic engine works:
 
-- an automatic ZDM path that may run `expand` and `migrate` in order but stops at `contract_ready`;
-- an explicit contract gate that requires external confirmation that all old readers and writers
-  have been removed, in addition to engine-owned database verification;
+- an engine-managed `contract_ready` boundary for stores with contract-only plans; the current safe
+  workflow rejects such plans because no pre-contract phase can establish target-serving readiness;
 - a later decision on target serving during `migrate`; the base implementation waits for migration,
   catch-up and verification, while an advanced mode requires verified dual-read or partial-data
   compatibility;
-- phase-aware compatibility between old and new binaries;
 - capability fencing and restricted-mode behavior;
 - bounded and throttled backfills;
 - a resumable executor that persists target checkpoints and invokes optional operation rollback after execution or

@@ -46,7 +46,7 @@ const (
 	MigrationStageExpanded MigrationStage = "expanded"
 	// MigrationStageMigrating means that data transformation and catch-up are running.
 	MigrationStageMigrating MigrationStage = "migrating"
-	// MigrationStageContractReady means that target serving is ready and contract awaits authorization.
+	// MigrationStageContractReady means that target serving is ready and contract awaits explicit execution.
 	MigrationStageContractReady MigrationStage = "contract_ready"
 	// MigrationStageContracting means that explicitly authorized cleanup is running.
 	MigrationStageContracting MigrationStage = "contracting"

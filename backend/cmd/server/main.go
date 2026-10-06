@@ -200,8 +200,30 @@ func logMigrationCommandResult(
 	if result.application != nil {
 		logMigrationApplication(ctx, logger, *result.application, successful)
 	}
+	if result.workflow != nil {
+		logMigrationWorkflow(ctx, logger, *result.workflow, successful)
+	}
 	logger.Info(ctx, "Migration command result",
 		log.String("action", result.action), log.Bool("successful", successful))
+}
+
+func logMigrationWorkflow(
+	ctx context.Context,
+	logger *log.Logger,
+	result engine.MigrationWorkflowResult,
+	successful bool,
+) {
+	for index, phase := range result.Phases {
+		phaseSuccessful := successful || index < len(result.Phases)-1
+		logMigrationApplication(ctx, logger, phase, phaseSuccessful)
+	}
+	message := "Safe migration workflow completed"
+	if !successful {
+		message = "Safe migration workflow incomplete"
+	}
+	logger.Info(ctx, message,
+		log.Int("phases", len(result.Phases)),
+		log.Bool("stoppedBeforeContract", true))
 }
 
 func logMigrationInitialization(

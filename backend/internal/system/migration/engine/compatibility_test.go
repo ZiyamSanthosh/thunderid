@@ -41,6 +41,29 @@ func TestCompatibilityGateAcceptsCompatibleStores(t *testing.T) {
 	}
 }
 
+func TestCompatibilityGateKeepsSourceCompatibleDuringMigrateFailure(t *testing.T) {
+	manifest := validTestManifest()
+	dbClient := providermock.NewDBClientInterfaceMock(t)
+	expectReadySchema(dbClient)
+	row := compatibilityStateRow(StoreIDConfigDB, "1.0.0")
+	row["target_level"] = "2.0.0"
+	row["stage"] = string(MigrationStageMigrating)
+	row["status"] = string(StatusFailed)
+	row["active_run_id"] = testRunID
+	row["failure_summary"] = "migration interrupted"
+	dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(StoreIDConfigDB)).
+		Return([]map[string]interface{}{row}, nil).Once()
+	gate, err := NewCompatibilityGate(manifest)
+	require.NoError(t, err)
+
+	result := gate.checkStore(
+		context.Background(), manifest.Stores[0], newTestMetadataStore(t, dbClient))
+
+	assert.True(t, result.Compatible())
+	assert.Equal(t, StatusFailed, result.Status)
+	assert.Equal(t, MigrationStageMigrating, result.Stage)
+}
+
 func TestCompatibilityGateCollectsStoreFailures(t *testing.T) {
 	manifest := validTestManifest()
 	configClient := providermock.NewDBClientInterfaceMock(t)
@@ -61,7 +84,7 @@ func TestCompatibilityGateCollectsStoreFailures(t *testing.T) {
 	expectReadySchema(runtimePersistentClient)
 	runtimePersistentRow := compatibilityStateRow(StoreIDRuntimePersistent, "1.0.0")
 	runtimePersistentRow["status"] = string(StatusInProgress)
-	runtimePersistentRow["stage"] = string(MigrationStageExpanding)
+	runtimePersistentRow["stage"] = string(MigrationStageContracting)
 	runtimePersistentRow["target_level"] = "1.1.0"
 	runtimePersistentRow["active_run_id"] = testRunID
 	runtimePersistentClient.On("QueryContext", mock.Anything, queryGetMigrationState,
@@ -83,10 +106,98 @@ func TestCompatibilityGateCollectsStoreFailures(t *testing.T) {
 	assert.Equal(t, "0.9.0", report.Stores[1].CompletedLevel)
 	assert.Equal(t, CompatibilityReasonUnverifiable, report.Stores[2].Reason)
 	assert.ErrorContains(t, report.Stores[2].Err, "database unavailable")
-	assert.Equal(t, CompatibilityReasonMigrationIncomplete, report.Stores[3].Reason)
+	assert.Equal(t, CompatibilityReasonSourceRetired, report.Stores[3].Reason)
 	assert.Equal(t, testRunID, report.Stores[3].ActiveRunID)
 	assert.Empty(t, report.NextMigrationRelease)
 	assert.Empty(t, report.MigrationRoute)
+}
+
+func TestServingCompatibilityAcrossMigrationStages(t *testing.T) {
+	sourceRequirement := StoreRequirement{
+		ID: StoreIDConfigDB, AcceptedSourceLevel: "0.9.0", RequiredLevel: "1.0.0", Changed: true,
+	}
+	targetRequirement := StoreRequirement{
+		ID: StoreIDConfigDB, AcceptedSourceLevel: "1.0.0", RequiredLevel: "2.0.0", Changed: true,
+	}
+	tests := []struct {
+		name        string
+		requirement StoreRequirement
+		state       State
+		expected    CompatibilityReason
+	}{
+		{
+			name: "source serves during expansion", requirement: sourceRequirement,
+			state: migrationCompatibilityState(
+				"1.0.0", "2.0.0", MigrationStageExpanding, StatusInProgress),
+			expected: CompatibilityReasonNone,
+		},
+		{
+			name: "target waits during expansion", requirement: targetRequirement,
+			state: migrationCompatibilityState(
+				"1.0.0", "2.0.0", MigrationStageExpanding, StatusInProgress),
+			expected: CompatibilityReasonTargetNotReady,
+		},
+		{
+			name: "source serves at expanded boundary", requirement: sourceRequirement,
+			state: migrationCompatibilityState(
+				"1.0.0", "2.0.0", MigrationStageExpanded, StatusCompleted),
+			expected: CompatibilityReasonNone,
+		},
+		{
+			name: "target waits at expanded boundary", requirement: targetRequirement,
+			state: migrationCompatibilityState(
+				"1.0.0", "2.0.0", MigrationStageExpanded, StatusCompleted),
+			expected: CompatibilityReasonTargetNotReady,
+		},
+		{
+			name: "source serves after migrate failure", requirement: sourceRequirement,
+			state: migrationCompatibilityState(
+				"1.0.0", "2.0.0", MigrationStageMigrating, StatusFailed),
+			expected: CompatibilityReasonNone,
+		},
+		{
+			name: "target waits after migrate failure", requirement: targetRequirement,
+			state: migrationCompatibilityState(
+				"1.0.0", "2.0.0", MigrationStageMigrating, StatusFailed),
+			expected: CompatibilityReasonTargetNotReady,
+		},
+		{
+			name: "source serves at contract-ready boundary", requirement: sourceRequirement,
+			state: migrationCompatibilityState(
+				"1.0.0", "2.0.0", MigrationStageContractReady, StatusCompleted),
+			expected: CompatibilityReasonNone,
+		},
+		{
+			name: "target serves at contract-ready boundary", requirement: targetRequirement,
+			state: migrationCompatibilityState(
+				"1.0.0", "2.0.0", MigrationStageContractReady, StatusCompleted),
+			expected: CompatibilityReasonNone,
+		},
+		{
+			name: "source stops during contract", requirement: sourceRequirement,
+			state: migrationCompatibilityState(
+				"1.0.0", "2.0.0", MigrationStageContracting, StatusInProgress),
+			expected: CompatibilityReasonSourceRetired,
+		},
+		{
+			name: "target serves during contract", requirement: targetRequirement,
+			state: migrationCompatibilityState(
+				"1.0.0", "2.0.0", MigrationStageContracting, StatusInProgress),
+			expected: CompatibilityReasonNone,
+		},
+		{
+			name: "target serves after contract failure", requirement: targetRequirement,
+			state: migrationCompatibilityState(
+				"1.0.0", "2.0.0", MigrationStageContracting, StatusFailed),
+			expected: CompatibilityReasonNone,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.expected, servingCompatibilityReason(test.requirement, test.state))
+		})
+	}
 }
 
 func TestCompatibilityGateReportsNextMigrationRelease(t *testing.T) {
@@ -197,4 +308,25 @@ func compatibilityStateRow(storeID StoreID, completedLevel string) map[string]in
 		"active_run_id": nil, "failure_summary": nil,
 		"updated_at": time.Date(2026, time.September, 30, 12, 0, 0, 0, time.UTC),
 	}
+}
+
+func migrationCompatibilityState(
+	completedLevel string,
+	targetLevel string,
+	stage MigrationStage,
+	status Status,
+) State {
+	state := State{
+		CompletedLevel: completedLevel,
+		TargetLevel:    targetLevel,
+		Stage:          stage,
+		Status:         status,
+	}
+	if status == StatusInProgress || status == StatusFailed {
+		state.ActiveRunID = testRunID
+	}
+	if status == StatusFailed {
+		state.FailureSummary = "migration interrupted"
+	}
+	return state
 }

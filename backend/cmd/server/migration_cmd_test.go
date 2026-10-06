@@ -201,6 +201,82 @@ func TestRunStartupCompatibilityCheckReportsIncompatibleMetadata(t *testing.T) {
 	}
 }
 
+func TestRunStartupCompatibilityCheckAcceptsContractReadyTarget(t *testing.T) {
+	dataSource := testPostgresDataSource("thunderid")
+	cfg := &config.Config{Database: config.DatabaseConfig{
+		Config: dataSource, Entity: dataSource, RuntimeTransient: dataSource, RuntimePersistent: dataSource,
+	}}
+	dbProvider := providermock.NewDBProviderInterfaceMock(t)
+	dbClient := providermock.NewDBClientInterfaceMock(t)
+	dbProvider.On("GetConfigDBClient").Return(dbClient, nil).Once()
+	dbClient.On("QueryContext", mock.Anything, mock.Anything).
+		Return([]map[string]interface{}{
+			{"table_name": "MIGRATION_STATE"},
+			{"table_name": "MIGRATION_PROGRESS"},
+		}, nil).Times(4)
+	for _, storeID := range []engine.StoreID{
+		engine.StoreIDConfigDB,
+		engine.StoreIDEntityDB,
+		engine.StoreIDRuntimeTransient,
+		engine.StoreIDRuntimePersistent,
+	} {
+		row := testMigrationStateRow(storeID)
+		if storeID == engine.StoreIDConfigDB || storeID == engine.StoreIDRuntimePersistent {
+			row["completed_level"] = "1.0.0"
+			row["target_level"] = "2.0.0"
+			row["stage"] = string(engine.MigrationStageContractReady)
+			row["status"] = string(engine.StatusCompleted)
+		}
+		dbClient.On("QueryContext", mock.Anything, mock.Anything, string(storeID)).
+			Return([]map[string]interface{}{row}, nil).Once()
+	}
+
+	report, err := runStartupCompatibilityCheck(context.Background(), cfg, dbProvider)
+
+	require.NoError(t, err)
+	require.NotNil(t, report)
+	assert.True(t, report.Compatible())
+}
+
+func TestRunStartupCompatibilityCheckRejectsExpandedTarget(t *testing.T) {
+	dataSource := testPostgresDataSource("thunderid")
+	cfg := &config.Config{Database: config.DatabaseConfig{
+		Config: dataSource, Entity: dataSource, RuntimeTransient: dataSource, RuntimePersistent: dataSource,
+	}}
+	dbProvider := providermock.NewDBProviderInterfaceMock(t)
+	dbClient := providermock.NewDBClientInterfaceMock(t)
+	dbProvider.On("GetConfigDBClient").Return(dbClient, nil).Once()
+	dbClient.On("QueryContext", mock.Anything, mock.Anything).
+		Return([]map[string]interface{}{
+			{"table_name": "MIGRATION_STATE"},
+			{"table_name": "MIGRATION_PROGRESS"},
+		}, nil).Times(4)
+	for _, storeID := range []engine.StoreID{
+		engine.StoreIDConfigDB,
+		engine.StoreIDEntityDB,
+		engine.StoreIDRuntimeTransient,
+		engine.StoreIDRuntimePersistent,
+	} {
+		row := testMigrationStateRow(storeID)
+		if storeID == engine.StoreIDConfigDB || storeID == engine.StoreIDRuntimePersistent {
+			row["completed_level"] = "1.0.0"
+			row["target_level"] = "2.0.0"
+			row["stage"] = string(engine.MigrationStageExpanded)
+			row["status"] = string(engine.StatusCompleted)
+		}
+		dbClient.On("QueryContext", mock.Anything, mock.Anything, string(storeID)).
+			Return([]map[string]interface{}{row}, nil).Once()
+	}
+
+	report, err := runStartupCompatibilityCheck(context.Background(), cfg, dbProvider)
+
+	require.NoError(t, err)
+	require.NotNil(t, report)
+	assert.False(t, report.Compatible())
+	assert.Equal(t, engine.CompatibilityReasonTargetNotReady, report.Stores[0].Reason)
+	assert.Equal(t, engine.CompatibilityReasonTargetNotReady, report.Stores[3].Reason)
+}
+
 func TestRunStartupCompatibilityCheckValidatesDependencies(t *testing.T) {
 	dbProvider := providermock.NewDBProviderInterfaceMock(t)
 
@@ -297,7 +373,7 @@ func TestRunMigrationApplyReturnsNoOpWhenStoresAreAtTarget(t *testing.T) {
 		Return([]map[string]interface{}{
 			{"table_name": "MIGRATION_STATE"},
 			{"table_name": "MIGRATION_PROGRESS"},
-		}, nil).Times(4)
+		}, nil).Times(8)
 	for _, storeID := range []engine.StoreID{
 		engine.StoreIDConfigDB,
 		engine.StoreIDEntityDB,
@@ -305,7 +381,7 @@ func TestRunMigrationApplyReturnsNoOpWhenStoresAreAtTarget(t *testing.T) {
 		engine.StoreIDRuntimePersistent,
 	} {
 		dbClient.On("QueryContext", mock.Anything, mock.Anything, string(storeID)).
-			Return([]map[string]interface{}{testMigrationStateRow(storeID)}, nil).Once()
+			Return([]map[string]interface{}{testMigrationStateRow(storeID)}, nil).Twice()
 	}
 
 	result, err := runMigrationCommand(
@@ -313,12 +389,13 @@ func TestRunMigrationApplyReturnsNoOpWhenStoresAreAtTarget(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	require.NotNil(t, result.application)
-	assert.Equal(t, engine.OperationPhaseExpand, result.application.Phase)
-	assert.True(t, result.application.AlreadyAtTarget)
-	assert.Empty(t, result.application.RunID)
-	assert.Empty(t, result.application.Operations)
-	assert.Empty(t, result.application.Finalizations)
+	assert.Nil(t, result.application)
+	require.NotNil(t, result.workflow)
+	require.Len(t, result.workflow.Phases, 2)
+	assert.Equal(t, engine.OperationPhaseExpand, result.workflow.Phases[0].Phase)
+	assert.True(t, result.workflow.Phases[0].AlreadyAtTarget)
+	assert.Equal(t, engine.OperationPhaseMigrate, result.workflow.Phases[1].Phase)
+	assert.True(t, result.workflow.Phases[1].AlreadyAtTarget)
 	assert.Nil(t, result.compatibility)
 	assert.Nil(t, result.preflight)
 }
@@ -446,6 +523,7 @@ func TestMigrationCommandPhase(t *testing.T) {
 		{name: "expand", args: []string{migrationSubcommand, migrationApplyAction, "expand"}, expected: engine.OperationPhaseExpand},
 		{name: "migrate", args: []string{migrationSubcommand, migrationApplyAction, "migrate"}, expected: engine.OperationPhaseMigrate},
 		{name: "contract check", args: []string{migrationSubcommand, migrationCheckAction, "contract"}, expected: engine.OperationPhaseContract},
+		{name: "contract apply", args: []string{migrationSubcommand, migrationApplyAction, "contract"}, expected: engine.OperationPhaseContract},
 	}
 
 	for _, test := range tests {

@@ -39,6 +39,18 @@ func (testMigrationExecutionLocker) WithLock(
 	return fn(ctx)
 }
 
+type countingMigrationExecutionLocker struct {
+	calls int
+}
+
+func (l *countingMigrationExecutionLocker) WithLock(
+	ctx context.Context,
+	fn func(context.Context) error,
+) error {
+	l.calls++
+	return fn(ctx)
+}
+
 type unavailableMigrationExecutionLocker struct{}
 
 func (unavailableMigrationExecutionLocker) WithLock(
@@ -79,6 +91,90 @@ func TestMigrationCoordinatorRejectsInvalidMigrationSelection(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "repeats deployment ID")
 	assert.Empty(t, result.RunID)
+}
+
+func TestMigrationCoordinatorSafeWorkflowRunsExpandAndMigrateUnderOneLock(t *testing.T) {
+	release := phaseAwareStateControllerTestRelease()
+	dbClient := providermock.NewDBClientInterfaceMock(t)
+	updatedAt := time.Now().UTC()
+	expectCoordinatorPreflightStates(dbClient, release.Manifest, StoreIDConfigDB, true, updatedAt)
+	expectCoordinatorPreflightStates(dbClient, release.Manifest, StoreIDConfigDB, true, updatedAt)
+	locker := &countingMigrationExecutionLocker{}
+	coordinator, err := NewMigrationCoordinator(release, []MigrationNamespace{{
+		StoreIDs: append([]StoreID(nil), supportedStoreIDs...), DatabaseType: DatabaseTypePostgres,
+		Client: dbClient, Transactioner: &testTransactioner{}, Locker: locker,
+	}})
+	require.NoError(t, err)
+
+	result, err := coordinator.ApplySafe(context.Background(), MigrationSelection{})
+
+	require.NoError(t, err)
+	require.Len(t, result.Phases, 2)
+	assert.Equal(t, OperationPhaseExpand, result.Phases[0].Phase)
+	assert.True(t, result.Phases[0].AlreadyAtTarget)
+	assert.Equal(t, OperationPhaseMigrate, result.Phases[1].Phase)
+	assert.True(t, result.Phases[1].AlreadyAtTarget)
+	assert.Equal(t, 1, locker.calls)
+}
+
+func TestMigrationCoordinatorSafeWorkflowRejectsContractOnlyStore(t *testing.T) {
+	manifest := changedStoreManifest(StoreIDConfigDB)
+	release := ReleaseDefinition{Manifest: manifest, Plan: MigrationPlan{
+		TargetVersion: manifest.ReleaseVersion,
+		Contract:      []Operation{validPlanOperation(StoreIDConfigDB)},
+	}}
+	dbClient := providermock.NewDBClientInterfaceMock(t)
+	coordinator := newTestMigrationCoordinator(t, release, dbClient, &testTransactioner{})
+
+	result, err := coordinator.ApplySafe(context.Background(), MigrationSelection{})
+
+	require.ErrorIs(t, err, ErrSafeWorkflowUnsupported)
+	assert.Empty(t, result.Phases)
+}
+
+func TestMigrationCoordinatorRequiresDedicatedContractExecution(t *testing.T) {
+	manifest := changedStoreManifest(StoreIDConfigDB)
+	release := ReleaseDefinition{Manifest: manifest, Plan: MigrationPlan{
+		TargetVersion: manifest.ReleaseVersion,
+		Contract:      []Operation{validPlanOperation(StoreIDConfigDB)},
+	}}
+	dbClient := providermock.NewDBClientInterfaceMock(t)
+	locker := &countingMigrationExecutionLocker{}
+	coordinator, err := NewMigrationCoordinator(release, []MigrationNamespace{{
+		StoreIDs: append([]StoreID(nil), supportedStoreIDs...), DatabaseType: DatabaseTypePostgres,
+		Client: dbClient, Transactioner: &testTransactioner{}, Locker: locker,
+	}})
+	require.NoError(t, err)
+
+	phaseResult, phaseErr := coordinator.ApplyPhase(
+		context.Background(), OperationPhaseContract, MigrationSelection{})
+
+	require.ErrorIs(t, phaseErr, ErrContractRequiresDedicatedExecution)
+	assert.Equal(t, OperationPhaseContract, phaseResult.Phase)
+	assert.Equal(t, 0, locker.calls)
+}
+
+func TestMigrationCoordinatorAppliesContractThroughDedicatedPath(t *testing.T) {
+	manifest := changedStoreManifest(StoreIDConfigDB)
+	release := ReleaseDefinition{Manifest: manifest, Plan: MigrationPlan{
+		TargetVersion: manifest.ReleaseVersion,
+		Contract:      []Operation{validPlanOperation(StoreIDConfigDB)},
+	}}
+	dbClient := providermock.NewDBClientInterfaceMock(t)
+	expectCoordinatorPreflightStates(dbClient, release.Manifest, StoreIDConfigDB, true, time.Now().UTC())
+	locker := &countingMigrationExecutionLocker{}
+	coordinator, err := NewMigrationCoordinator(release, []MigrationNamespace{{
+		StoreIDs: append([]StoreID(nil), supportedStoreIDs...), DatabaseType: DatabaseTypePostgres,
+		Client: dbClient, Transactioner: &testTransactioner{}, Locker: locker,
+	}})
+	require.NoError(t, err)
+
+	result, err := coordinator.ApplyContract(context.Background(), MigrationSelection{})
+
+	require.NoError(t, err)
+	assert.Equal(t, OperationPhaseContract, result.Phase)
+	assert.True(t, result.AlreadyAtTarget)
+	assert.Equal(t, 1, locker.calls)
 }
 
 func (o *coordinatorReadinessOperation) CheckReadiness(

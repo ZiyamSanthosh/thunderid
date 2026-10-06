@@ -36,6 +36,7 @@ type migrationCommandResult struct {
 	compatibility  *engine.CompatibilityReport
 	preflight      *engine.PreflightReport
 	application    *engine.MigrationRunResult
+	workflow       *engine.MigrationWorkflowResult
 }
 
 type migrationDatabaseAdapter struct {
@@ -154,7 +155,20 @@ func runMigrationCommand(
 		}
 		return result, nil
 	case migrationApplyAction:
-		application, err := runMigrationApply(ctx, *releaseDefinition, namespaces, phase)
+		if len(args) == 2 {
+			workflow, err := runMigrationApplySafe(ctx, *releaseDefinition, namespaces)
+			result := &migrationCommandResult{action: args[1], workflow: &workflow}
+			if err != nil {
+				return result, err
+			}
+			return result, nil
+		}
+		var application engine.MigrationRunResult
+		if phase == engine.OperationPhaseContract {
+			application, err = runMigrationContract(ctx, *releaseDefinition, namespaces)
+		} else {
+			application, err = runMigrationApply(ctx, *releaseDefinition, namespaces, phase)
+		}
 		result := &migrationCommandResult{action: args[1], application: &application}
 		if err != nil {
 			return result, err
@@ -172,6 +186,26 @@ func runMigrationCommand(
 	}
 }
 
+func runMigrationApplySafe(
+	ctx context.Context,
+	release engine.ReleaseDefinition,
+	namespaces []migrationNamespace,
+) (engine.MigrationWorkflowResult, error) {
+	executionNamespaces, err := migrationExecutionNamespaces(namespaces, "apply")
+	if err != nil {
+		return engine.MigrationWorkflowResult{}, err
+	}
+	coordinator, err := engine.NewMigrationCoordinator(release, executionNamespaces)
+	if err != nil {
+		return engine.MigrationWorkflowResult{}, fmt.Errorf("create migration coordinator: %w", err)
+	}
+	result, err := coordinator.ApplySafe(ctx, engine.MigrationSelection{})
+	if err != nil {
+		return result, fmt.Errorf("apply safe migration: %w", err)
+	}
+	return result, nil
+}
+
 func migrationCommandUsage() string {
 	return "usage: thunderid migration <initialize|status|check|apply|resume> [expand|migrate|contract]"
 }
@@ -185,11 +219,39 @@ func migrationCommandPhase(args []string) (engine.OperationPhase, error) {
 	}
 	phase := engine.OperationPhase(args[2])
 	switch phase {
-	case engine.OperationPhaseExpand, engine.OperationPhaseMigrate, engine.OperationPhaseContract:
+	case engine.OperationPhaseExpand, engine.OperationPhaseMigrate:
+		if len(args) != 3 {
+			return "", errors.New(migrationCommandUsage())
+		}
 		return phase, nil
+	case engine.OperationPhaseContract:
+		if len(args) == 3 {
+			return phase, nil
+		}
+		return "", errors.New(migrationCommandUsage())
 	default:
 		return "", fmt.Errorf("unsupported migration phase %q; %s", args[2], migrationCommandUsage())
 	}
+}
+
+func runMigrationContract(
+	ctx context.Context,
+	release engine.ReleaseDefinition,
+	namespaces []migrationNamespace,
+) (engine.MigrationRunResult, error) {
+	executionNamespaces, err := migrationExecutionNamespaces(namespaces, "contract")
+	if err != nil {
+		return engine.MigrationRunResult{}, err
+	}
+	coordinator, err := engine.NewMigrationCoordinator(release, executionNamespaces)
+	if err != nil {
+		return engine.MigrationRunResult{}, fmt.Errorf("create migration coordinator: %w", err)
+	}
+	result, err := coordinator.ApplyContract(ctx, engine.MigrationSelection{})
+	if err != nil {
+		return result, fmt.Errorf("apply contract migration: %w", err)
+	}
+	return result, nil
 }
 
 func runMigrationResume(

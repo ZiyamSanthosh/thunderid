@@ -23,8 +23,12 @@ const (
 	CompatibilityReasonUnverifiable CompatibilityReason = "unverifiable"
 	// CompatibilityReasonUnsupportedMetadata means that the metadata format is not supported.
 	CompatibilityReasonUnsupportedMetadata CompatibilityReason = "unsupported_metadata"
-	// CompatibilityReasonMigrationIncomplete means that the store has a non-clean migration state.
+	// CompatibilityReasonMigrationIncomplete means that the migration state cannot safely serve this release.
 	CompatibilityReasonMigrationIncomplete CompatibilityReason = "migration_incomplete"
+	// CompatibilityReasonTargetNotReady means that the target representation is not ready to serve.
+	CompatibilityReasonTargetNotReady CompatibilityReason = "target_not_ready"
+	// CompatibilityReasonSourceRetired means that contract has started and the source binary must not serve.
+	CompatibilityReasonSourceRetired CompatibilityReason = "source_retired"
 	// CompatibilityReasonLevelMismatch means that the completed and required store levels differ.
 	CompatibilityReasonLevelMismatch CompatibilityReason = "level_mismatch"
 )
@@ -181,12 +185,44 @@ func (g *CompatibilityGate) checkStore(
 		result.Reason = CompatibilityReasonUnsupportedMetadata
 		return result
 	}
-	if state.Status != StatusClean {
-		result.Reason = CompatibilityReasonMigrationIncomplete
-		return result
-	}
-	if state.CompletedLevel != requirement.RequiredLevel {
-		result.Reason = CompatibilityReasonLevelMismatch
-	}
+	result.Reason = servingCompatibilityReason(requirement, *state)
 	return result
+}
+
+func servingCompatibilityReason(requirement StoreRequirement, state State) CompatibilityReason {
+	if state.Status == StatusClean {
+		if state.CompletedLevel == requirement.RequiredLevel {
+			return CompatibilityReasonNone
+		}
+		return CompatibilityReasonLevelMismatch
+	}
+
+	servingAsSource := state.CompletedLevel == requirement.RequiredLevel &&
+		state.TargetLevel != requirement.RequiredLevel
+	if servingAsSource {
+		switch state.Stage {
+		case MigrationStageExpanding, MigrationStageExpanded,
+			MigrationStageMigrating, MigrationStageContractReady:
+			return CompatibilityReasonNone
+		case MigrationStageContracting:
+			return CompatibilityReasonSourceRetired
+		default:
+			return CompatibilityReasonMigrationIncomplete
+		}
+	}
+
+	servingAsTarget := state.CompletedLevel == requirement.AcceptedSourceLevel &&
+		state.TargetLevel == requirement.RequiredLevel
+	if servingAsTarget {
+		switch state.Stage {
+		case MigrationStageContractReady, MigrationStageContracting:
+			return CompatibilityReasonNone
+		case MigrationStageExpanding, MigrationStageExpanded, MigrationStageMigrating:
+			return CompatibilityReasonTargetNotReady
+		default:
+			return CompatibilityReasonMigrationIncomplete
+		}
+	}
+
+	return CompatibilityReasonMigrationIncomplete
 }

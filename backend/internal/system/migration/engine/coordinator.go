@@ -21,6 +21,13 @@ var ErrMigrationPreflightBlocked = errors.New("migration preflight is blocked")
 // ErrNoMigrationToResume means that no failed or abandoned run owned by this release was found.
 var ErrNoMigrationToResume = errors.New("no migration run is available to resume")
 
+// ErrSafeWorkflowUnsupported means that the release plan cannot reach a target-serving boundary
+// without executing contract operations.
+var ErrSafeWorkflowUnsupported = errors.New("migration plan is not supported by the safe workflow")
+
+// ErrContractRequiresDedicatedExecution means that contract was requested through the generic phase API.
+var ErrContractRequiresDedicatedExecution = errors.New("contract requires dedicated execution")
+
 // MigrationNamespace contains the write resources for logical stores sharing one physical database.
 type MigrationNamespace struct {
 	StoreIDs      []StoreID
@@ -41,6 +48,11 @@ type MigrationRunResult struct {
 	Finalizations   []FinalizationResult
 	AlreadyAtTarget bool
 	Resumed         bool
+}
+
+// MigrationWorkflowResult contains the ordered phase results of one safe automatic migration.
+type MigrationWorkflowResult struct {
+	Phases []MigrationRunResult
 }
 
 type migrationResumeContext struct {
@@ -189,6 +201,25 @@ func (c *MigrationCoordinator) ApplyPhase(
 	phase OperationPhase,
 	selection MigrationSelection,
 ) (MigrationRunResult, error) {
+	if phase == OperationPhaseContract {
+		return MigrationRunResult{Phase: phase}, ErrContractRequiresDedicatedExecution
+	}
+	return c.applyPhaseWithLock(ctx, phase, selection)
+}
+
+// ApplyContract executes contract through its explicit migration path.
+func (c *MigrationCoordinator) ApplyContract(
+	ctx context.Context,
+	selection MigrationSelection,
+) (MigrationRunResult, error) {
+	return c.applyPhaseWithLock(ctx, OperationPhaseContract, selection)
+}
+
+func (c *MigrationCoordinator) applyPhaseWithLock(
+	ctx context.Context,
+	phase OperationPhase,
+	selection MigrationSelection,
+) (MigrationRunResult, error) {
 	result := MigrationRunResult{Phase: phase}
 	err := c.withExecutionLocks(ctx, 0, func(lockCtx context.Context) error {
 		var applyErr error
@@ -198,20 +229,61 @@ func (c *MigrationCoordinator) ApplyPhase(
 	return result, err
 }
 
+// ApplySafe executes expand and migrate in order while deliberately leaving contract for explicit execution.
+func (c *MigrationCoordinator) ApplySafe(
+	ctx context.Context,
+	selection MigrationSelection,
+) (MigrationWorkflowResult, error) {
+	result := MigrationWorkflowResult{Phases: make([]MigrationRunResult, 0, 2)}
+	if err := c.validateSafeWorkflow(); err != nil {
+		return result, err
+	}
+	err := c.withExecutionLocks(ctx, 0, func(lockCtx context.Context) error {
+		for _, phase := range []OperationPhase{OperationPhaseExpand, OperationPhaseMigrate} {
+			phaseResult, err := c.applyPhase(lockCtx, phase, selection)
+			result.Phases = append(result.Phases, phaseResult)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return result, err
+}
+
+func (c *MigrationCoordinator) validateSafeWorkflow() error {
+	preContractStores := make(map[StoreID]struct{})
+	for _, phase := range [][]Operation{c.plan.Expand, c.plan.Migrate} {
+		for _, operation := range phase {
+			preContractStores[operation.Definition().StoreID] = struct{}{}
+		}
+	}
+	for _, operation := range c.plan.Contract {
+		storeID := operation.Definition().StoreID
+		if _, exists := preContractStores[storeID]; !exists {
+			return fmt.Errorf(
+				"%w: store %q has contract operations but no expand or migrate operation to establish contract readiness",
+				ErrSafeWorkflowUnsupported, storeID)
+		}
+	}
+	return nil
+}
+
 func (c *MigrationCoordinator) applyPhase(
 	ctx context.Context,
 	phase OperationPhase,
 	selection MigrationSelection,
 ) (MigrationRunResult, error) {
+	result := MigrationRunResult{Phase: phase}
 	if err := validateMigrationSelection(selection); err != nil {
-		return MigrationRunResult{}, fmt.Errorf("apply migration: %w", err)
+		return result, fmt.Errorf("apply migration: %w", err)
 	}
 	if _, err := executionStageForPhase(phase); err != nil {
-		return MigrationRunResult{}, fmt.Errorf("apply migration: %w", err)
+		return result, fmt.Errorf("apply migration: %w", err)
 	}
 	metadataStores := c.metadataStoresByStore()
 	preflight, err := c.preflight.CheckPhase(ctx, metadataStores, phase)
-	result := MigrationRunResult{Phase: phase, Preflight: preflight}
+	result.Preflight = preflight
 	if err != nil {
 		return result, err
 	}
