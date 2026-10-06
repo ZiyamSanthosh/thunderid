@@ -209,6 +209,7 @@ func expectReservedState(
 	row := validStateRow(updatedAt)
 	row["store_id"] = string(storeID)
 	row["target_level"] = targetLevel
+	row["stage"] = string(MigrationStageExpanding)
 	row["status"] = string(StatusInProgress)
 	row["active_run_id"] = runID
 	dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(storeID)).

@@ -17,21 +17,21 @@ import (
 var (
 	queryGetMigrationState = dbmodel.DBQuery{
 		ID: "MIG-METADATA_MGT-01",
-		PostgresQuery: `SELECT ID, STORE_ID, METADATA_VERSION, COMPLETED_LEVEL, TARGET_LEVEL, STATUS,
+		PostgresQuery: `SELECT ID, STORE_ID, METADATA_VERSION, COMPLETED_LEVEL, TARGET_LEVEL, STAGE, STATUS,
             ACTIVE_RUN_ID, FAILURE_SUMMARY, UPDATED_AT
             FROM "MIGRATION_STATE" WHERE STORE_ID = $1`,
 	}
 	queryInsertMigrationState = dbmodel.DBQuery{
 		ID: "MIG-METADATA_MGT-02",
 		PostgresQuery: `INSERT INTO "MIGRATION_STATE" (ID, STORE_ID, METADATA_VERSION, COMPLETED_LEVEL,
-            TARGET_LEVEL, STATUS, ACTIVE_RUN_ID, FAILURE_SUMMARY, UPDATED_AT)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+            TARGET_LEVEL, STAGE, STATUS, ACTIVE_RUN_ID, FAILURE_SUMMARY, UPDATED_AT)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 	}
 	queryUpdateMigrationState = dbmodel.DBQuery{
 		ID: "MIG-METADATA_MGT-03",
 		PostgresQuery: `UPDATE "MIGRATION_STATE" SET METADATA_VERSION = $1, COMPLETED_LEVEL = $2,
-            TARGET_LEVEL = $3, STATUS = $4, ACTIVE_RUN_ID = $5, FAILURE_SUMMARY = $6, UPDATED_AT = $7
-            WHERE ID = $8 AND STORE_ID = $9`,
+            TARGET_LEVEL = $3, STAGE = $4, STATUS = $5, ACTIVE_RUN_ID = $6, FAILURE_SUMMARY = $7,
+            UPDATED_AT = $8 WHERE ID = $9 AND STORE_ID = $10`,
 	}
 	queryListMigrationProgress = dbmodel.DBQuery{
 		ID: "MIG-METADATA_MGT-04",
@@ -53,27 +53,28 @@ var (
 	queryReserveMigrationState = dbmodel.DBQuery{
 		ID: "MIG-METADATA_MGT-09",
 		PostgresQuery: `UPDATE "MIGRATION_STATE"
-            SET TARGET_LEVEL = $1, STATUS = $2, ACTIVE_RUN_ID = $3, FAILURE_SUMMARY = NULL, UPDATED_AT = $4
-            WHERE ID = $5 AND STORE_ID = $6 AND METADATA_VERSION = $7 AND COMPLETED_LEVEL = $8
-            AND STATUS = $9 AND TARGET_LEVEL IS NULL AND ACTIVE_RUN_ID IS NULL`,
+            SET TARGET_LEVEL = $1, STAGE = $2, STATUS = $3, ACTIVE_RUN_ID = $4,
+                FAILURE_SUMMARY = NULL, UPDATED_AT = $5
+            WHERE ID = $6 AND STORE_ID = $7 AND METADATA_VERSION = $8 AND COMPLETED_LEVEL = $9
+            AND STAGE = $10 AND STATUS = $11 AND TARGET_LEVEL IS NULL AND ACTIVE_RUN_ID IS NULL`,
 	}
 	queryFinalizeMigrationState = dbmodel.DBQuery{
 		ID: "MIG-METADATA_MGT-10",
 		PostgresQuery: `UPDATE "MIGRATION_STATE"
-            SET COMPLETED_LEVEL = $1, TARGET_LEVEL = NULL, STATUS = $2, ACTIVE_RUN_ID = NULL,
-                FAILURE_SUMMARY = NULL, UPDATED_AT = $3
-            WHERE ID = $4 AND STORE_ID = $5 AND METADATA_VERSION = $6 AND COMPLETED_LEVEL = $7
-            AND TARGET_LEVEL = $1 AND STATUS = $8 AND ACTIVE_RUN_ID = $9`,
+            SET COMPLETED_LEVEL = $1, TARGET_LEVEL = NULL, STAGE = $2, STATUS = $3,
+                ACTIVE_RUN_ID = NULL, FAILURE_SUMMARY = NULL, UPDATED_AT = $4
+            WHERE ID = $5 AND STORE_ID = $6 AND METADATA_VERSION = $7 AND COMPLETED_LEVEL = $8
+            AND TARGET_LEVEL = $1 AND STAGE = $9 AND STATUS = $10 AND ACTIVE_RUN_ID = $11`,
 	}
 	queryCancelMigrationState = dbmodel.DBQuery{
 		ID: "MIG-METADATA_MGT-11",
 		PostgresQuery: `UPDATE "MIGRATION_STATE"
-            SET TARGET_LEVEL = NULL, STATUS = $1, ACTIVE_RUN_ID = NULL, FAILURE_SUMMARY = NULL,
-                UPDATED_AT = $2
-            WHERE ID = $3 AND STORE_ID = $4 AND METADATA_VERSION = $5 AND COMPLETED_LEVEL = $6
-            AND TARGET_LEVEL = $7 AND STATUS = $8 AND ACTIVE_RUN_ID = $9
+            SET TARGET_LEVEL = NULL, STAGE = $1, STATUS = $2, ACTIVE_RUN_ID = NULL,
+                FAILURE_SUMMARY = NULL, UPDATED_AT = $3
+            WHERE ID = $4 AND STORE_ID = $5 AND METADATA_VERSION = $6 AND COMPLETED_LEVEL = $7
+            AND TARGET_LEVEL = $8 AND STAGE = $9 AND STATUS = $10 AND ACTIVE_RUN_ID = $11
             AND NOT EXISTS (
-                SELECT 1 FROM "MIGRATION_PROGRESS" WHERE MIGRATION_STATE_ID = $3 AND RUN_ID = $9
+                SELECT 1 FROM "MIGRATION_PROGRESS" WHERE MIGRATION_STATE_ID = $4 AND RUN_ID = $11
             )`,
 	}
 	queryFailMigrationState = dbmodel.DBQuery{
@@ -81,15 +82,36 @@ var (
 		PostgresQuery: `UPDATE "MIGRATION_STATE"
             SET STATUS = $1, FAILURE_SUMMARY = $2, UPDATED_AT = $3
             WHERE ID = $4 AND STORE_ID = $5 AND METADATA_VERSION = $6 AND COMPLETED_LEVEL = $7
-            AND TARGET_LEVEL = $8 AND STATUS = $9 AND ACTIVE_RUN_ID = $10`,
+            AND TARGET_LEVEL = $8 AND STAGE = $9 AND STATUS = $10 AND ACTIVE_RUN_ID = $11`,
 	}
 	queryResumeMigrationState = dbmodel.DBQuery{
 		ID: "MIG-METADATA_MGT-13",
 		PostgresQuery: `UPDATE "MIGRATION_STATE"
             SET STATUS = $1, FAILURE_SUMMARY = NULL, UPDATED_AT = $2
             WHERE ID = $3 AND STORE_ID = $4 AND METADATA_VERSION = $5 AND COMPLETED_LEVEL = $6
-			AND TARGET_LEVEL = $7 AND STATUS = $8 AND ACTIVE_RUN_ID = $9
-			AND FAILURE_SUMMARY = $10 AND UPDATED_AT = $11`,
+			AND TARGET_LEVEL = $7 AND STAGE = $8 AND STATUS = $9 AND ACTIVE_RUN_ID = $10
+			AND FAILURE_SUMMARY = $11 AND UPDATED_AT = $12`,
+	}
+	queryTransitionMigrationState = dbmodel.DBQuery{
+		ID: "MIG-METADATA_MGT-14",
+		PostgresQuery: `UPDATE "MIGRATION_STATE"
+            SET COMPLETED_LEVEL = $1, TARGET_LEVEL = $2, STAGE = $3, STATUS = $4,
+                ACTIVE_RUN_ID = $5, FAILURE_SUMMARY = $6, UPDATED_AT = $7
+            WHERE ID = $8 AND STORE_ID = $9 AND METADATA_VERSION = $10 AND COMPLETED_LEVEL = $11
+            AND TARGET_LEVEL IS NOT DISTINCT FROM $12 AND STAGE = $13 AND STATUS = $14
+            AND ACTIVE_RUN_ID IS NOT DISTINCT FROM $15
+            AND FAILURE_SUMMARY IS NOT DISTINCT FROM $16 AND UPDATED_AT = $17`,
+	}
+	queryCancelMigrationPhase = dbmodel.DBQuery{
+		ID: "MIG-METADATA_MGT-15",
+		PostgresQuery: `UPDATE "MIGRATION_STATE"
+            SET TARGET_LEVEL = $1, STAGE = $2, STATUS = $3, ACTIVE_RUN_ID = NULL,
+                FAILURE_SUMMARY = NULL, UPDATED_AT = $4
+            WHERE ID = $5 AND STORE_ID = $6 AND METADATA_VERSION = $7 AND COMPLETED_LEVEL = $8
+            AND TARGET_LEVEL = $9 AND STAGE = $10 AND STATUS = $11 AND ACTIVE_RUN_ID = $12
+            AND NOT EXISTS (
+                SELECT 1 FROM "MIGRATION_PROGRESS" WHERE MIGRATION_STATE_ID = $5 AND RUN_ID = $12
+            )`,
 	}
 )
 
@@ -102,19 +124,21 @@ const (
 )
 
 type metadataQuerySet struct {
-	getState       dbmodel.DBQuery
-	insertState    dbmodel.DBQuery
-	updateState    dbmodel.DBQuery
-	listProgress   dbmodel.DBQuery
-	insertProgress dbmodel.DBQuery
-	updateProgress dbmodel.DBQuery
-	reserveState   dbmodel.DBQuery
-	finalizeState  dbmodel.DBQuery
-	cancelState    dbmodel.DBQuery
-	failState      dbmodel.DBQuery
-	resumeState    dbmodel.DBQuery
-	inspectSchema  dbmodel.DBQuery
-	createSchema   dbmodel.DBQuery
+	getState        dbmodel.DBQuery
+	insertState     dbmodel.DBQuery
+	updateState     dbmodel.DBQuery
+	listProgress    dbmodel.DBQuery
+	insertProgress  dbmodel.DBQuery
+	updateProgress  dbmodel.DBQuery
+	reserveState    dbmodel.DBQuery
+	finalizeState   dbmodel.DBQuery
+	cancelState     dbmodel.DBQuery
+	failState       dbmodel.DBQuery
+	resumeState     dbmodel.DBQuery
+	transitionState dbmodel.DBQuery
+	cancelPhase     dbmodel.DBQuery
+	inspectSchema   dbmodel.DBQuery
+	createSchema    dbmodel.DBQuery
 }
 
 var migrationMetadataQueries = metadataQuerySet{
@@ -123,8 +147,77 @@ var migrationMetadataQueries = metadataQuerySet{
 	insertProgress: queryInsertMigrationProgress, updateProgress: queryUpdateMigrationProgress,
 	reserveState: queryReserveMigrationState, finalizeState: queryFinalizeMigrationState,
 	cancelState: queryCancelMigrationState, failState: queryFailMigrationState,
-	resumeState:   queryResumeMigrationState,
-	inspectSchema: queryInspectMetadataSchema, createSchema: queryCreateMetadataSchema,
+	resumeState:     queryResumeMigrationState,
+	transitionState: queryTransitionMigrationState,
+	cancelPhase:     queryCancelMigrationPhase,
+	inspectSchema:   queryInspectMetadataSchema, createSchema: queryCreateMetadataSchema,
+}
+
+// CancelPhaseState conditionally restores a phase boundary when its run has no operation progress.
+func (r *MetadataStore) CancelPhaseState(
+	ctx context.Context,
+	current State,
+	next State,
+) (bool, error) {
+	if err := current.Validate(); err != nil {
+		return false, fmt.Errorf("cancel migration phase: invalid current state: %w", err)
+	}
+	if err := next.Validate(); err != nil {
+		return false, fmt.Errorf("cancel migration phase: invalid next state: %w", err)
+	}
+	if current.ID != next.ID || current.StoreID != next.StoreID ||
+		current.MetadataVersion != next.MetadataVersion || current.CompletedLevel != next.CompletedLevel {
+		return false, errors.New("cancel migration phase: state identity and completed level cannot change")
+	}
+	if current.Status != StatusInProgress || next.Status != StatusCompleted || next.ActiveRunID != "" {
+		return false, errors.New("cancel migration phase: invalid phase cancellation transition")
+	}
+
+	rowsAffected, err := r.dbClient.ExecuteContext(ctx, r.queries.cancelPhase,
+		nullableString(next.TargetLevel), string(next.Stage), string(next.Status), next.UpdatedAt,
+		current.ID, string(current.StoreID), current.MetadataVersion, current.CompletedLevel,
+		current.TargetLevel, string(current.Stage), string(current.Status), current.ActiveRunID)
+	if err != nil {
+		return false, fmt.Errorf("cancel migration phase for store %q: %w", current.StoreID, err)
+	}
+	if rowsAffected > 1 {
+		return false, fmt.Errorf("cancel migration phase for store %q: expected at most one row, got %d",
+			current.StoreID, rowsAffected)
+	}
+	return rowsAffected == 1, nil
+}
+
+// TransitionState conditionally replaces one validated state with another state for the same store.
+func (r *MetadataStore) TransitionState(
+	ctx context.Context,
+	current State,
+	next State,
+) (bool, error) {
+	if err := current.Validate(); err != nil {
+		return false, fmt.Errorf("transition migration state: invalid current state: %w", err)
+	}
+	if err := next.Validate(); err != nil {
+		return false, fmt.Errorf("transition migration state: invalid next state: %w", err)
+	}
+	if current.ID != next.ID || current.StoreID != next.StoreID ||
+		current.MetadataVersion != next.MetadataVersion {
+		return false, errors.New("transition migration state: state identity cannot change")
+	}
+
+	rowsAffected, err := r.dbClient.ExecuteContext(ctx, r.queries.transitionState,
+		next.CompletedLevel, nullableString(next.TargetLevel), string(next.Stage), string(next.Status),
+		nullableString(next.ActiveRunID), nullableString(next.FailureSummary), next.UpdatedAt,
+		current.ID, string(current.StoreID), current.MetadataVersion, current.CompletedLevel,
+		nullableString(current.TargetLevel), string(current.Stage), string(current.Status),
+		nullableString(current.ActiveRunID), nullableString(current.FailureSummary), current.UpdatedAt)
+	if err != nil {
+		return false, fmt.Errorf("transition migration state for store %q: %w", current.StoreID, err)
+	}
+	if rowsAffected > 1 {
+		return false, fmt.Errorf("transition migration state for store %q: expected at most one row, got %d",
+			current.StoreID, rowsAffected)
+	}
+	return rowsAffected == 1, nil
 }
 
 // ReserveState conditionally assigns one clean source-level store to a migration run.
@@ -132,6 +225,7 @@ func (r *MetadataStore) ReserveState(
 	ctx context.Context,
 	current State,
 	targetLevel string,
+	stage MigrationStage,
 	runID string,
 	updatedAt time.Time,
 ) (bool, error) {
@@ -140,6 +234,7 @@ func (r *MetadataStore) ReserveState(
 	}
 	reserved := current
 	reserved.TargetLevel = targetLevel
+	reserved.Stage = stage
 	reserved.Status = StatusInProgress
 	reserved.ActiveRunID = runID
 	reserved.FailureSummary = ""
@@ -149,9 +244,9 @@ func (r *MetadataStore) ReserveState(
 	}
 
 	rowsAffected, err := r.dbClient.ExecuteContext(ctx, r.queries.reserveState,
-		reserved.TargetLevel, string(reserved.Status), reserved.ActiveRunID, reserved.UpdatedAt,
-		reserved.ID, string(reserved.StoreID), reserved.MetadataVersion, reserved.CompletedLevel,
-		string(StatusClean))
+		reserved.TargetLevel, string(reserved.Stage), string(reserved.Status), reserved.ActiveRunID,
+		reserved.UpdatedAt, reserved.ID, string(reserved.StoreID), reserved.MetadataVersion,
+		reserved.CompletedLevel, string(MigrationStageComplete), string(StatusClean))
 	if err != nil {
 		return false, fmt.Errorf("reserve migration state for store %q: %w", reserved.StoreID, err)
 	}
@@ -178,6 +273,7 @@ func (r *MetadataStore) FinalizeState(
 	completed := current
 	completed.CompletedLevel = current.TargetLevel
 	completed.TargetLevel = ""
+	completed.Stage = MigrationStageComplete
 	completed.Status = StatusClean
 	completed.ActiveRunID = ""
 	completed.FailureSummary = ""
@@ -187,9 +283,9 @@ func (r *MetadataStore) FinalizeState(
 	}
 
 	rowsAffected, err := r.dbClient.ExecuteContext(ctx, r.queries.finalizeState,
-		current.TargetLevel, string(StatusClean), completed.UpdatedAt,
+		current.TargetLevel, string(MigrationStageComplete), string(StatusClean), completed.UpdatedAt,
 		current.ID, string(current.StoreID), current.MetadataVersion, current.CompletedLevel,
-		string(StatusInProgress), current.ActiveRunID)
+		string(current.Stage), string(StatusInProgress), current.ActiveRunID)
 	if err != nil {
 		return false, fmt.Errorf("finalize migration state for store %q: %w", current.StoreID, err)
 	}
@@ -215,6 +311,7 @@ func (r *MetadataStore) CancelState(
 	}
 	cancelled := current
 	cancelled.TargetLevel = ""
+	cancelled.Stage = MigrationStageComplete
 	cancelled.Status = StatusClean
 	cancelled.ActiveRunID = ""
 	cancelled.FailureSummary = ""
@@ -224,8 +321,9 @@ func (r *MetadataStore) CancelState(
 	}
 
 	rowsAffected, err := r.dbClient.ExecuteContext(ctx, r.queries.cancelState,
-		string(StatusClean), cancelled.UpdatedAt, current.ID, string(current.StoreID), current.MetadataVersion,
-		current.CompletedLevel, current.TargetLevel, string(StatusInProgress), current.ActiveRunID)
+		string(MigrationStageComplete), string(StatusClean), cancelled.UpdatedAt, current.ID,
+		string(current.StoreID), current.MetadataVersion, current.CompletedLevel, current.TargetLevel,
+		string(current.Stage), string(StatusInProgress), current.ActiveRunID)
 	if err != nil {
 		return false, fmt.Errorf("cancel migration state for store %q: %w", current.StoreID, err)
 	}
@@ -261,7 +359,7 @@ func (r *MetadataStore) FailState(
 	rowsAffected, err := r.dbClient.ExecuteContext(ctx, r.queries.failState,
 		string(StatusFailed), failed.FailureSummary, failed.UpdatedAt,
 		current.ID, string(current.StoreID), current.MetadataVersion, current.CompletedLevel,
-		current.TargetLevel, string(StatusInProgress), current.ActiveRunID)
+		current.TargetLevel, string(current.Stage), string(StatusInProgress), current.ActiveRunID)
 	if err != nil {
 		return false, fmt.Errorf("fail migration state for store %q: %w", current.StoreID, err)
 	}
@@ -296,7 +394,8 @@ func (r *MetadataStore) ResumeState(
 	rowsAffected, err := r.dbClient.ExecuteContext(ctx, r.queries.resumeState,
 		string(StatusInProgress), resumed.UpdatedAt,
 		current.ID, string(current.StoreID), current.MetadataVersion, current.CompletedLevel,
-		current.TargetLevel, string(StatusFailed), current.ActiveRunID, current.FailureSummary, current.UpdatedAt)
+		current.TargetLevel, string(current.Stage), string(StatusFailed), current.ActiveRunID,
+		current.FailureSummary, current.UpdatedAt)
 	if err != nil {
 		return false, fmt.Errorf("resume migration state for store %q: %w", current.StoreID, err)
 	}
@@ -364,8 +463,8 @@ func (r *MetadataStore) InsertState(ctx context.Context, state State) error {
 
 	rowsAffected, err := r.dbClient.ExecuteContext(ctx, r.queries.insertState,
 		state.ID, string(state.StoreID), state.MetadataVersion, state.CompletedLevel,
-		nullableString(state.TargetLevel), string(state.Status), nullableString(state.ActiveRunID),
-		nullableString(state.FailureSummary), state.UpdatedAt)
+		nullableString(state.TargetLevel), string(state.Stage), string(state.Status),
+		nullableString(state.ActiveRunID), nullableString(state.FailureSummary), state.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("insert migration state for store %q: %w", state.StoreID, err)
 	}
@@ -379,9 +478,9 @@ func (r *MetadataStore) UpdateState(ctx context.Context, state State) error {
 	}
 
 	rowsAffected, err := r.dbClient.ExecuteContext(ctx, r.queries.updateState,
-		state.MetadataVersion, state.CompletedLevel, nullableString(state.TargetLevel), string(state.Status),
-		nullableString(state.ActiveRunID), nullableString(state.FailureSummary), state.UpdatedAt,
-		state.ID, string(state.StoreID))
+		state.MetadataVersion, state.CompletedLevel, nullableString(state.TargetLevel), string(state.Stage),
+		string(state.Status), nullableString(state.ActiveRunID), nullableString(state.FailureSummary),
+		state.UpdatedAt, state.ID, string(state.StoreID))
 	if err != nil {
 		return fmt.Errorf("update migration state for store %q: %w", state.StoreID, err)
 	}
@@ -469,6 +568,10 @@ func stateFromRow(row map[string]interface{}) (State, error) {
 	if err != nil {
 		return State{}, err
 	}
+	stage, err := requiredString(row, "stage")
+	if err != nil {
+		return State{}, err
+	}
 	status, err := requiredString(row, "status")
 	if err != nil {
 		return State{}, err
@@ -492,6 +595,7 @@ func stateFromRow(row map[string]interface{}) (State, error) {
 		MetadataVersion: metadataVersion,
 		CompletedLevel:  completedLevel,
 		TargetLevel:     targetLevel,
+		Stage:           MigrationStage(stage),
 		Status:          Status(status),
 		ActiveRunID:     activeRunID,
 		FailureSummary:  failureSummary,

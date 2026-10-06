@@ -33,7 +33,7 @@ func TestRunMigrationInitializeForSharedNamespace(t *testing.T) {
 		Return(int64(0), nil).Once()
 	for range 4 {
 		dbClient.On("ExecuteContext", mock.Anything, mock.Anything,
-			mock.Anything, mock.Anything, 1, "1.0.0", nil, "clean", nil, nil, mock.Anything).
+			mock.Anything, mock.Anything, 1, "1.0.0", nil, "complete", "clean", nil, nil, mock.Anything).
 			Return(int64(1), nil).Once()
 	}
 
@@ -256,6 +256,7 @@ func TestRunMigrationCheckForSharedNamespace(t *testing.T) {
 	assert.Empty(t, result.initialization)
 	assert.Nil(t, result.compatibility)
 	require.NotNil(t, result.preflight)
+	assert.Equal(t, engine.OperationPhaseExpand, result.preflight.Phase)
 	assert.True(t, result.preflight.Ready())
 	require.Len(t, result.preflight.Stores, 4)
 	assert.Empty(t, result.preflight.Operations)
@@ -313,6 +314,7 @@ func TestRunMigrationApplyReturnsNoOpWhenStoresAreAtTarget(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.NotNil(t, result.application)
+	assert.Equal(t, engine.OperationPhaseExpand, result.application.Phase)
 	assert.True(t, result.application.AlreadyAtTarget)
 	assert.Empty(t, result.application.RunID)
 	assert.Empty(t, result.application.Operations)
@@ -418,6 +420,9 @@ func TestRunMigrationCommandValidatesInvocation(t *testing.T) {
 	}{
 		{name: "missing action", args: []string{migrationSubcommand}, cfg: &config.Config{}},
 		{name: "unknown action", args: []string{migrationSubcommand, "unknown"}, cfg: &config.Config{}},
+		{name: "unsupported phase", args: []string{migrationSubcommand, migrationApplyAction, "invalid"}, cfg: &config.Config{}},
+		{name: "phase on unsupported action", args: []string{migrationSubcommand, migrationStatusAction, "expand"}, cfg: &config.Config{}},
+		{name: "too many arguments", args: []string{migrationSubcommand, migrationApplyAction, "expand", "extra"}, cfg: &config.Config{}},
 		{name: "missing configuration", args: []string{migrationSubcommand, migrationInitializeAction}},
 	}
 
@@ -427,6 +432,28 @@ func TestRunMigrationCommandValidatesInvocation(t *testing.T) {
 
 			require.Error(t, err)
 			assert.Nil(t, result)
+		})
+	}
+}
+
+func TestMigrationCommandPhase(t *testing.T) {
+	tests := []struct {
+		name     string
+		args     []string
+		expected engine.OperationPhase
+	}{
+		{name: "default", args: []string{migrationSubcommand, migrationApplyAction}, expected: engine.OperationPhaseExpand},
+		{name: "expand", args: []string{migrationSubcommand, migrationApplyAction, "expand"}, expected: engine.OperationPhaseExpand},
+		{name: "migrate", args: []string{migrationSubcommand, migrationApplyAction, "migrate"}, expected: engine.OperationPhaseMigrate},
+		{name: "contract check", args: []string{migrationSubcommand, migrationCheckAction, "contract"}, expected: engine.OperationPhaseContract},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			phase, err := migrationCommandPhase(test.args)
+
+			require.NoError(t, err)
+			assert.Equal(t, test.expected, phase)
 		})
 	}
 }
@@ -442,6 +469,7 @@ func testMigrationStateRow(storeID engine.StoreID) map[string]interface{} {
 		"metadata_version": int64(1),
 		"completed_level":  completedLevel,
 		"target_level":     nil,
+		"stage":            "complete",
 		"status":           "clean",
 		"active_run_id":    nil,
 		"failure_summary":  nil,

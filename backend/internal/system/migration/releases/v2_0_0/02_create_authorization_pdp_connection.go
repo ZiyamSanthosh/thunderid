@@ -93,26 +93,6 @@ func newCreateAuthorizationPDPConnectionOperation() (engine.Operation, error) {
 			Kind:             engine.OperationKindSchemaChange,
 			InterruptionMode: engine.InterruptionModeAtomic,
 		},
-		ReadinessChecker: func(
-			ctx context.Context,
-			access engine.ReadAccess,
-			_ engine.PlanContext,
-		) (engine.ReadinessResult, error) {
-			inspection, err := inspectAuthorizationPDPConnection(ctx, access)
-			if err != nil {
-				return engine.ReadinessResult{}, err
-			}
-			if inspection.state == engine.VerificationInvalid {
-				return engine.ReadinessResult{
-					State: engine.ReadinessBlocked, Summary: inspection.summary,
-					Findings: []engine.Finding{{
-						Code: "unexpected_authorization_pdp_connection_schema", Message: inspection.summary,
-						Remediation: "Remove or restore the AUTHORIZATION_PDP_CONNECTION table to a supported state",
-					}},
-				}, nil
-			}
-			return engine.ReadinessResult{State: engine.ReadinessReady, Summary: inspection.summary}, nil
-		},
 		PreVerifier: func(
 			ctx context.Context,
 			access engine.ReadAccess,

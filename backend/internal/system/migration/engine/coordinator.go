@@ -33,6 +33,7 @@ type MigrationNamespace struct {
 // MigrationRunResult describes one attempted migration application.
 type MigrationRunResult struct {
 	RunID           string
+	Phase           OperationPhase
 	Preflight       PreflightReport
 	Reservations    []ReservationResult
 	Resumptions     []ResumeResult
@@ -44,6 +45,7 @@ type MigrationRunResult struct {
 
 type migrationResumeContext struct {
 	runID               string
+	phase               OperationPhase
 	activeStores        map[StoreID]struct{}
 	failedByNamespace   map[int][]State
 	completedOperations map[OperationID]struct{}
@@ -82,7 +84,7 @@ func NewMigrationCoordinator(
 	}
 
 	plan := registry.Plan()
-	for _, operation := range plan.Operations {
+	for _, operation := range plan.Operations() {
 		definition := operation.Definition()
 		if definition.InterruptionMode != InterruptionModeAtomic {
 			return nil, fmt.Errorf(
@@ -178,24 +180,41 @@ func (c *MigrationCoordinator) Apply(
 	ctx context.Context,
 	selection MigrationSelection,
 ) (MigrationRunResult, error) {
-	var result MigrationRunResult
+	return c.ApplyPhase(ctx, OperationPhaseExpand, selection)
+}
+
+// ApplyPhase executes one explicitly selected migration phase.
+func (c *MigrationCoordinator) ApplyPhase(
+	ctx context.Context,
+	phase OperationPhase,
+	selection MigrationSelection,
+) (MigrationRunResult, error) {
+	result := MigrationRunResult{Phase: phase}
 	err := c.withExecutionLocks(ctx, 0, func(lockCtx context.Context) error {
 		var applyErr error
-		result, applyErr = c.apply(lockCtx, selection)
+		result, applyErr = c.applyPhase(lockCtx, phase, selection)
 		return applyErr
 	})
 	return result, err
 }
 
-func (c *MigrationCoordinator) apply(
+func (c *MigrationCoordinator) applyPhase(
 	ctx context.Context,
+	phase OperationPhase,
 	selection MigrationSelection,
 ) (MigrationRunResult, error) {
 	if err := validateMigrationSelection(selection); err != nil {
 		return MigrationRunResult{}, fmt.Errorf("apply migration: %w", err)
 	}
+	if _, err := executionStageForPhase(phase); err != nil {
+		return MigrationRunResult{}, fmt.Errorf("apply migration: %w", err)
+	}
 	metadataStores := c.metadataStoresByStore()
-	result := MigrationRunResult{Preflight: c.preflight.Check(ctx, metadataStores)}
+	preflight, err := c.preflight.CheckPhase(ctx, metadataStores, phase)
+	result := MigrationRunResult{Phase: phase, Preflight: preflight}
+	if err != nil {
+		return result, err
+	}
 	if !result.Preflight.Ready() {
 		return result, ErrMigrationPreflightBlocked
 	}
@@ -222,7 +241,8 @@ func (c *MigrationCoordinator) apply(
 		if len(storeIDs) == 0 {
 			continue
 		}
-		reservations, reserveErr := c.namespaces[index].controller.Reserve(ctx, storeIDs, runID)
+		reservations, reserveErr := c.namespaces[index].controller.ReservePhase(
+			ctx, storeIDs, phase, runID)
 		if reserveErr != nil {
 			return result, errors.Join(reserveErr, c.cancelReservations(ctx, reservedStates, runID))
 		}
@@ -239,7 +259,8 @@ func (c *MigrationCoordinator) apply(
 		return result, nil
 	}
 
-	operationReport := c.preflight.operationChecker.checkStores(ctx, reservedStores, nil)
+	operationReport := c.preflight.readinessEvaluator.checkPhaseStores(
+		ctx, phase, reservedStores, nil)
 	result.Preflight.Operations = operationReport.Operations
 	if !operationReport.Ready() {
 		return result, errors.Join(ErrMigrationPreflightBlocked,
@@ -247,11 +268,19 @@ func (c *MigrationCoordinator) apply(
 	}
 
 	namespaceByStore := c.namespaceIndexes()
+	plannedOperations := c.plan.plannedOperations()
 	lastOperationByStore := make(map[StoreID]int, len(reservedStores))
-	for operationOrder, operation := range c.plan.Operations {
-		lastOperationByStore[operation.Definition().StoreID] = operationOrder
+	for _, planned := range plannedOperations {
+		if planned.phase == phase {
+			lastOperationByStore[planned.operation.Definition().StoreID] = planned.order
+		}
 	}
-	for operationOrder, operation := range c.plan.Operations {
+	for _, planned := range plannedOperations {
+		if planned.phase != phase {
+			continue
+		}
+		operation := planned.operation
+		operationOrder := planned.order
 		definition := operation.Definition()
 		if _, reserved := reservedStores[definition.StoreID]; !reserved {
 			continue
@@ -266,8 +295,8 @@ func (c *MigrationCoordinator) apply(
 		if lastOperationByStore[definition.StoreID] != operationOrder {
 			continue
 		}
-		finalization, finalizeErr := c.namespaces[namespaceIndex].controller.Finalize(
-			ctx, definition.StoreID, runID)
+		finalization, finalizeErr := c.namespaces[namespaceIndex].controller.CompletePhase(
+			ctx, definition.StoreID, phase, runID)
 		if finalizeErr != nil {
 			return result, errors.Join(finalizeErr, c.markFailed(ctx, reservedStores, runID, finalizeErr))
 		}
@@ -289,16 +318,17 @@ func (c *MigrationCoordinator) Resume(ctx context.Context) (MigrationRunResult, 
 
 func (c *MigrationCoordinator) resume(ctx context.Context) (MigrationRunResult, error) {
 	resume, err := c.inspectResumableRun(ctx)
-	result := MigrationRunResult{RunID: resume.runID, Preflight: PreflightReport{
+	result := MigrationRunResult{RunID: resume.runID, Phase: resume.phase, Preflight: PreflightReport{
 		TargetVersion: c.release.Manifest.ReleaseVersion,
+		Phase:         resume.phase,
 		Stores:        resume.storeAssessments,
 	}, Resumed: true}
 	if err != nil {
 		return result, err
 	}
 
-	operationReport := c.preflight.operationChecker.checkPendingStores(
-		ctx, resume.activeStores, nil, resume.completedOperations)
+	operationReport := c.preflight.readinessEvaluator.checkPendingPhaseStores(
+		ctx, resume.phase, resume.activeStores, nil, resume.completedOperations)
 	result.Preflight.Operations = operationReport.Operations
 	if !operationReport.Ready() {
 		return result, ErrMigrationPreflightBlocked
@@ -321,14 +351,23 @@ func (c *MigrationCoordinator) resume(ctx context.Context) (MigrationRunResult, 
 	}
 
 	namespaceByStore := c.namespaceIndexes()
+	plannedOperations := c.plan.plannedOperations()
 	lastOperationByStore := make(map[StoreID]int, len(resume.activeStores))
-	for operationOrder, operation := range c.plan.Operations {
-		definition := operation.Definition()
+	for _, planned := range plannedOperations {
+		if planned.phase != resume.phase {
+			continue
+		}
+		definition := planned.operation.Definition()
 		if _, active := resume.activeStores[definition.StoreID]; active {
-			lastOperationByStore[definition.StoreID] = operationOrder
+			lastOperationByStore[definition.StoreID] = planned.order
 		}
 	}
-	for operationOrder, operation := range c.plan.Operations {
+	for _, planned := range plannedOperations {
+		if planned.phase != resume.phase {
+			continue
+		}
+		operation := planned.operation
+		operationOrder := planned.order
 		definition := operation.Definition()
 		if _, active := resume.activeStores[definition.StoreID]; !active {
 			continue
@@ -346,8 +385,8 @@ func (c *MigrationCoordinator) resume(ctx context.Context) (MigrationRunResult, 
 		if lastOperationByStore[definition.StoreID] != operationOrder {
 			continue
 		}
-		finalization, finalizeErr := c.namespaces[namespaceIndex].controller.Finalize(
-			ctx, definition.StoreID, resume.runID)
+		finalization, finalizeErr := c.namespaces[namespaceIndex].controller.CompletePhase(
+			ctx, definition.StoreID, resume.phase, resume.runID)
 		if finalizeErr != nil {
 			return result, errors.Join(finalizeErr,
 				c.markFailed(ctx, resume.activeStores, resume.runID, finalizeErr))
@@ -378,7 +417,7 @@ func (c *MigrationCoordinator) inspectResumableRun(ctx context.Context) (migrati
 		storeAssessments:    make([]StoreMigrationAssessment, 0, len(c.release.Manifest.Stores)),
 	}
 	namespaceByStore := c.namespaceIndexes()
-	states := make(map[StoreID]State)
+	statesByStore := make(map[StoreID]State, len(c.release.Manifest.Stores))
 	for _, requirement := range c.release.Manifest.Stores {
 		namespaceIndex := namespaceByStore[requirement.ID]
 		state, err := c.namespaces[namespaceIndex].metadataStore.GetState(ctx, requirement.ID)
@@ -393,10 +432,47 @@ func (c *MigrationCoordinator) inspectResumableRun(ctx context.Context) (migrati
 			return resume, fmt.Errorf("inspect migration resume state for store %q: metadata version %d is not supported",
 				requirement.ID, state.MetadataVersion)
 		}
+		statesByStore[requirement.ID] = *state
+		if state.Status != StatusFailed && state.Status != StatusInProgress {
+			continue
+		}
+		if !requirement.Changed {
+			return resume, fmt.Errorf("inspect migration resume state for store %q: unchanged store has status %q",
+				requirement.ID, state.Status)
+		}
+		if state.CompletedLevel != requirement.AcceptedSourceLevel || state.TargetLevel != requirement.RequiredLevel {
+			return resume, fmt.Errorf(
+				"inspect migration resume state for store %q: levels %q to %q do not match route %q to %q",
+				requirement.ID, state.CompletedLevel, state.TargetLevel,
+				requirement.AcceptedSourceLevel, requirement.RequiredLevel)
+		}
+		phase, err := phaseForExecutionStage(state.Stage)
+		if err != nil {
+			return resume, fmt.Errorf("inspect migration resume state for store %q: %w", requirement.ID, err)
+		}
+		if resume.phase == "" {
+			resume.phase = phase
+		} else if resume.phase != phase {
+			return resume, fmt.Errorf("inspect migration resume state: active stores belong to different phases")
+		}
+		if resume.runID == "" {
+			resume.runID = state.ActiveRunID
+		} else if state.ActiveRunID != resume.runID {
+			return resume, fmt.Errorf("inspect migration resume state: active stores belong to different runs")
+		}
+	}
+	if resume.runID == "" {
+		return resume, ErrNoMigrationToResume
+	}
+
+	activeStates := make(map[StoreID]State)
+	for _, requirement := range c.release.Manifest.Stores {
+		state := statesByStore[requirement.ID]
+		namespaceIndex := namespaceByStore[requirement.ID]
 		assessment := StoreMigrationAssessment{
 			StoreID: requirement.ID, AcceptedSourceLevel: requirement.AcceptedSourceLevel,
 			RequiredLevel: requirement.RequiredLevel, CompletedLevel: state.CompletedLevel,
-			Status: state.Status,
+			Status: state.Status, Stage: state.Stage,
 		}
 		if state.Status == StatusClean && state.CompletedLevel == requirement.RequiredLevel {
 			assessment.State = StoreAssessmentAtTarget
@@ -408,36 +484,53 @@ func (c *MigrationCoordinator) inspectResumableRun(ctx context.Context) (migrati
 				requirement.ID, requirement.RequiredLevel)
 		}
 		if state.Status != StatusFailed && state.Status != StatusInProgress {
-			return resume, fmt.Errorf(
-				"inspect migration resume state for store %q: status %q is not resumable",
-				requirement.ID, state.Status)
-		}
-		if state.CompletedLevel != requirement.AcceptedSourceLevel || state.TargetLevel != requirement.RequiredLevel {
-			return resume, fmt.Errorf(
-				"inspect migration resume state for store %q: levels %q to %q do not match route %q to %q",
-				requirement.ID, state.CompletedLevel, state.TargetLevel,
-				requirement.AcceptedSourceLevel, requirement.RequiredLevel)
-		}
-		if resume.runID == "" {
-			resume.runID = state.ActiveRunID
-		} else if state.ActiveRunID != resume.runID {
-			return resume, fmt.Errorf("inspect migration resume state: active stores belong to different runs")
+			completed, err := c.storeCompletedPhase(requirement, state, resume.phase)
+			if err != nil {
+				return resume, err
+			}
+			if !completed {
+				return resume, fmt.Errorf(
+					"inspect migration resume state for store %q: phase %q is not complete and is not owned by run %q",
+					requirement.ID, resume.phase, resume.runID)
+			}
+			assessment.State = StoreAssessmentAtTarget
+			resume.storeAssessments = append(resume.storeAssessments, assessment)
+			continue
 		}
 		assessment.State = StoreAssessmentMigrationRequired
 		resume.storeAssessments = append(resume.storeAssessments, assessment)
 		resume.activeStores[requirement.ID] = struct{}{}
 		if state.Status == StatusFailed {
-			resume.failedByNamespace[namespaceIndex] = append(resume.failedByNamespace[namespaceIndex], *state)
+			resume.failedByNamespace[namespaceIndex] = append(resume.failedByNamespace[namespaceIndex], state)
 		}
-		states[requirement.ID] = *state
+		activeStates[requirement.ID] = state
 	}
-	if resume.runID == "" {
-		return resume, ErrNoMigrationToResume
-	}
-	if err := c.inspectCompletedProgress(ctx, resume, states); err != nil {
+	if err := c.inspectCompletedProgress(ctx, resume, activeStates); err != nil {
 		return resume, err
 	}
 	return resume, nil
+}
+
+func (c *MigrationCoordinator) storeCompletedPhase(
+	requirement StoreRequirement,
+	state State,
+	phase OperationPhase,
+) (bool, error) {
+	phasePlan, err := phasePlanForStore(c.plan, requirement.ID, phase)
+	if err != nil {
+		return state.Status == StatusClean || state.Status == StatusCompleted, nil
+	}
+	if phasePlan.next == "" {
+		return state.Status == StatusClean && state.Stage == MigrationStageComplete &&
+			state.CompletedLevel == requirement.RequiredLevel, nil
+	}
+	completedStage, err := completedStageBeforePhase(phasePlan.next)
+	if err != nil {
+		return false, err
+	}
+	return state.Status == StatusCompleted && state.Stage == completedStage &&
+		state.CompletedLevel == requirement.AcceptedSourceLevel &&
+		state.TargetLevel == requirement.RequiredLevel && state.ActiveRunID == "", nil
 }
 
 func (c *MigrationCoordinator) inspectCompletedProgress(
@@ -448,13 +541,16 @@ func (c *MigrationCoordinator) inspectCompletedProgress(
 	operations := make(map[string]struct {
 		storeID StoreID
 		order   int
-	}, len(c.plan.Operations))
-	for order, operation := range c.plan.Operations {
-		definition := operation.Definition()
+	}, len(c.plan.Operations()))
+	for _, planned := range c.plan.plannedOperations() {
+		if planned.phase != resume.phase {
+			continue
+		}
+		definition := planned.operation.Definition()
 		operations[string(definition.ID)] = struct {
 			storeID StoreID
 			order   int
-		}{storeID: definition.StoreID, order: order}
+		}{storeID: definition.StoreID, order: planned.order}
 	}
 	for storeID, state := range states {
 		namespaceIndex := c.namespaceIndexes()[storeID]
@@ -482,8 +578,11 @@ func (c *MigrationCoordinator) inspectCompletedProgress(
 	}
 	for storeID := range states {
 		pendingFound := false
-		for _, operation := range c.plan.Operations {
-			definition := operation.Definition()
+		for _, planned := range c.plan.plannedOperations() {
+			if planned.phase != resume.phase {
+				continue
+			}
+			definition := planned.operation.Definition()
 			if definition.StoreID != storeID {
 				continue
 			}

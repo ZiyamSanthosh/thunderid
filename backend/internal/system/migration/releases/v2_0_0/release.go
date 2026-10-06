@@ -33,7 +33,7 @@ func migrationPlan() (engine.MigrationPlan, error) {
 	}
 	return engine.MigrationPlan{
 		TargetVersion: "2.0.0",
-		Operations: []engine.Operation{
+		Expand: []engine.Operation{
 			removeReasonCheck,
 			createAuthorizationPDPConnection,
 		},

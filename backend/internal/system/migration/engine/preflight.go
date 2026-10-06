@@ -27,17 +27,20 @@ type ReadAccess interface {
 // PlanContext describes an operation's immutable position in its validated migration plan.
 type PlanContext struct {
 	targetVersion         string
+	phase                 OperationPhase
 	operationIndex        int
 	precedingOperationIDs []OperationID
 }
 
 func newPlanContext(plan MigrationPlan, operationIndex int) PlanContext {
+	planned := plan.plannedOperations()
 	preceding := make([]OperationID, 0, operationIndex)
-	for _, operation := range plan.Operations[:operationIndex] {
-		preceding = append(preceding, operation.Definition().ID)
+	for _, entry := range planned[:operationIndex] {
+		preceding = append(preceding, entry.operation.Definition().ID)
 	}
 	return PlanContext{
 		targetVersion:         plan.TargetVersion,
+		phase:                 planned[operationIndex].phase,
 		operationIndex:        operationIndex,
 		precedingOperationIDs: preceding,
 	}
@@ -46,6 +49,11 @@ func newPlanContext(plan MigrationPlan, operationIndex int) PlanContext {
 // TargetVersion returns the release targeted by the complete migration plan.
 func (c PlanContext) TargetVersion() string {
 	return c.targetVersion
+}
+
+// Phase returns the release-plan phase containing this operation.
+func (c PlanContext) Phase() OperationPhase {
+	return c.phase
 }
 
 // OperationIndex returns the zero-based position of the operation in the plan.
@@ -191,15 +199,15 @@ func (r operationReadinessReport) Ready() bool {
 	return true
 }
 
-type operationReadinessChecker struct {
+type readinessEvaluator struct {
 	plan   MigrationPlan
 	stores map[StoreID]ReadStore
 }
 
-func newOperationReadinessChecker(
+func newReadinessEvaluator(
 	release ReleaseDefinition,
 	stores map[StoreID]ReadStore,
-) (*operationReadinessChecker, error) {
+) (*readinessEvaluator, error) {
 	registry, err := NewPlanRegistry(release.Manifest, release.Plan)
 	if err != nil {
 		return nil, fmt.Errorf("create migration preflight checker: %w", err)
@@ -208,14 +216,14 @@ func newOperationReadinessChecker(
 	for storeID, store := range stores {
 		storeCopy[storeID] = store
 	}
-	return &operationReadinessChecker{plan: registry.Plan(), stores: storeCopy}, nil
+	return &readinessEvaluator{plan: registry.Plan(), stores: storeCopy}, nil
 }
 
-func (c *operationReadinessChecker) check(ctx context.Context) operationReadinessReport {
+func (c *readinessEvaluator) check(ctx context.Context) operationReadinessReport {
 	return c.checkStores(ctx, nil, nil)
 }
 
-func (c *operationReadinessChecker) checkStores(
+func (c *readinessEvaluator) checkStores(
 	ctx context.Context,
 	includedStores map[StoreID]struct{},
 	blockedStores map[StoreID]struct{},
@@ -223,19 +231,60 @@ func (c *operationReadinessChecker) checkStores(
 	return c.checkPendingStores(ctx, includedStores, blockedStores, nil)
 }
 
-func (c *operationReadinessChecker) checkPendingStores(
+func (c *readinessEvaluator) checkPhaseStores(
 	ctx context.Context,
+	phase OperationPhase,
+	includedStores map[StoreID]struct{},
+	blockedStores map[StoreID]struct{},
+) operationReadinessReport {
+	return c.checkPendingPhaseStores(ctx, phase, includedStores, blockedStores, nil)
+}
+
+func (c *readinessEvaluator) checkPendingStores(
+	ctx context.Context,
+	includedStores map[StoreID]struct{},
+	blockedStores map[StoreID]struct{},
+	completedOperations map[OperationID]struct{},
+) operationReadinessReport {
+	return c.checkPendingStoresForPhase(ctx, nil, includedStores, blockedStores, completedOperations)
+}
+
+func (c *readinessEvaluator) checkPendingPhaseStores(
+	ctx context.Context,
+	phase OperationPhase,
+	includedStores map[StoreID]struct{},
+	blockedStores map[StoreID]struct{},
+	completedOperations map[OperationID]struct{},
+) operationReadinessReport {
+	return c.checkPendingStoresForPhase(
+		ctx, &phase, includedStores, blockedStores, completedOperations)
+}
+
+func (c *readinessEvaluator) checkPendingStoresForPhase(
+	ctx context.Context,
+	phase *OperationPhase,
 	includedStores map[StoreID]struct{},
 	blockedStores map[StoreID]struct{},
 	completedOperations map[OperationID]struct{},
 ) operationReadinessReport {
 	report := operationReadinessReport{
 		TargetVersion: c.plan.TargetVersion,
-		Operations:    make([]OperationReadinessReport, 0, len(c.plan.Operations)),
+		Operations:    make([]OperationReadinessReport, 0, len(c.plan.Operations())),
 	}
-	resultsByID := make(map[OperationID]OperationReadinessReport, len(c.plan.Operations))
-	for index, operation := range c.plan.Operations {
+	plannedOperations := c.plan.plannedOperations()
+	resultsByID := make(map[OperationID]OperationReadinessReport, len(plannedOperations))
+	for _, planned := range plannedOperations {
+		operation := planned.operation
 		definition := operation.Definition()
+		if phase != nil && planned.phase != *phase {
+			if phasePrecedes(planned.phase, *phase) {
+				resultsByID[definition.ID] = OperationReadinessReport{
+					OperationID: definition.ID, State: ReadinessReady,
+					Summary: "The preceding migration phase is complete",
+				}
+			}
+			continue
+		}
 		if _, completed := completedOperations[definition.ID]; completed {
 			result := OperationReadinessReport{
 				OperationID: definition.ID, Description: definition.Description,
@@ -273,7 +322,19 @@ func (c *operationReadinessChecker) checkPendingStores(
 			resultsByID[definition.ID] = result
 			continue
 		}
-		planContext := newPlanContext(c.plan, index)
+		checker, supportsReadinessCheck := operation.(ReadinessChecker)
+		if !supportsReadinessCheck {
+			result := OperationReadinessReport{
+				OperationID: definition.ID, Description: definition.Description,
+				StoreID: definition.StoreID, State: ReadinessReady,
+				Summary: "No additional operation readiness check is required",
+			}
+			report.Operations = append(report.Operations, result)
+			resultsByID[definition.ID] = result
+			continue
+		}
+
+		planContext := newPlanContext(c.plan, planned.order)
 		access, err := newOperationReadAccess(definition, c.stores)
 		if err != nil {
 			result := failedReadinessReport(definition, "Operation read access is unavailable",
@@ -283,7 +344,7 @@ func (c *operationReadinessChecker) checkPendingStores(
 			continue
 		}
 
-		readiness, err := operation.CheckReadiness(ctx, access, planContext)
+		readiness, err := checker.CheckReadiness(ctx, access, planContext)
 		if err != nil {
 			result := failedReadinessReport(definition, "Operation readiness could not be determined",
 				"readiness_check_failed", "The operation readiness check returned an error", err)
@@ -322,6 +383,13 @@ func (c *operationReadinessChecker) checkPendingStores(
 	return report
 }
 
+func phasePrecedes(candidate OperationPhase, target OperationPhase) bool {
+	order := map[OperationPhase]int{
+		OperationPhaseExpand: 0, OperationPhaseMigrate: 1, OperationPhaseContract: 2,
+	}
+	return order[candidate] < order[target]
+}
+
 func blockedDeclaredStore(
 	definition OperationDefinition,
 	blockedStores map[StoreID]struct{},
@@ -356,6 +424,7 @@ type StoreMigrationAssessment struct {
 	RequiredLevel       string
 	CompletedLevel      string
 	Status              Status
+	Stage               MigrationStage
 	State               StoreMigrationAssessmentState
 	Reason              CompatibilityReason
 	Err                 error
@@ -369,6 +438,7 @@ func (r StoreMigrationAssessment) Ready() bool {
 // PreflightReport combines store applicability and operation readiness.
 type PreflightReport struct {
 	TargetVersion string
+	Phase         OperationPhase
 	Stores        []StoreMigrationAssessment
 	Operations    []OperationReadinessReport
 }
@@ -393,9 +463,10 @@ func (r PreflightReport) Ready() bool {
 
 // PreflightChecker combines store migration applicability with operation readiness.
 type PreflightChecker struct {
-	manifest          ReleaseManifest
-	compatibilityGate *CompatibilityGate
-	operationChecker  *operationReadinessChecker
+	manifest           ReleaseManifest
+	plan               MigrationPlan
+	compatibilityGate  *CompatibilityGate
+	readinessEvaluator *readinessEvaluator
 }
 
 // NewPreflightChecker creates the complete read-only checker for one release.
@@ -407,12 +478,13 @@ func NewPreflightChecker(
 	if err != nil {
 		return nil, fmt.Errorf("create migration preflight checker: %w", err)
 	}
-	operationChecker, err := newOperationReadinessChecker(release, stores)
+	readinessEvaluator, err := newReadinessEvaluator(release, stores)
 	if err != nil {
 		return nil, err
 	}
 	return &PreflightChecker{
-		manifest: release.Manifest, compatibilityGate: compatibilityGate, operationChecker: operationChecker,
+		manifest: release.Manifest, plan: readinessEvaluator.plan,
+		compatibilityGate: compatibilityGate, readinessEvaluator: readinessEvaluator,
 	}, nil
 }
 
@@ -438,7 +510,8 @@ func (c *PreflightChecker) Check(
 		storeAssessment := StoreMigrationAssessment{
 			StoreID: storeCompatibility.StoreID, AcceptedSourceLevel: requirement.AcceptedSourceLevel,
 			RequiredLevel: requirement.RequiredLevel, CompletedLevel: storeCompatibility.CompletedLevel,
-			Status: storeCompatibility.Status, Reason: storeCompatibility.Reason, Err: storeCompatibility.Err,
+			Status: storeCompatibility.Status, Stage: storeCompatibility.Stage,
+			Reason: storeCompatibility.Reason, Err: storeCompatibility.Err,
 		}
 		switch {
 		case storeCompatibility.Compatible():
@@ -456,9 +529,121 @@ func (c *PreflightChecker) Check(
 		report.Stores = append(report.Stores, storeAssessment)
 	}
 
-	operationReport := c.operationChecker.checkStores(ctx, migrationStores, blockedStores)
+	operationReport := c.readinessEvaluator.checkStores(ctx, migrationStores, blockedStores)
 	report.Operations = operationReport.Operations
 	return report
+}
+
+// CheckPhase evaluates whether each store and operation can execute the selected migration phase.
+func (c *PreflightChecker) CheckPhase(
+	ctx context.Context,
+	metadataStores map[StoreID]*MetadataStore,
+	phase OperationPhase,
+) (PreflightReport, error) {
+	if _, err := executionStageForPhase(phase); err != nil {
+		return PreflightReport{}, fmt.Errorf("check migration phase: %w", err)
+	}
+	report := PreflightReport{
+		TargetVersion: c.manifest.ReleaseVersion,
+		Phase:         phase,
+		Stores:        make([]StoreMigrationAssessment, 0, len(c.manifest.Stores)),
+	}
+	migrationStores := make(map[StoreID]struct{})
+	blockedStores := make(map[StoreID]struct{})
+	for _, requirement := range c.manifest.Stores {
+		assessment, requiresMigration := c.assessPhaseStore(
+			ctx, metadataStores[requirement.ID], requirement, phase)
+		report.Stores = append(report.Stores, assessment)
+		if requiresMigration {
+			migrationStores[requirement.ID] = struct{}{}
+		} else if assessment.State == StoreAssessmentBlocked {
+			blockedStores[requirement.ID] = struct{}{}
+		}
+	}
+	operationReport := c.readinessEvaluator.checkPhaseStores(
+		ctx, phase, migrationStores, blockedStores)
+	report.Operations = operationReport.Operations
+	return report, nil
+}
+
+func (c *PreflightChecker) assessPhaseStore(
+	ctx context.Context,
+	metadataStore *MetadataStore,
+	requirement StoreRequirement,
+	phase OperationPhase,
+) (StoreMigrationAssessment, bool) {
+	assessment := StoreMigrationAssessment{
+		StoreID: requirement.ID, AcceptedSourceLevel: requirement.AcceptedSourceLevel,
+		RequiredLevel: requirement.RequiredLevel,
+	}
+	if metadataStore == nil {
+		assessment.State = StoreAssessmentBlocked
+		assessment.Reason = CompatibilityReasonUnverifiable
+		assessment.Err = errors.New("metadata store is not configured")
+		return assessment, false
+	}
+	schemaStatus, err := metadataStore.InspectSchema(ctx)
+	if err != nil {
+		assessment.State = StoreAssessmentBlocked
+		assessment.Reason = CompatibilityReasonUnverifiable
+		assessment.Err = err
+		return assessment, false
+	}
+	if schemaStatus != SchemaReady {
+		assessment.State = StoreAssessmentBlocked
+		if schemaStatus == SchemaAbsent {
+			assessment.Reason = CompatibilityReasonMetadataMissing
+		} else {
+			assessment.Reason = CompatibilityReasonMetadataPartial
+		}
+		return assessment, false
+	}
+	state, err := metadataStore.GetState(ctx, requirement.ID)
+	if err != nil || state == nil {
+		assessment.State = StoreAssessmentBlocked
+		assessment.Reason = CompatibilityReasonUnverifiable
+		assessment.Err = err
+		if state == nil && err == nil {
+			assessment.Reason = CompatibilityReasonMetadataMissing
+		}
+		return assessment, false
+	}
+	assessment.CompletedLevel = state.CompletedLevel
+	assessment.Status = state.Status
+	assessment.Stage = state.Stage
+	if state.MetadataVersion != c.manifest.MigrationMetadataVersion {
+		assessment.State = StoreAssessmentBlocked
+		assessment.Reason = CompatibilityReasonUnsupportedMetadata
+		return assessment, false
+	}
+	if state.Status == StatusClean && state.CompletedLevel == requirement.RequiredLevel {
+		assessment.State = StoreAssessmentAtTarget
+		return assessment, false
+	}
+	phasePlan, phaseErr := phasePlanForStore(c.plan, requirement.ID, phase)
+	if phaseErr != nil {
+		if state.Status == StatusInProgress || state.Status == StatusFailed {
+			assessment.State = StoreAssessmentBlocked
+			assessment.Reason = CompatibilityReasonMigrationIncomplete
+			return assessment, false
+		}
+		assessment.State = StoreAssessmentAtTarget
+		return assessment, false
+	}
+	if state.CompletedLevel != requirement.AcceptedSourceLevel {
+		assessment.State = StoreAssessmentBlocked
+		assessment.Reason = CompatibilityReasonLevelMismatch
+		return assessment, false
+	}
+	if err := validatePhaseBoundary(
+		requirement.ID, phase, phasePlan.previous, requirement.RequiredLevel, state); err != nil {
+		assessment.State = StoreAssessmentBlocked
+		assessment.Reason = CompatibilityReasonMigrationIncomplete
+		assessment.Err = err
+		return assessment, false
+	}
+	assessment.State = StoreAssessmentMigrationRequired
+	return assessment, true
 }
 
 func failedReadinessReport(

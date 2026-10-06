@@ -155,9 +155,6 @@ func NewSQLOperation(config SQLOperationConfig) (*SQLOperation, error) {
 	if config.Definition.InterruptionMode != InterruptionModeAtomic {
 		return nil, errors.New("create SQL operation: interruption mode must be atomic")
 	}
-	if config.ReadinessChecker == nil {
-		return nil, errors.New("create SQL operation: readiness checker is required")
-	}
 	if config.Definition.Kind == OperationKindSchemaChange && config.TargetResolver != nil {
 		return nil, errors.New("create SQL operation: schema-change operation cannot define a target resolver")
 	}
@@ -197,6 +194,11 @@ func (o *SQLOperation) CheckReadiness(
 	access ReadAccess,
 	planContext PlanContext,
 ) (ReadinessResult, error) {
+	if o.readinessChecker == nil {
+		return ReadinessResult{
+			State: ReadinessReady, Summary: "No additional operation readiness check is required",
+		}, nil
+	}
 	return o.readinessChecker(ctx, access, planContext)
 }
 

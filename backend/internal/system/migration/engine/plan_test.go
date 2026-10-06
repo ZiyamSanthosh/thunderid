@@ -27,10 +27,6 @@ func (o testOperation) Definition() OperationDefinition {
 	return o.definition
 }
 
-func (o testOperation) CheckReadiness(context.Context, ReadAccess, PlanContext) (ReadinessResult, error) {
-	return ReadinessResult{State: ReadinessReady, Summary: "Test operation is ready"}, nil
-}
-
 func (o testOperation) ResolveTargets(
 	context.Context,
 	ReadAccess,
@@ -56,7 +52,7 @@ func TestPlanRegistryAcceptsMatchingPlan(t *testing.T) {
 	operation := validPlanOperation(StoreIDEntityDB)
 	plan := MigrationPlan{
 		TargetVersion: manifest.ReleaseVersion,
-		Operations:    []Operation{operation},
+		Expand:        []Operation{operation},
 	}
 
 	registry, err := NewPlanRegistry(manifest, plan)
@@ -65,11 +61,11 @@ func TestPlanRegistryAcceptsMatchingPlan(t *testing.T) {
 	require.NotNil(t, registry)
 	registered := registry.Plan()
 	assert.Equal(t, plan.TargetVersion, registered.TargetVersion)
-	require.Len(t, registered.Operations, 1)
-	assert.Equal(t, operation.Definition(), registered.Operations[0].Definition())
+	require.Len(t, registered.Expand, 1)
+	assert.Equal(t, operation.Definition(), registered.Expand[0].Definition())
 
-	registered.Operations = nil
-	assert.Len(t, registry.Plan().Operations, 1)
+	registered.Expand = nil
+	assert.Len(t, registry.Plan().Expand, 1)
 }
 
 func TestPlanRegistryAcceptsNoChangePlan(t *testing.T) {
@@ -80,7 +76,31 @@ func TestPlanRegistryAcceptsNoChangePlan(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	assert.Empty(t, registry.Plan().Operations)
+	assert.Empty(t, registry.Plan().Operations())
+}
+
+func TestMigrationPlanReturnsOperationsForPhase(t *testing.T) {
+	expand := validPlanOperation(StoreIDEntityDB)
+	migrate := validPlanOperation(StoreIDEntityDB)
+	migrate.definition.ID = "1.1.0/entitydb/migrate"
+	contract := validPlanOperation(StoreIDEntityDB)
+	contract.definition.ID = "1.1.0/entitydb/contract"
+	plan := MigrationPlan{
+		Expand: []Operation{expand}, Migrate: []Operation{migrate}, Contract: []Operation{contract},
+	}
+
+	operations, err := plan.OperationsForPhase(OperationPhaseMigrate)
+
+	require.NoError(t, err)
+	require.Len(t, operations, 1)
+	assert.Equal(t, migrate.Definition(), operations[0].Definition())
+	operations[0] = nil
+	assert.NotNil(t, plan.Migrate[0])
+	assert.Equal(t, []Operation{expand, migrate, contract}, plan.Operations())
+
+	operations, err = plan.OperationsForPhase("unknown")
+	require.Error(t, err)
+	assert.Nil(t, operations)
 }
 
 func TestPlanRegistryAcceptsOptionalRollbackForResumableOperation(t *testing.T) {
@@ -90,12 +110,12 @@ func TestPlanRegistryAcceptsOptionalRollbackForResumableOperation(t *testing.T) 
 
 	registry, err := NewPlanRegistry(manifest, MigrationPlan{
 		TargetVersion: manifest.ReleaseVersion,
-		Operations:    []Operation{rollbackTestOperation{testOperation: operation}},
+		Expand:        []Operation{rollbackTestOperation{testOperation: operation}},
 	})
 
 	require.NoError(t, err)
-	require.Len(t, registry.Plan().Operations, 1)
-	_, supportsRollback := registry.Plan().Operations[0].(RollbackCapableOperation)
+	require.Len(t, registry.Plan().Expand, 1)
+	_, supportsRollback := registry.Plan().Expand[0].(RollbackCapableOperation)
 	assert.True(t, supportsRollback)
 }
 
@@ -129,21 +149,21 @@ func TestPlanRegistryRejectsInvalidPlan(t *testing.T) {
 		{
 			name: "nil operation",
 			mutate: func(_ *ReleaseManifest, plan *MigrationPlan) {
-				plan.Operations = []Operation{nil}
+				plan.Migrate = []Operation{nil}
 			},
-			errorMatch: "is nil",
+			errorMatch: "migrate operation at index 0 is nil",
 		},
 		{
 			name: "duplicate operation ID",
 			mutate: func(_ *ReleaseManifest, plan *MigrationPlan) {
-				plan.Operations = append(plan.Operations, plan.Operations[0])
+				plan.Contract = append(plan.Contract, plan.Expand[0])
 			},
 			errorMatch: "duplicate operation ID",
 		},
 		{
 			name: "changed store without operation",
 			mutate: func(_ *ReleaseManifest, plan *MigrationPlan) {
-				plan.Operations = nil
+				plan.Expand = nil
 			},
 			errorMatch: "requires at least one",
 		},
@@ -158,8 +178,8 @@ func TestPlanRegistryRejectsInvalidPlan(t *testing.T) {
 		{
 			name: "rollback on atomic operation",
 			mutate: func(_ *ReleaseManifest, plan *MigrationPlan) {
-				operation := plan.Operations[0].(testOperation)
-				plan.Operations[0] = rollbackTestOperation{testOperation: operation}
+				operation := plan.Expand[0].(testOperation)
+				plan.Expand[0] = rollbackTestOperation{testOperation: operation}
 			},
 			errorMatch: "atomic operations cannot define rollback behavior",
 		},
@@ -170,7 +190,7 @@ func TestPlanRegistryRejectsInvalidPlan(t *testing.T) {
 			manifest := changedStoreManifest(StoreIDConfigDB)
 			plan := MigrationPlan{
 				TargetVersion: manifest.ReleaseVersion,
-				Operations:    []Operation{validPlanOperation(StoreIDConfigDB)},
+				Expand:        []Operation{validPlanOperation(StoreIDConfigDB)},
 			}
 			test.mutate(&manifest, &plan)
 
@@ -226,7 +246,7 @@ func TestPlanRegistryRejectsInvalidOperationDefinition(t *testing.T) {
 			test.mutate(&definition)
 			plan := MigrationPlan{
 				TargetVersion: manifest.ReleaseVersion,
-				Operations:    []Operation{testOperation{definition: definition}},
+				Expand:        []Operation{testOperation{definition: definition}},
 			}
 
 			registry, err := NewPlanRegistry(manifest, plan)

@@ -29,6 +29,7 @@ func TestStateValidate(t *testing.T) {
 		{
 			name: "valid in-progress state",
 			mutate: func(state *State) {
+				state.Stage = MigrationStageExpanding
 				state.Status = StatusInProgress
 				state.TargetLevel = "1.1.0"
 				state.ActiveRunID = testRunID
@@ -37,10 +38,27 @@ func TestStateValidate(t *testing.T) {
 		{
 			name: "valid failed state",
 			mutate: func(state *State) {
+				state.Stage = MigrationStageExpanding
 				state.Status = StatusFailed
 				state.TargetLevel = "1.1.0"
 				state.ActiveRunID = testRunID
 				state.FailureSummary = "operation verification failed"
+			},
+		},
+		{
+			name: "valid expanded state",
+			mutate: func(state *State) {
+				state.Stage = MigrationStageExpanded
+				state.Status = StatusCompleted
+				state.TargetLevel = "1.1.0"
+			},
+		},
+		{
+			name: "valid contract-ready state",
+			mutate: func(state *State) {
+				state.Stage = MigrationStageContractReady
+				state.Status = StatusCompleted
+				state.TargetLevel = "1.1.0"
 			},
 		},
 		{name: "invalid ID", mutate: func(state *State) { state.ID = "invalid" }, errorMatch: "state ID"},
@@ -50,9 +68,18 @@ func TestStateValidate(t *testing.T) {
 		{name: "missing update time", mutate: func(state *State) { state.UpdatedAt = time.Time{} }, errorMatch: "update time"},
 		{name: "long failure summary", mutate: func(state *State) { state.FailureSummary = strings.Repeat("x", maxFailureSummaryLength+1) }, errorMatch: "failure summary exceeds"},
 		{name: "clean with target", mutate: func(state *State) { state.TargetLevel = "1.1.0" }, errorMatch: "clean migration state"},
+		{name: "clean in expanded stage", mutate: func(state *State) {
+			state.Stage = MigrationStageExpanded
+		}, errorMatch: "complete stage"},
+		{name: "completed in executing stage", mutate: func(state *State) {
+			state.Stage = MigrationStageExpanding
+			state.Status = StatusCompleted
+			state.TargetLevel = "1.1.0"
+		}, errorMatch: "expanded or contract-ready"},
 		{
 			name: "active with invalid target",
 			mutate: func(state *State) {
+				state.Stage = MigrationStageExpanding
 				state.Status = StatusInProgress
 				state.TargetLevel = "1.1"
 				state.ActiveRunID = testRunID
@@ -62,6 +89,7 @@ func TestStateValidate(t *testing.T) {
 		{
 			name: "active without advancement",
 			mutate: func(state *State) {
+				state.Stage = MigrationStageExpanding
 				state.Status = StatusInProgress
 				state.TargetLevel = state.CompletedLevel
 				state.ActiveRunID = testRunID
@@ -71,6 +99,7 @@ func TestStateValidate(t *testing.T) {
 		{
 			name: "active with invalid run ID",
 			mutate: func(state *State) {
+				state.Stage = MigrationStageExpanding
 				state.Status = StatusInProgress
 				state.TargetLevel = "1.1.0"
 				state.ActiveRunID = "invalid"
@@ -80,6 +109,7 @@ func TestStateValidate(t *testing.T) {
 		{
 			name: "in-progress with failure",
 			mutate: func(state *State) {
+				state.Stage = MigrationStageExpanding
 				state.Status = StatusInProgress
 				state.TargetLevel = "1.1.0"
 				state.ActiveRunID = testRunID
@@ -90,6 +120,7 @@ func TestStateValidate(t *testing.T) {
 		{
 			name: "failed without failure",
 			mutate: func(state *State) {
+				state.Stage = MigrationStageExpanding
 				state.Status = StatusFailed
 				state.TargetLevel = "1.1.0"
 				state.ActiveRunID = testRunID
@@ -171,6 +202,7 @@ func validState() State {
 		StoreID:         StoreIDConfigDB,
 		MetadataVersion: 1,
 		CompletedLevel:  "1.0.0",
+		Stage:           MigrationStageComplete,
 		Status:          StatusClean,
 		UpdatedAt:       time.Now().UTC(),
 	}

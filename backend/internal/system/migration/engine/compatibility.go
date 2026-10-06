@@ -36,6 +36,7 @@ type StoreCompatibility struct {
 	CompletedLevel  string
 	MetadataVersion int
 	Status          Status
+	Stage           MigrationStage
 	TargetLevel     string
 	ActiveRunID     string
 	Reason          CompatibilityReason
@@ -172,6 +173,7 @@ func (g *CompatibilityGate) checkStore(
 	result.CompletedLevel = state.CompletedLevel
 	result.MetadataVersion = state.MetadataVersion
 	result.Status = state.Status
+	result.Stage = state.Stage
 	result.TargetLevel = state.TargetLevel
 	result.ActiveRunID = state.ActiveRunID
 

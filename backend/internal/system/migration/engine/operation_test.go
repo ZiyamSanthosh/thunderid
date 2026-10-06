@@ -92,6 +92,26 @@ func TestSQLOperationProvidesValidatedLifecycle(t *testing.T) {
 	assert.ErrorContains(t, err, "no SQL implementation")
 }
 
+func TestSQLOperationUsesOptionalReadinessChecker(t *testing.T) {
+	config := validSQLOperationConfig()
+	config.ReadinessChecker = func(
+		context.Context,
+		ReadAccess,
+		PlanContext,
+	) (ReadinessResult, error) {
+		return ReadinessResult{State: ReadinessBlocked, Summary: "A prerequisite is missing",
+			Findings: []Finding{{Code: "missing_prerequisite", Message: "A prerequisite is missing"}}}, nil
+	}
+	operation, err := NewSQLOperation(config)
+	require.NoError(t, err)
+
+	result, err := operation.CheckReadiness(context.Background(), nil, PlanContext{})
+
+	require.NoError(t, err)
+	assert.Equal(t, ReadinessBlocked, result.State)
+	assert.Equal(t, "missing_prerequisite", result.Findings[0].Code)
+}
+
 func TestSQLOperationExecutesProviderStatementsInOrder(t *testing.T) {
 	config := validSQLOperationConfig()
 	config.Implementations[DatabaseTypePostgres] = SQLImplementation{Statements: []SQLStatement{
@@ -201,9 +221,6 @@ func TestNewSQLOperationRejectsIncompleteContracts(t *testing.T) {
 				config.Definition.InterruptionMode = InterruptionModeResumable
 			}, errorMatch: "must be atomic",
 		},
-		{name: "missing readiness", mutate: func(config *SQLOperationConfig) {
-			config.ReadinessChecker = nil
-		}, errorMatch: "readiness checker"},
 		{name: "missing target resolver", mutate: func(config *SQLOperationConfig) {
 			config.TargetResolver = nil
 		}, errorMatch: "data-change operation requires a target resolver"},
@@ -337,9 +354,6 @@ func validSQLOperationConfig() SQLOperationConfig {
 			StoreID: StoreIDEntityDB, ReadStoreIDs: []StoreID{StoreIDConfigDB},
 			Kind:             OperationKindDataChange,
 			InterruptionMode: InterruptionModeAtomic,
-		},
-		ReadinessChecker: func(context.Context, ReadAccess, PlanContext) (ReadinessResult, error) {
-			return ReadinessResult{State: ReadinessReady, Summary: "Operation is ready"}, nil
 		},
 		TargetResolver: func(
 			context.Context,

@@ -70,91 +70,6 @@ func TestRemoveRevocationReasonCheckOperationDefinition(t *testing.T) {
 	require.Equal(t, []engine.ExecutionTarget{{}}, targets)
 }
 
-func TestRemoveRevocationReasonCheckReadiness(t *testing.T) {
-	operation, err := newRemoveRevocationReasonCheckOperation()
-	require.NoError(t, err)
-	tests := []struct {
-		name        string
-		access      operationReadAccess
-		state       engine.ReadinessState
-		findingCode string
-	}{
-		{
-			name: "legacy source",
-			access: operationReadAccess{
-				columnRows: revokedTokenReasonColumnRows(),
-				constraintRows: []engine.QueryRow{{
-					"constraint_name": legacyRevokedTokenReasonConstraint,
-				}},
-			},
-			state: engine.ReadinessReady,
-		},
-		{
-			name: "target already applied",
-			access: operationReadAccess{
-				columnRows: revokedTokenReasonColumnRows(),
-			},
-			state: engine.ReadinessReady,
-		},
-		{
-			name: "unexpected constraint",
-			access: operationReadAccess{
-				columnRows: revokedTokenReasonColumnRows(),
-				constraintRows: []engine.QueryRow{{
-					"constraint_name": "custom_reason_check",
-				}},
-			},
-			state:       engine.ReadinessBlocked,
-			findingCode: "unexpected_revoked_token_reason_schema",
-		},
-		{
-			name: "missing column",
-			access: operationReadAccess{
-				columnRows: nil,
-			},
-			state:       engine.ReadinessBlocked,
-			findingCode: "unexpected_revoked_token_reason_schema",
-		},
-		{
-			name: "multiple constraints",
-			access: operationReadAccess{
-				columnRows: revokedTokenReasonColumnRows(),
-				constraintRows: []engine.QueryRow{
-					{"constraint_name": legacyRevokedTokenReasonConstraint},
-					{"constraint_name": "custom_reason_check"},
-				},
-			},
-			state:       engine.ReadinessBlocked,
-			findingCode: "unexpected_revoked_token_reason_schema",
-		},
-		{
-			name: "malformed constraint result",
-			access: operationReadAccess{
-				columnRows:     revokedTokenReasonColumnRows(),
-				constraintRows: []engine.QueryRow{{}},
-			},
-			state: "",
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			result, err := operation.CheckReadiness(context.Background(), test.access, engine.PlanContext{})
-
-			if test.name == "malformed constraint result" {
-				require.Error(t, err)
-				return
-			}
-			require.NoError(t, err)
-			assert.Equal(t, test.state, result.State)
-			if test.findingCode != "" {
-				require.Len(t, result.Findings, 1)
-				assert.Equal(t, test.findingCode, result.Findings[0].Code)
-			}
-		})
-	}
-}
-
 func TestRemoveRevocationReasonCheckVerification(t *testing.T) {
 	operation, err := newRemoveRevocationReasonCheckOperation()
 	require.NoError(t, err)
@@ -189,9 +104,9 @@ func TestRemoveRevocationReasonCheckPropagatesInspectionFailure(t *testing.T) {
 	operation, err := newRemoveRevocationReasonCheckOperation()
 	require.NoError(t, err)
 
-	result, err := operation.CheckReadiness(context.Background(), operationReadAccess{
+	result, err := operation.PreVerify(context.Background(), operationReadAccess{
 		err: errors.New("database unavailable"),
-	}, engine.PlanContext{})
+	}, engine.ExecutionTarget{})
 
 	require.Error(t, err)
 	assert.Empty(t, result.State)

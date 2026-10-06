@@ -25,7 +25,7 @@ func TestMetadataStoreGetState(t *testing.T) {
 		dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(StoreIDConfigDB)).
 			Return([]map[string]interface{}{{
 				"id": testStateID, "store_id": []byte(StoreIDConfigDB), "metadata_version": int64(1),
-				"completed_level": "1.0.0", "target_level": nil, "status": "clean",
+				"completed_level": "1.0.0", "target_level": nil, "stage": "complete", "status": "clean",
 				"active_run_id": nil, "failure_summary": nil, "updated_at": updatedAt,
 			}}, nil).Once()
 
@@ -130,7 +130,7 @@ func TestMetadataStoreWritesState(t *testing.T) {
 		state := validState()
 		dbClient.On("ExecuteContext", mock.Anything, queryInsertMigrationState,
 			state.ID, string(state.StoreID), state.MetadataVersion, state.CompletedLevel,
-			nil, string(state.Status), nil, nil, state.UpdatedAt).Return(int64(1), nil).Once()
+			nil, string(state.Stage), string(state.Status), nil, nil, state.UpdatedAt).Return(int64(1), nil).Once()
 
 		err := newTestMetadataStore(t, dbClient).InsertState(ctx, state)
 
@@ -152,7 +152,7 @@ func TestMetadataStoreWritesState(t *testing.T) {
 		state := validState()
 		dbClient.On("ExecuteContext", mock.Anything, queryInsertMigrationState, mock.Anything, mock.Anything,
 			mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
-			mock.Anything).Return(int64(0), nil).Once()
+			mock.Anything, mock.Anything).Return(int64(0), nil).Once()
 
 		err := newTestMetadataStore(t, dbClient).InsertState(ctx, state)
 
@@ -165,9 +165,10 @@ func TestMetadataStoreWritesState(t *testing.T) {
 		state := validState()
 		state.Status = StatusInProgress
 		state.TargetLevel = "1.1.0"
+		state.Stage = MigrationStageExpanding
 		state.ActiveRunID = testRunID
 		dbClient.On("ExecuteContext", mock.Anything, queryUpdateMigrationState,
-			state.MetadataVersion, state.CompletedLevel, state.TargetLevel, string(state.Status),
+			state.MetadataVersion, state.CompletedLevel, state.TargetLevel, string(state.Stage), string(state.Status),
 			state.ActiveRunID, nil, state.UpdatedAt, state.ID, string(state.StoreID)).Return(int64(1), nil).Once()
 
 		err := newTestMetadataStore(t, dbClient).UpdateState(ctx, state)
@@ -180,7 +181,7 @@ func TestMetadataStoreWritesState(t *testing.T) {
 		state := validState()
 		dbClient.On("ExecuteContext", mock.Anything, queryUpdateMigrationState,
 			mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
-			mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+			mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 			Return(int64(0), errors.New("write failed")).Once()
 
 		err := newTestMetadataStore(t, dbClient).UpdateState(ctx, state)
@@ -299,7 +300,7 @@ func TestMetadataStoreWritesProgress(t *testing.T) {
 func validStateRow(updatedAt time.Time) map[string]interface{} {
 	return map[string]interface{}{
 		"id": testStateID, "store_id": string(StoreIDConfigDB), "metadata_version": int64(1),
-		"completed_level": "1.0.0", "target_level": nil, "status": "clean",
+		"completed_level": "1.0.0", "target_level": nil, "stage": "complete", "status": "clean",
 		"active_run_id": nil, "failure_summary": nil, "updated_at": updatedAt,
 	}
 }

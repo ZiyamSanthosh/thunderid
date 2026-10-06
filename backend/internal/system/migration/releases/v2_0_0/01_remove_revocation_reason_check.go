@@ -48,26 +48,6 @@ func newRemoveRevocationReasonCheckOperation() (engine.Operation, error) {
 			Kind:             engine.OperationKindSchemaChange,
 			InterruptionMode: engine.InterruptionModeAtomic,
 		},
-		ReadinessChecker: func(
-			ctx context.Context,
-			access engine.ReadAccess,
-			_ engine.PlanContext,
-		) (engine.ReadinessResult, error) {
-			inspection, err := inspectRevokedTokenReason(ctx, access)
-			if err != nil {
-				return engine.ReadinessResult{}, err
-			}
-			if inspection.state == engine.VerificationInvalid {
-				return engine.ReadinessResult{
-					State: engine.ReadinessBlocked, Summary: inspection.summary,
-					Findings: []engine.Finding{{
-						Code: "unexpected_revoked_token_reason_schema", Message: inspection.summary,
-						Remediation: "Restore the expected ThunderID 1.0.x REVOKED_TOKEN schema before migration",
-					}},
-				}, nil
-			}
-			return engine.ReadinessResult{State: engine.ReadinessReady, Summary: inspection.summary}, nil
-		},
 		PreVerifier: func(
 			ctx context.Context,
 			access engine.ReadAccess,

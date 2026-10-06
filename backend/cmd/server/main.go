@@ -213,6 +213,7 @@ func logMigrationInitialization(
 		logger.Info(ctx, "Migration metadata initialized",
 			log.String("store", string(initialization.State.StoreID)),
 			log.String("completedLevel", initialization.State.CompletedLevel),
+			log.String("stage", string(initialization.State.Stage)),
 			log.Bool("created", initialization.Created))
 	}
 }
@@ -227,6 +228,7 @@ func logMigrationCompatibility(
 			log.String("store", string(store.StoreID)),
 			log.Bool("compatible", store.Compatible()),
 			log.String("completedLevel", store.CompletedLevel),
+			log.String("stage", string(store.Stage)),
 			log.String("requiredLevel", store.RequiredLevel),
 			log.String("status", string(store.Status)),
 			log.String("reason", string(store.Reason)),
@@ -256,6 +258,7 @@ func logMigrationPreflight(
 			log.String("store", string(store.StoreID)),
 			log.String("state", string(store.State)),
 			log.String("completedLevel", store.CompletedLevel),
+			log.String("stage", string(store.Stage)),
 			log.String("acceptedSourceLevel", store.AcceptedSourceLevel),
 			log.String("requiredLevel", store.RequiredLevel),
 			log.String("reason", string(store.Reason)),
@@ -286,6 +289,7 @@ func logMigrationPreflight(
 	}
 	logger.Info(ctx, "Migration preflight status",
 		log.String("targetVersion", report.TargetVersion),
+		log.String("phase", string(report.Phase)),
 		log.Bool("ready", report.Ready()))
 }
 
@@ -325,6 +329,7 @@ func logMigrationApplication(
 	}
 	logger.Info(ctx, message,
 		log.String("runID", result.RunID),
+		log.String("phase", string(result.Phase)),
 		log.String("targetVersion", result.Preflight.TargetVersion),
 		log.Bool("alreadyAtTarget", result.AlreadyAtTarget),
 		log.Int("operations", len(result.Operations)),

@@ -23,10 +23,18 @@ The current implementation contains:
 - a read-only compatibility gate that evaluates every manifest store and aggregates failures;
 - a validated migration plan registry with ordered operations and per-operation store, interruption
   and execution-target declarations;
-- a required provider-neutral operation readiness contract with immutable plan context and
+- release-plan-owned `Expand`, `Migrate` and `Contract` operation groups, with canonical phase order
+  validation and phase-partitioned plan access;
+- durable store-stage vocabulary and metadata for `complete`, active phase execution,
+  `expanded` and `contract_ready`, with stage validation across initialization and recovery;
+- phase-aware state-controller transitions that reserve an explicit phase, validate phase-local
+  progress, restore the preceding boundary when unused reservations are cancelled, skip undeclared
+  phases and advance the completed store level only after its last declared phase;
+- an optional provider-neutral operation readiness contract with immutable plan context and
   standardized ready, deferred and blocked results;
-- an engine-owned preflight runner that provides declaration-scoped read access, validates every
-  operation result, propagates blocked dependencies and aggregates findings in plan order;
+- an engine-owned readiness evaluator that treats operations without additional readiness checks
+  as ready, provides declaration-scoped read access to operations that opt in, validates their
+  results, propagates blocked dependencies and aggregates findings in plan order;
 - validated execution-target and verification contracts plus an immutable atomic `SQLOperation` that requires
   an explicit ordered SQL implementation for every registered database provider;
 - engine-owned execution access that permits reads only from declared stores and writes only to an
@@ -45,13 +53,15 @@ The current implementation contains:
 - a provider-neutral migration execution-lock contract, with PostgreSQL session advisory locking,
   that serializes migration runners per physical database namespace without locking application
   tables or preventing serving traffic;
-- a basic migration coordinator that generates one run identifier, reserves database namespaces in
-  deterministic manifest order, repeats operation readiness after reservation, executes atomic
-  complete-store operations in global plan order, finalizes each store after its last operation and
-  distinguishes pre-execution cancellation from durable execution failure;
+- a phase-aware migration coordinator that generates one run identifier, reserves database
+  namespaces in deterministic manifest order, repeats operation readiness after reservation,
+  executes the explicitly selected phase in global plan order, completes each store after its last
+  phase-local operation and distinguishes pre-execution cancellation from durable execution
+  failure;
 - recovery for failed and abandoned atomic runs through `migration resume`, including run ownership
-  and route validation, reuse of completed progress, readiness checks for only pending operations
-  and conditional failed-to-in-progress transitions;
+  and phase inference, route validation, reuse of phase-local completed progress, recognition of
+  stores that already completed the active phase, readiness checks for only pending operations and
+  conditional failed-to-in-progress transitions;
 - stable command outcome logs that retain partial reports on failure and return success only when
   the requested compatibility or readiness condition is satisfied;
 - a store-level release-route resolver that reports the next migration-owning ThunderID release and
@@ -60,18 +70,21 @@ The current implementation contains:
   groups logical stores sharing the same configured database namespace;
 - a read-only PostgreSQL `migration status` command that reports compatibility for every configured
   logical store without creating or modifying migration metadata;
-- a read-only PostgreSQL `migration check` command that classifies stores as already at target,
-  migration-required or blocked and aggregates operation-specific readiness findings;
-- a PostgreSQL `migration apply` command that runs the basic coordinator as a dedicated execution
-  of the ThunderID binary without starting serving components;
+- a read-only PostgreSQL `migration check` command that evaluates an explicitly selected phase,
+  classifies stores as already at the phase boundary, migration-required or blocked and aggregates
+  operation-specific readiness findings;
+- a PostgreSQL `migration apply` command that runs an explicitly selected phase as a dedicated
+  execution of the ThunderID binary without starting serving components; omitting the phase retains
+  `expand` as the default;
 - a read-only PostgreSQL startup compatibility gate that runs before caches, bootstrap, background
   workers and request listeners, while unsupported development database providers remain outside
   the Phase 1 gate;
 - a first 2.0.0 atomic PostgreSQL operation that removes the legacy `REVOKED_TOKEN` reason check
-  constraint from `runtime_persistent`, with catalog-based readiness and verification plus a bounded
-  DDL lock wait;
+  constraint from `runtime_persistent`, with exact catalog-based pre-verification and
+  post-verification plus a bounded DDL lock wait;
 - a second 2.0.0 atomic PostgreSQL operation that creates the `AUTHORIZATION_PDP_CONNECTION` table
-  and its unique index in `configdb`, with exact catalog-based readiness and verification;
+  and its unique index in `configdb`, with exact catalog-based pre-verification and
+  post-verification;
 - provider-neutral typed query-row helpers for operation readiness and verification queries;
 - a Docker Compose PostgreSQL integration test that builds the target ThunderID binary, obtains the
   configured source release schema from its published image, initializes all four logical
@@ -83,7 +96,8 @@ The current implementation contains:
 - a test that keeps the metadata schema identical across the four logical databases.
 
 The metadata tables currently store only the information required for store compatibility,
-migration-run correlation, failure reporting, ordered operation progress and optional resume data.
+migration stage, migration-run correlation, failure reporting, ordered operation progress and
+optional resume data.
 
 ## Migration engine foundation status
 
@@ -147,10 +161,6 @@ them in every supported database.
 
 These capabilities belong to the second implementation phase, after the basic engine works:
 
-- durable `expand`, `migrate` and `contract` phases;
-- a required operation-phase declaration that assigns every operation to `expand`, `migrate` or
-  `contract`, with plan validation that preserves phase order;
-- explicit phase execution and resume commands;
 - an automatic ZDM path that may run `expand` and `migrate` in order but stops at `contract_ready`;
 - an explicit contract gate that requires external confirmation that all old readers and writers
   have been removed, in addition to engine-owned database verification;

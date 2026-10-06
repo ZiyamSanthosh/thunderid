@@ -67,58 +67,6 @@ func TestCreateAuthorizationPDPConnectionOperationDefinition(t *testing.T) {
 	require.Equal(t, []engine.ExecutionTarget{{}}, targets)
 }
 
-func TestCreateAuthorizationPDPConnectionReadiness(t *testing.T) {
-	operation, err := newCreateAuthorizationPDPConnectionOperation()
-	require.NoError(t, err)
-
-	tests := []struct {
-		name        string
-		access      authorizationPDPReadAccess
-		state       engine.ReadinessState
-		findingCode string
-	}{
-		{
-			name: "table absent",
-			access: authorizationPDPReadAccess{rows: map[string][]engine.QueryRow{
-				postgresQueryAuthorizationPDPConnectionTable.GetID(): {},
-			}},
-			state: engine.ReadinessReady,
-		},
-		{name: "target already applied", access: authorizationPDPTargetAccess(), state: engine.ReadinessReady},
-		{
-			name: "table has missing column",
-			access: authorizationPDPReadAccess{rows: map[string][]engine.QueryRow{
-				postgresQueryAuthorizationPDPConnectionTable.GetID():   {{"table_name": "AUTHORIZATION_PDP_CONNECTION"}},
-				postgresQueryAuthorizationPDPConnectionColumns.GetID(): authorizationPDPColumnRows()[:7],
-			}},
-			state: engine.ReadinessBlocked, findingCode: "unexpected_authorization_pdp_connection_schema",
-		},
-		{
-			name: "table has missing index",
-			access: authorizationPDPReadAccess{rows: map[string][]engine.QueryRow{
-				postgresQueryAuthorizationPDPConnectionTable.GetID():      {{"table_name": "AUTHORIZATION_PDP_CONNECTION"}},
-				postgresQueryAuthorizationPDPConnectionColumns.GetID():    authorizationPDPColumnRows(),
-				postgresQueryAuthorizationPDPConnectionPrimaryKey.GetID(): authorizationPDPPrimaryKeyRows(),
-				postgresQueryAuthorizationPDPConnectionIndex.GetID():      {},
-			}},
-			state: engine.ReadinessBlocked, findingCode: "unexpected_authorization_pdp_connection_schema",
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			result, err := operation.CheckReadiness(context.Background(), test.access, engine.PlanContext{})
-
-			require.NoError(t, err)
-			assert.Equal(t, test.state, result.State)
-			if test.findingCode != "" {
-				require.Len(t, result.Findings, 1)
-				assert.Equal(t, test.findingCode, result.Findings[0].Code)
-			}
-		})
-	}
-}
-
 func TestCreateAuthorizationPDPConnectionVerification(t *testing.T) {
 	operation, err := newCreateAuthorizationPDPConnectionOperation()
 	require.NoError(t, err)
@@ -149,9 +97,9 @@ func TestCreateAuthorizationPDPConnectionPropagatesInspectionFailure(t *testing.
 	operation, err := newCreateAuthorizationPDPConnectionOperation()
 	require.NoError(t, err)
 
-	result, err := operation.CheckReadiness(context.Background(), authorizationPDPReadAccess{
+	result, err := operation.PreVerify(context.Background(), authorizationPDPReadAccess{
 		err: errors.New("database unavailable"),
-	}, engine.PlanContext{})
+	}, engine.ExecutionTarget{})
 
 	require.Error(t, err)
 	assert.Empty(t, result.State)

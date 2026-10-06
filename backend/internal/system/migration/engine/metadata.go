@@ -34,6 +34,24 @@ const (
 	StatusFailed Status = "failed"
 )
 
+// MigrationStage identifies the durable lifecycle position of one logical store migration.
+type MigrationStage string
+
+const (
+	// MigrationStageComplete means that no release migration is active for the store.
+	MigrationStageComplete MigrationStage = "complete"
+	// MigrationStageExpanding means that compatible structures are being prepared.
+	MigrationStageExpanding MigrationStage = "expanding"
+	// MigrationStageExpanded means that expansion completed and migration has not started.
+	MigrationStageExpanded MigrationStage = "expanded"
+	// MigrationStageMigrating means that data transformation and catch-up are running.
+	MigrationStageMigrating MigrationStage = "migrating"
+	// MigrationStageContractReady means that target serving is ready and contract awaits authorization.
+	MigrationStageContractReady MigrationStage = "contract_ready"
+	// MigrationStageContracting means that explicitly authorized cleanup is running.
+	MigrationStageContracting MigrationStage = "contracting"
+)
+
 // State is the durable compatibility state of one logical store.
 type State struct {
 	ID              string
@@ -41,6 +59,7 @@ type State struct {
 	MetadataVersion int
 	CompletedLevel  string
 	TargetLevel     string
+	Stage           MigrationStage
 	Status          Status
 	ActiveRunID     string
 	FailureSummary  string
@@ -70,10 +89,16 @@ func (s State) Validate() error {
 
 	switch s.Status {
 	case StatusClean:
+		if s.Stage != MigrationStageComplete {
+			return errors.New("clean migration state must be at the complete stage")
+		}
 		if s.TargetLevel != "" || s.ActiveRunID != "" || s.FailureSummary != "" {
 			return errors.New("clean migration state cannot contain an active target, run or failure")
 		}
 	case StatusInProgress:
+		if !s.Stage.executing() {
+			return errors.New("in-progress migration state requires an executing stage")
+		}
 		if err := s.validateActiveRun(); err != nil {
 			return err
 		}
@@ -81,11 +106,24 @@ func (s State) Validate() error {
 			return errors.New("in-progress migration state cannot contain a failure summary")
 		}
 	case StatusFailed:
+		if !s.Stage.executing() {
+			return errors.New("failed migration state requires an executing stage")
+		}
 		if err := s.validateActiveRun(); err != nil {
 			return err
 		}
 		if strings.TrimSpace(s.FailureSummary) == "" {
 			return errors.New("failed migration state requires a failure summary")
+		}
+	case StatusCompleted:
+		if s.Stage != MigrationStageExpanded && s.Stage != MigrationStageContractReady {
+			return errors.New("completed migration state requires an expanded or contract-ready stage")
+		}
+		if err := s.validatePendingTarget(); err != nil {
+			return err
+		}
+		if s.ActiveRunID != "" || s.FailureSummary != "" {
+			return errors.New("completed migration state cannot contain an active run or failure")
 		}
 	default:
 		return fmt.Errorf("unsupported migration state status %q", s.Status)
@@ -94,17 +132,28 @@ func (s State) Validate() error {
 	return nil
 }
 
-func (s State) validateActiveRun() error {
+func (s State) validatePendingTarget() error {
 	if !isCanonicalVersion(s.TargetLevel) {
 		return fmt.Errorf("migration state target level %q is not canonical semantic version", s.TargetLevel)
 	}
 	if s.TargetLevel == s.CompletedLevel {
 		return errors.New("migration state target level must differ from completed level")
 	}
+	return nil
+}
+
+func (s State) validateActiveRun() error {
+	if err := s.validatePendingTarget(); err != nil {
+		return err
+	}
 	if !isUUIDv7(s.ActiveRunID) {
 		return errors.New("migration state active run ID must be a canonical UUIDv7")
 	}
 	return nil
+}
+
+func (s MigrationStage) executing() bool {
+	return s == MigrationStageExpanding || s == MigrationStageMigrating || s == MigrationStageContracting
 }
 
 // Progress is the durable execution state of one migration operation.

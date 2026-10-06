@@ -61,6 +61,7 @@ func TestCompatibilityGateCollectsStoreFailures(t *testing.T) {
 	expectReadySchema(runtimePersistentClient)
 	runtimePersistentRow := compatibilityStateRow(StoreIDRuntimePersistent, "1.0.0")
 	runtimePersistentRow["status"] = string(StatusInProgress)
+	runtimePersistentRow["stage"] = string(MigrationStageExpanding)
 	runtimePersistentRow["target_level"] = "1.1.0"
 	runtimePersistentRow["active_run_id"] = testRunID
 	runtimePersistentClient.On("QueryContext", mock.Anything, queryGetMigrationState,
@@ -191,7 +192,8 @@ func TestNewCompatibilityGateRejectsInvalidManifest(t *testing.T) {
 func compatibilityStateRow(storeID StoreID, completedLevel string) map[string]interface{} {
 	return map[string]interface{}{
 		"id": testStateID, "store_id": string(storeID), "metadata_version": int64(1),
-		"completed_level": completedLevel, "target_level": nil, "status": string(StatusClean),
+		"completed_level": completedLevel, "target_level": nil, "stage": string(MigrationStageComplete),
+		"status":        string(StatusClean),
 		"active_run_id": nil, "failure_summary": nil,
 		"updated_at": time.Date(2026, time.September, 30, 12, 0, 0, 0, time.UTC),
 	}

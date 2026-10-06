@@ -41,15 +41,16 @@ func verifyReleaseState(t *testing.T, environment migrationharness.Environment) 
 			database string
 			level    string
 		}{
-			{database: "configdb", level: "2.0.0:clean"},
-			{database: "entitydb", level: "1.0.0:clean"},
-			{database: "runtime_transient", level: "1.0.0:clean"},
-			{database: "runtime_persistent", level: "2.0.0:clean"},
+			{database: "configdb", level: "2.0.0:complete:clean"},
+			{database: "entitydb", level: "1.0.0:complete:clean"},
+			{database: "runtime_transient", level: "1.0.0:complete:clean"},
+			{database: "runtime_persistent", level: "2.0.0:complete:clean"},
 		}
 		for _, expected := range expectedLevels {
 			db := environment.OpenDatabase(t, expected.database)
 			migrationharness.AssertQueryValue(t, db,
-				`SELECT COMPLETED_LEVEL || ':' || STATUS FROM "MIGRATION_STATE" WHERE STORE_ID = $1`,
+				`SELECT COMPLETED_LEVEL || ':' || STAGE || ':' || STATUS
+				FROM "MIGRATION_STATE" WHERE STORE_ID = $1`,
 				expected.level,
 				expected.database,
 			)

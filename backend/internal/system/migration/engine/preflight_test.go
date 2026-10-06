@@ -64,16 +64,17 @@ func (o readinessTestOperation) PostVerify(
 func TestPlanContextDescribesPrecedingOperations(t *testing.T) {
 	plan := MigrationPlan{
 		TargetVersion: "2.0.0",
-		Operations: []Operation{
+		Expand: []Operation{
 			testOperation{definition: OperationDefinition{ID: "first"}},
 			testOperation{definition: OperationDefinition{ID: "second"}},
-			testOperation{definition: OperationDefinition{ID: "third"}},
 		},
+		Migrate: []Operation{testOperation{definition: OperationDefinition{ID: "third"}}},
 	}
 
 	planContext := newPlanContext(plan, 2)
 
 	assert.Equal(t, "2.0.0", planContext.TargetVersion())
+	assert.Equal(t, OperationPhaseMigrate, planContext.Phase())
 	assert.Equal(t, 2, planContext.OperationIndex())
 	assert.Equal(t, []OperationID{"first", "second"}, planContext.PrecedingOperationIDs())
 	assert.True(t, planContext.Precedes("first"))
@@ -260,9 +261,9 @@ func TestPreflightCheckerAggregatesReadinessAndDependencyFailures(t *testing.T) 
 	}
 	release := ReleaseDefinition{Manifest: manifest, Plan: MigrationPlan{
 		TargetVersion: manifest.ReleaseVersion,
-		Operations:    []Operation{ready, blocked, deferred},
+		Migrate:       []Operation{ready, blocked, deferred},
 	}}
-	checker, err := newOperationReadinessChecker(release, map[StoreID]ReadStore{
+	checker, err := newReadinessEvaluator(release, map[StoreID]ReadStore{
 		StoreIDEntityDB: {
 			DatabaseType: DatabaseTypePostgres,
 			Client:       providermock.NewDBClientInterfaceMock(t),
@@ -299,9 +300,9 @@ func TestPreflightCheckerConvertsCheckErrorsAndInvalidResultsToBlockers(t *testi
 	}
 	release := ReleaseDefinition{Manifest: manifest, Plan: MigrationPlan{
 		TargetVersion: manifest.ReleaseVersion,
-		Operations:    []Operation{checkFailure, invalidResult},
+		Migrate:       []Operation{checkFailure, invalidResult},
 	}}
-	checker, err := newOperationReadinessChecker(release, map[StoreID]ReadStore{
+	checker, err := newReadinessEvaluator(release, map[StoreID]ReadStore{
 		StoreIDEntityDB: {
 			DatabaseType: DatabaseTypePostgres,
 			Client:       providermock.NewDBClientInterfaceMock(t),
@@ -321,7 +322,7 @@ func TestPreflightCheckerConvertsCheckErrorsAndInvalidResultsToBlockers(t *testi
 
 func TestPreflightCheckerAcceptsEmptyPlan(t *testing.T) {
 	manifest := validTestManifest()
-	checker, err := newOperationReadinessChecker(ReleaseDefinition{
+	checker, err := newReadinessEvaluator(ReleaseDefinition{
 		Manifest: manifest,
 		Plan:     MigrationPlan{TargetVersion: manifest.ReleaseVersion},
 	}, nil)
@@ -331,6 +332,23 @@ func TestPreflightCheckerAcceptsEmptyPlan(t *testing.T) {
 
 	assert.True(t, report.Ready())
 	assert.Empty(t, report.Operations)
+}
+
+func TestReadinessEvaluatorDefaultsOperationWithoutCheckerToReady(t *testing.T) {
+	manifest := changedStoreManifest(StoreIDEntityDB)
+	release := ReleaseDefinition{Manifest: manifest, Plan: MigrationPlan{
+		TargetVersion: manifest.ReleaseVersion,
+		Migrate:       []Operation{validPlanOperation(StoreIDEntityDB)},
+	}}
+	evaluator, err := newReadinessEvaluator(release, nil)
+	require.NoError(t, err)
+
+	report := evaluator.check(context.Background())
+
+	assert.True(t, report.Ready())
+	require.Len(t, report.Operations, 1)
+	assert.Equal(t, ReadinessReady, report.Operations[0].State)
+	assert.Equal(t, "No additional operation readiness check is required", report.Operations[0].Summary)
 }
 
 func TestMigrationPreflightCheckerAcceptsSourceAndRunsAffectedOperations(t *testing.T) {
@@ -344,7 +362,7 @@ func TestMigrationPreflightCheckerAcceptsSourceAndRunsAffectedOperations(t *test
 		},
 	}
 	release := ReleaseDefinition{Manifest: manifest, Plan: MigrationPlan{
-		TargetVersion: manifest.ReleaseVersion, Operations: []Operation{operation},
+		TargetVersion: manifest.ReleaseVersion, Migrate: []Operation{operation},
 	}}
 	metadataStores, stores := preflightStores(t, manifest, map[StoreID]string{
 		StoreIDEntityDB: "1.0.0",
@@ -373,7 +391,7 @@ func TestMigrationPreflightCheckerSkipsOperationsWhenStoreIsBlocked(t *testing.T
 		},
 	}
 	release := ReleaseDefinition{Manifest: manifest, Plan: MigrationPlan{
-		TargetVersion: manifest.ReleaseVersion, Operations: []Operation{operation},
+		TargetVersion: manifest.ReleaseVersion, Migrate: []Operation{operation},
 	}}
 	metadataStores, stores := preflightStores(t, manifest, map[StoreID]string{
 		StoreIDEntityDB: "0.9.0",
@@ -418,7 +436,7 @@ func TestMigrationPreflightCheckerContinuesIndependentOperations(t *testing.T) {
 	}
 	release := ReleaseDefinition{Manifest: manifest, Plan: MigrationPlan{
 		TargetVersion: manifest.ReleaseVersion,
-		Operations:    []Operation{configOperation, entityOperation},
+		Migrate:       []Operation{configOperation, entityOperation},
 	}}
 	metadataStores, stores := preflightStores(t, manifest, map[StoreID]string{
 		StoreIDConfigDB: "0.9.0",

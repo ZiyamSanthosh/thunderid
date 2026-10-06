@@ -112,6 +112,7 @@ func (i *Initializer) Initialize(ctx context.Context, storeIDs []StoreID) ([]Ini
 				StoreID:         requirement.ID,
 				MetadataVersion: i.manifest.MigrationMetadataVersion,
 				CompletedLevel:  levelForMissingRows[requirement.ID],
+				Stage:           MigrationStageComplete,
 				Status:          StatusClean,
 				UpdatedAt:       initializedAt,
 			}

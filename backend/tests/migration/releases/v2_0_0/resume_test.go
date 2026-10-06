@@ -21,7 +21,7 @@ func verifyResumeAfterFinalizationFailure(t *testing.T, environment migrationhar
 		for _, database := range []string{"configdb", "runtime_persistent"} {
 			db := environment.OpenDatabase(t, database)
 			result, err := db.Exec(`UPDATE "MIGRATION_STATE" AS state
-                SET COMPLETED_LEVEL = '1.0.0', TARGET_LEVEL = '2.0.0', STATUS = 'failed',
+				SET COMPLETED_LEVEL = '1.0.0', TARGET_LEVEL = '2.0.0', STAGE = 'expanding', STATUS = 'failed',
                     ACTIVE_RUN_ID = (
                         SELECT progress.RUN_ID FROM "MIGRATION_PROGRESS" AS progress
                         WHERE progress.MIGRATION_STATE_ID = state.ID LIMIT 1
@@ -91,7 +91,7 @@ func prepareAbandonedStore(t *testing.T, db *sql.DB, storeID string) {
 		WHERE MIGRATION_STATE_ID = (SELECT ID FROM "MIGRATION_STATE" WHERE STORE_ID = $1)`, storeID)
 	require.NoError(t, err)
 	result, err := tx.Exec(`UPDATE "MIGRATION_STATE"
-		SET COMPLETED_LEVEL = '1.0.0', TARGET_LEVEL = '2.0.0', STATUS = 'in_progress',
+		SET COMPLETED_LEVEL = '1.0.0', TARGET_LEVEL = '2.0.0', STAGE = 'expanding', STATUS = 'in_progress',
 			ACTIVE_RUN_ID = $1, FAILURE_SUMMARY = NULL, UPDATED_AT = NOW()
 		WHERE STORE_ID = $2`, abandonedRunID, storeID)
 	require.NoError(t, err)

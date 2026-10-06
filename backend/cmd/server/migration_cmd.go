@@ -92,15 +92,18 @@ func runMigrationCommand(
 	cfg *config.Config,
 	dbProvider dbprovider.DBProviderInterface,
 ) (*migrationCommandResult, error) {
-	if len(args) != 2 || args[0] != migrationSubcommand {
-		return nil, errors.New("usage: thunderid migration <initialize|status|check|apply|resume>")
+	if len(args) < 2 || len(args) > 3 || args[0] != migrationSubcommand {
+		return nil, errors.New(migrationCommandUsage())
 	}
 	if args[1] != migrationInitializeAction && args[1] != migrationStatusAction &&
 		args[1] != migrationCheckAction && args[1] != migrationApplyAction &&
 		args[1] != migrationResumeAction {
 		return nil, fmt.Errorf(
-			"unsupported migration action %q; usage: thunderid migration <initialize|status|check|apply|resume>",
-			args[1])
+			"unsupported migration action %q; %s", args[1], migrationCommandUsage())
+	}
+	phase, err := migrationCommandPhase(args)
+	if err != nil {
+		return nil, err
 	}
 	if cfg == nil {
 		return nil, fmt.Errorf("run migration %s: configuration is required", args[1])
@@ -141,7 +144,7 @@ func runMigrationCommand(
 		}
 		return result, nil
 	case migrationCheckAction:
-		report, err := runMigrationCheck(ctx, *releaseDefinition, namespaces)
+		report, err := runMigrationCheck(ctx, *releaseDefinition, namespaces, phase)
 		if err != nil {
 			return nil, err
 		}
@@ -151,7 +154,7 @@ func runMigrationCommand(
 		}
 		return result, nil
 	case migrationApplyAction:
-		application, err := runMigrationApply(ctx, *releaseDefinition, namespaces)
+		application, err := runMigrationApply(ctx, *releaseDefinition, namespaces, phase)
 		result := &migrationCommandResult{action: args[1], application: &application}
 		if err != nil {
 			return result, err
@@ -166,6 +169,26 @@ func runMigrationCommand(
 		return result, nil
 	default:
 		return nil, fmt.Errorf("unsupported migration action %q", args[1])
+	}
+}
+
+func migrationCommandUsage() string {
+	return "usage: thunderid migration <initialize|status|check|apply|resume> [expand|migrate|contract]"
+}
+
+func migrationCommandPhase(args []string) (engine.OperationPhase, error) {
+	if len(args) == 2 {
+		return engine.OperationPhaseExpand, nil
+	}
+	if args[1] != migrationCheckAction && args[1] != migrationApplyAction {
+		return "", fmt.Errorf("migration action %q does not accept a phase; %s", args[1], migrationCommandUsage())
+	}
+	phase := engine.OperationPhase(args[2])
+	switch phase {
+	case engine.OperationPhaseExpand, engine.OperationPhaseMigrate, engine.OperationPhaseContract:
+		return phase, nil
+	default:
+		return "", fmt.Errorf("unsupported migration phase %q; %s", args[2], migrationCommandUsage())
 	}
 }
 
@@ -193,6 +216,7 @@ func runMigrationApply(
 	ctx context.Context,
 	release engine.ReleaseDefinition,
 	namespaces []migrationNamespace,
+	phase engine.OperationPhase,
 ) (engine.MigrationRunResult, error) {
 	executionNamespaces, err := migrationExecutionNamespaces(namespaces, "apply")
 	if err != nil {
@@ -203,7 +227,7 @@ func runMigrationApply(
 	if err != nil {
 		return engine.MigrationRunResult{}, fmt.Errorf("create migration coordinator: %w", err)
 	}
-	result, err := coordinator.Apply(ctx, engine.MigrationSelection{})
+	result, err := coordinator.ApplyPhase(ctx, phase, engine.MigrationSelection{})
 	if err != nil {
 		return result, fmt.Errorf("apply migration: %w", err)
 	}
@@ -341,6 +365,7 @@ func runMigrationCheck(
 	ctx context.Context,
 	release engine.ReleaseDefinition,
 	namespaces []migrationNamespace,
+	phase engine.OperationPhase,
 ) (engine.PreflightReport, error) {
 	metadataStores, stores, err := migrationReadResources(namespaces)
 	if err != nil {
@@ -350,7 +375,7 @@ func runMigrationCheck(
 	if err != nil {
 		return engine.PreflightReport{}, fmt.Errorf("create migration preflight checker: %w", err)
 	}
-	return checker.Check(ctx, metadataStores), nil
+	return checker.CheckPhase(ctx, metadataStores, phase)
 }
 
 func migrationReadResources(

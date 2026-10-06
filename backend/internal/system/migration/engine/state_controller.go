@@ -78,8 +78,22 @@ func (r *MigrationStateController) Reserve(
 	storeIDs []StoreID,
 	runID string,
 ) ([]ReservationResult, error) {
+	return r.ReservePhase(ctx, storeIDs, OperationPhaseExpand, runID)
+}
+
+// ReservePhase assigns the requested stores to one phase run within a namespace transaction.
+func (r *MigrationStateController) ReservePhase(
+	ctx context.Context,
+	storeIDs []StoreID,
+	phase OperationPhase,
+	runID string,
+) ([]ReservationResult, error) {
 	if !isUUIDv7(runID) {
 		return nil, errors.New("reserve migration stores: run ID must be a canonical UUIDv7")
+	}
+	executionStage, err := executionStageForPhase(phase)
+	if err != nil {
+		return nil, fmt.Errorf("reserve migration stores: %w", err)
 	}
 	requirements, err := r.requirementsFor(storeIDs)
 	if err != nil {
@@ -90,6 +104,10 @@ func (r *MigrationStateController) Reserve(
 	err = r.transactioner.Transact(ctx, func(txCtx context.Context) error {
 		reservedAt := r.now()
 		for _, requirement := range requirements {
+			phasePlan, err := phasePlanForStore(r.plan, requirement.ID, phase)
+			if err != nil {
+				return err
+			}
 			state, err := r.metadataStore.GetState(txCtx, requirement.ID)
 			if err != nil {
 				return err
@@ -101,10 +119,6 @@ func (r *MigrationStateController) Reserve(
 				return fmt.Errorf("reserve migration store %q: metadata version %d is not supported",
 					requirement.ID, state.MetadataVersion)
 			}
-			if state.Status != StatusClean {
-				return fmt.Errorf("reserve migration store %q: status is %q instead of %q",
-					requirement.ID, state.Status, StatusClean)
-			}
 			if state.CompletedLevel == requirement.RequiredLevel {
 				results = append(results, ReservationResult{State: *state, AlreadyAtTarget: true})
 				continue
@@ -114,8 +128,24 @@ func (r *MigrationStateController) Reserve(
 					requirement.ID, state.CompletedLevel, requirement.AcceptedSourceLevel, requirement.RequiredLevel)
 			}
 
-			reserved, err := r.metadataStore.ReserveState(
-				txCtx, *state, requirement.RequiredLevel, runID, reservedAt)
+			if err := validatePhaseBoundary(
+				requirement.ID, phase, phasePlan.previous, requirement.RequiredLevel, state); err != nil {
+				return err
+			}
+
+			reserved := false
+			if phasePlan.previous == "" {
+				reserved, err = r.metadataStore.ReserveState(
+					txCtx, *state, requirement.RequiredLevel, executionStage, runID, reservedAt)
+			} else {
+				next := *state
+				next.Stage = executionStage
+				next.Status = StatusInProgress
+				next.ActiveRunID = runID
+				next.FailureSummary = ""
+				next.UpdatedAt = reservedAt
+				reserved, err = r.metadataStore.TransitionState(txCtx, *state, next)
+			}
 			if err != nil {
 				return err
 			}
@@ -123,6 +153,7 @@ func (r *MigrationStateController) Reserve(
 				return fmt.Errorf("%w for store %q", ErrReservationConflict, requirement.ID)
 			}
 			state.TargetLevel = requirement.RequiredLevel
+			state.Stage = executionStage
 			state.Status = StatusInProgress
 			state.ActiveRunID = runID
 			state.FailureSummary = ""
@@ -190,19 +221,42 @@ func (r *MigrationStateController) CancelReservations(
 				return fmt.Errorf("cancel migration reservation for store %q: state is not reserved by this run",
 					state.StoreID)
 			}
-			changed, err := r.metadataStore.CancelState(txCtx, state, updatedAt)
+			phase, err := phaseForExecutionStage(state.Stage)
+			if err != nil {
+				return fmt.Errorf("cancel migration reservation for store %q: %w", state.StoreID, err)
+			}
+			phasePlan, err := phasePlanForStore(r.plan, state.StoreID, phase)
+			if err != nil {
+				return err
+			}
+			cancelledState := state
+			var changed bool
+			if phasePlan.previous == "" {
+				changed, err = r.metadataStore.CancelState(txCtx, state, updatedAt)
+				cancelledState.TargetLevel = ""
+				cancelledState.Stage = MigrationStageComplete
+				cancelledState.Status = StatusClean
+			} else {
+				cancelledState.Stage, err = completedStageBeforePhase(phase)
+				if err != nil {
+					return err
+				}
+				cancelledState.Status = StatusCompleted
+				cancelledState.ActiveRunID = ""
+				cancelledState.FailureSummary = ""
+				cancelledState.UpdatedAt = updatedAt
+				changed, err = r.metadataStore.CancelPhaseState(txCtx, state, cancelledState)
+			}
 			if err != nil {
 				return err
 			}
 			if !changed {
 				return fmt.Errorf("%w while cancelling store %q", ErrRunStateConflict, state.StoreID)
 			}
-			state.TargetLevel = ""
-			state.Status = StatusClean
-			state.ActiveRunID = ""
-			state.FailureSummary = ""
-			state.UpdatedAt = updatedAt
-			cancelled = append(cancelled, state)
+			cancelledState.ActiveRunID = ""
+			cancelledState.FailureSummary = ""
+			cancelledState.UpdatedAt = updatedAt
+			cancelled = append(cancelled, cancelledState)
 			seen[state.StoreID] = struct{}{}
 		}
 		return nil
@@ -340,10 +394,24 @@ func (r *MigrationStateController) Finalize(
 	storeID StoreID,
 	runID string,
 ) (FinalizationResult, error) {
+	return r.CompletePhase(ctx, storeID, OperationPhaseExpand, runID)
+}
+
+// CompletePhase verifies phase-local operation progress and advances the store to its next boundary.
+func (r *MigrationStateController) CompletePhase(
+	ctx context.Context,
+	storeID StoreID,
+	phase OperationPhase,
+	runID string,
+) (FinalizationResult, error) {
 	if !isUUIDv7(runID) {
 		return FinalizationResult{}, errors.New("finalize migration store: run ID must be a canonical UUIDv7")
 	}
-	requirement, expectedProgress, err := r.finalizationRequirements(storeID)
+	requirement, expectedProgress, err := r.finalizationRequirements(storeID, phase)
+	if err != nil {
+		return FinalizationResult{}, err
+	}
+	phasePlan, err := phasePlanForStore(r.plan, storeID, phase)
 	if err != nil {
 		return FinalizationResult{}, err
 	}
@@ -364,6 +432,14 @@ func (r *MigrationStateController) Finalize(
 		if err := validateFinalizationReservation(storeID, state, runID); err != nil {
 			return err
 		}
+		expectedStage, err := executionStageForPhase(phase)
+		if err != nil {
+			return err
+		}
+		if state.Stage != expectedStage {
+			return fmt.Errorf("finalize migration store %q: stage is %q instead of %q",
+				storeID, state.Stage, expectedStage)
+		}
 		if state.TargetLevel != requirement.RequiredLevel {
 			return fmt.Errorf("finalize migration store %q: target level %q does not match required level %q",
 				storeID, state.TargetLevel, requirement.RequiredLevel)
@@ -377,16 +453,38 @@ func (r *MigrationStateController) Finalize(
 			return err
 		}
 		finalizedAt := r.now()
-		finalized, err := r.metadataStore.FinalizeState(txCtx, *state, finalizedAt)
+		finalized := false
+		completedStage := MigrationStageComplete
+		if phasePlan.next == "" {
+			finalized, err = r.metadataStore.FinalizeState(txCtx, *state, finalizedAt)
+		} else {
+			next := *state
+			completedStage, err = completedStageBeforePhase(phasePlan.next)
+			if err != nil {
+				return err
+			}
+			next.Stage = completedStage
+			next.Status = StatusCompleted
+			next.ActiveRunID = ""
+			next.FailureSummary = ""
+			next.UpdatedAt = finalizedAt
+			finalized, err = r.metadataStore.TransitionState(txCtx, *state, next)
+		}
 		if err != nil {
 			return err
 		}
 		if !finalized {
 			return fmt.Errorf("%w for store %q", ErrFinalizationConflict, storeID)
 		}
-		state.CompletedLevel = state.TargetLevel
-		state.TargetLevel = ""
-		state.Status = StatusClean
+		if phasePlan.next == "" {
+			state.CompletedLevel = state.TargetLevel
+			state.TargetLevel = ""
+			state.Stage = MigrationStageComplete
+			state.Status = StatusClean
+		} else {
+			state.Stage = completedStage
+			state.Status = StatusCompleted
+		}
 		state.ActiveRunID = ""
 		state.FailureSummary = ""
 		state.UpdatedAt = finalizedAt
@@ -397,6 +495,109 @@ func (r *MigrationStateController) Finalize(
 		return FinalizationResult{}, fmt.Errorf("finalize migration store %q: %w", storeID, err)
 	}
 	return result, nil
+}
+
+type storePhasePlan struct {
+	previous OperationPhase
+	next     OperationPhase
+}
+
+func phasePlanForStore(
+	plan MigrationPlan,
+	storeID StoreID,
+	phase OperationPhase,
+) (storePhasePlan, error) {
+	if _, err := executionStageForPhase(phase); err != nil {
+		return storePhasePlan{}, err
+	}
+	phases := []OperationPhase{OperationPhaseExpand, OperationPhaseMigrate, OperationPhaseContract}
+	declared := make([]OperationPhase, 0, len(phases))
+	for _, candidate := range phases {
+		operations, _ := plan.OperationsForPhase(candidate)
+		for _, operation := range operations {
+			if operation.Definition().StoreID == storeID {
+				declared = append(declared, candidate)
+				break
+			}
+		}
+	}
+	for index, candidate := range declared {
+		if candidate != phase {
+			continue
+		}
+		result := storePhasePlan{}
+		if index > 0 {
+			result.previous = declared[index-1]
+		}
+		if index+1 < len(declared) {
+			result.next = declared[index+1]
+		}
+		return result, nil
+	}
+	return storePhasePlan{}, fmt.Errorf(
+		"migration store %q has no %q operations", storeID, phase)
+}
+
+func executionStageForPhase(phase OperationPhase) (MigrationStage, error) {
+	switch phase {
+	case OperationPhaseExpand:
+		return MigrationStageExpanding, nil
+	case OperationPhaseMigrate:
+		return MigrationStageMigrating, nil
+	case OperationPhaseContract:
+		return MigrationStageContracting, nil
+	default:
+		return "", fmt.Errorf("unsupported operation phase %q", phase)
+	}
+}
+
+func phaseForExecutionStage(stage MigrationStage) (OperationPhase, error) {
+	switch stage {
+	case MigrationStageExpanding:
+		return OperationPhaseExpand, nil
+	case MigrationStageMigrating:
+		return OperationPhaseMigrate, nil
+	case MigrationStageContracting:
+		return OperationPhaseContract, nil
+	default:
+		return "", fmt.Errorf("unsupported executing migration stage %q", stage)
+	}
+}
+
+func completedStageBeforePhase(phase OperationPhase) (MigrationStage, error) {
+	switch phase {
+	case OperationPhaseMigrate:
+		return MigrationStageExpanded, nil
+	case OperationPhaseContract:
+		return MigrationStageContractReady, nil
+	default:
+		return "", fmt.Errorf("operation phase %q has no preceding completed stage", phase)
+	}
+}
+
+func validatePhaseBoundary(
+	storeID StoreID,
+	phase OperationPhase,
+	previousPhase OperationPhase,
+	targetLevel string,
+	state *State,
+) error {
+	if previousPhase == "" {
+		if state.Stage != MigrationStageComplete || state.Status != StatusClean || state.TargetLevel != "" {
+			return fmt.Errorf("reserve migration store %q: first phase requires a clean complete state", storeID)
+		}
+		return nil
+	}
+	expectedStage, err := completedStageBeforePhase(phase)
+	if err != nil {
+		return err
+	}
+	if state.Stage != expectedStage || state.Status != StatusCompleted || state.TargetLevel != targetLevel {
+		return fmt.Errorf(
+			"reserve migration store %q: phase after %q requires stage %q, status %q and target level %q",
+			storeID, previousPhase, expectedStage, StatusCompleted, targetLevel)
+	}
+	return nil
 }
 
 func validateFinalizationReservation(storeID StoreID, state *State, runID string) error {
@@ -412,6 +613,7 @@ func validateFinalizationReservation(storeID StoreID, state *State, runID string
 
 func (r *MigrationStateController) finalizationRequirements(
 	storeID StoreID,
+	phase OperationPhase,
 ) (StoreRequirement, map[string]int, error) {
 	var requirement StoreRequirement
 	found := false
@@ -430,8 +632,11 @@ func (r *MigrationStateController) finalizationRequirements(
 	}
 
 	expected := make(map[string]int)
-	for index, operation := range r.plan.Operations {
-		definition := operation.Definition()
+	for index, planned := range r.plan.plannedOperations() {
+		definition := planned.operation.Definition()
+		if planned.phase != phase {
+			continue
+		}
 		if definition.StoreID != storeID {
 			continue
 		}

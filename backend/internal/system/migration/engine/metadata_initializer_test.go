@@ -32,8 +32,9 @@ func TestInitializerCreatesFixedPreFrameworkBaseline(t *testing.T) {
 	stateIDs := []string{testStateID, "0199a123-4570-7abc-8def-0123456789ab"}
 	for index, storeID := range []StoreID{StoreIDConfigDB, StoreIDEntityDB} {
 		dbClient.On("ExecuteContext", mock.Anything, queryInsertMigrationState,
-			stateIDs[index], string(storeID), 1, preFrameworkBaselineLevel, nil, string(StatusClean), nil, nil,
-			initializedAt).Return(int64(1), nil).Once()
+			stateIDs[index], string(storeID), 1, preFrameworkBaselineLevel, nil,
+			string(MigrationStageComplete), string(StatusClean), nil, nil, initializedAt).
+			Return(int64(1), nil).Once()
 	}
 
 	transactioner := &testTransactioner{}
@@ -61,8 +62,9 @@ func TestInitializerRegistersManifestTargetInExistingSchema(t *testing.T) {
 		Return([]map[string]interface{}{}, nil).Once()
 	initializedAt := time.Date(2026, time.September, 30, 11, 0, 0, 0, time.UTC)
 	dbClient.On("ExecuteContext", mock.Anything, queryInsertMigrationState,
-		testStateID, string(StoreIDConfigDB), 1, manifest.ReleaseVersion, nil, string(StatusClean), nil, nil,
-		initializedAt).Return(int64(1), nil).Once()
+		testStateID, string(StoreIDConfigDB), 1, manifest.ReleaseVersion, nil,
+		string(MigrationStageComplete), string(StatusClean), nil, nil, initializedAt).
+		Return(int64(1), nil).Once()
 
 	initializer := newTestInitializer(t, manifest, dbClient, &testTransactioner{})
 	initializer.now = func() time.Time { return initializedAt }
