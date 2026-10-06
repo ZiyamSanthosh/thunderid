@@ -13,10 +13,11 @@ import (
 	"github.com/thunder-id/thunderid/pkg/thunderidengine/providers"
 )
 
-// AtomicExecutionResult describes the completed execution of one atomic operation.
-type AtomicExecutionResult struct {
+// OperationExecutionResult describes the completed execution of one operation.
+type OperationExecutionResult struct {
 	Progress         Progress
 	ExecutionSkipped bool
+	CommittedBatches int
 }
 
 // AtomicOperationExecutor runs one operation target and its progress update in one transaction.
@@ -56,53 +57,53 @@ func NewAtomicOperationExecutor(
 // Execute runs one newly reserved atomic operation and records its completed progress.
 func (e *AtomicOperationExecutor) Execute(
 	ctx context.Context,
-	operation Operation,
+	operation AtomicOperation,
 	selection MigrationSelection,
 	runID string,
 	operationOrder int,
-) (AtomicExecutionResult, error) {
+) (OperationExecutionResult, error) {
 	if operation == nil {
-		return AtomicExecutionResult{}, errors.New("execute atomic operation: operation is required")
+		return OperationExecutionResult{}, errors.New("execute atomic operation: operation is required")
 	}
 	if !isUUIDv7(runID) {
-		return AtomicExecutionResult{}, errors.New("execute atomic operation: run ID must be a canonical UUIDv7")
+		return OperationExecutionResult{}, errors.New("execute atomic operation: run ID must be a canonical UUIDv7")
 	}
 	if operationOrder < 0 {
-		return AtomicExecutionResult{}, errors.New("execute atomic operation: operation order cannot be negative")
+		return OperationExecutionResult{}, errors.New("execute atomic operation: operation order cannot be negative")
 	}
 	definition := operation.Definition()
 	if definition.InterruptionMode != InterruptionModeAtomic {
-		return AtomicExecutionResult{}, fmt.Errorf("execute operation %q: interruption mode must be atomic", definition.ID)
+		return OperationExecutionResult{}, fmt.Errorf("execute operation %q: interruption mode must be atomic", definition.ID)
 	}
 
 	readAccess, err := newOperationReadAccess(definition, e.stores)
 	if err != nil {
-		return AtomicExecutionResult{}, fmt.Errorf("execute operation %q: %w", definition.ID, err)
+		return OperationExecutionResult{}, fmt.Errorf("execute operation %q: %w", definition.ID, err)
 	}
 	targets, err := operation.ResolveTargets(ctx, readAccess, selection)
 	if err != nil {
-		return AtomicExecutionResult{}, err
+		return OperationExecutionResult{}, err
 	}
 	if err := validateExecutionTargets(definition, targets); err != nil {
-		return AtomicExecutionResult{}, err
+		return OperationExecutionResult{}, err
 	}
 	if len(targets) != 1 {
-		return AtomicExecutionResult{}, fmt.Errorf(
+		return OperationExecutionResult{}, fmt.Errorf(
 			"execute operation %q: basic atomic executor requires exactly one execution target", definition.ID)
 	}
 	target := targets[0]
 	if target.DeploymentID != "" {
-		return AtomicExecutionResult{}, fmt.Errorf(
+		return OperationExecutionResult{}, fmt.Errorf(
 			"execute operation %q: basic atomic executor does not support deployment-targeted execution",
 			definition.ID)
 	}
 
 	progressID, err := e.newID()
 	if err != nil {
-		return AtomicExecutionResult{}, fmt.Errorf("execute operation %q: generate progress ID: %w", definition.ID, err)
+		return OperationExecutionResult{}, fmt.Errorf("execute operation %q: generate progress ID: %w", definition.ID, err)
 	}
 
-	result := AtomicExecutionResult{}
+	result := OperationExecutionResult{}
 	err = e.transactioner.Transact(ctx, func(txCtx context.Context) error {
 		state, err := e.metadataStore.GetState(txCtx, definition.StoreID)
 		if err != nil {
@@ -170,7 +171,7 @@ func (e *AtomicOperationExecutor) Execute(
 		return nil
 	})
 	if err != nil {
-		return AtomicExecutionResult{}, fmt.Errorf("execute atomic operation %q: %w", definition.ID, err)
+		return OperationExecutionResult{}, fmt.Errorf("execute atomic operation %q: %w", definition.ID, err)
 	}
 	return result, nil
 }

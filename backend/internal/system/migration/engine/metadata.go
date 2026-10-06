@@ -48,7 +48,7 @@ const (
 	MigrationStageMigrating MigrationStage = "migrating"
 	// MigrationStageContractReady means that target serving is ready and contract awaits explicit execution.
 	MigrationStageContractReady MigrationStage = "contract_ready"
-	// MigrationStageContracting means that explicitly authorized cleanup is running.
+	// MigrationStageContracting means that explicitly initiated cleanup is running.
 	MigrationStageContracting MigrationStage = "contracting"
 )
 

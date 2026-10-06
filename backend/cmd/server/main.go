@@ -331,7 +331,8 @@ func logMigrationApplication(
 		logger.Info(ctx, "Migration operation completed",
 			log.String("operation", execution.Progress.OperationID),
 			log.String("runID", execution.Progress.RunID),
-			log.Bool("executionSkipped", execution.ExecutionSkipped))
+			log.Bool("executionSkipped", execution.ExecutionSkipped),
+			log.Int("committedBatches", execution.CommittedBatches))
 	}
 	for _, finalization := range result.Finalizations {
 		logger.Info(ctx, "Migration store finalized",

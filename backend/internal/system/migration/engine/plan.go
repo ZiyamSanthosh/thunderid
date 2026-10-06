@@ -5,6 +5,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -66,8 +67,25 @@ type Operation interface {
 	Definition() OperationDefinition
 	ResolveTargets(context.Context, ReadAccess, MigrationSelection) ([]ExecutionTarget, error)
 	PreVerify(context.Context, ReadAccess, ExecutionTarget) (VerificationResult, error)
-	Execute(context.Context, OperationExecution) error
 	PostVerify(context.Context, ReadAccess, ExecutionTarget) (VerificationResult, error)
+}
+
+// AtomicOperation completes one target in a single transaction.
+type AtomicOperation interface {
+	Operation
+	Execute(context.Context, OperationExecution) error
+}
+
+// ResumableBatchResult describes the durable outcome of one committed operation batch.
+type ResumableBatchResult struct {
+	CheckpointData json.RawMessage
+	Completed      bool
+}
+
+// ResumableOperation advances one target through bounded independently committed batches.
+type ResumableOperation interface {
+	Operation
+	ExecuteBatch(context.Context, OperationExecution, json.RawMessage) (ResumableBatchResult, error)
 }
 
 // ReadinessChecker optionally reports operation-specific prerequisites before execution begins.
@@ -216,6 +234,18 @@ func validateMigrationPlan(manifest ReleaseManifest, plan MigrationPlan) error {
 			return fmt.Errorf("%s operation at index %d: %w",
 				planned.phase, planned.index, err)
 		}
+		switch definition.InterruptionMode {
+		case InterruptionModeAtomic:
+			if _, ok := operation.(AtomicOperation); !ok {
+				return fmt.Errorf("operation %q declares atomic execution but does not implement AtomicOperation",
+					definition.ID)
+			}
+		case InterruptionModeResumable:
+			if _, ok := operation.(ResumableOperation); !ok {
+				return fmt.Errorf("operation %q declares resumable execution but does not implement ResumableOperation",
+					definition.ID)
+			}
+		}
 		if _, supportsRollback := operation.(RollbackCapableOperation); supportsRollback &&
 			definition.InterruptionMode == InterruptionModeAtomic {
 			return fmt.Errorf("operation %q: atomic operations cannot define rollback behavior", definition.ID)
@@ -262,6 +292,10 @@ func validateOperationDefinition(
 		definition.InterruptionMode != InterruptionModeResumable {
 		return fmt.Errorf("operation %q has unsupported interruption mode %q",
 			definition.ID, definition.InterruptionMode)
+	}
+	if definition.InterruptionMode == InterruptionModeResumable &&
+		definition.Kind != OperationKindDataChange {
+		return fmt.Errorf("operation %q: resumable execution requires a data-change operation", definition.ID)
 	}
 	readStores := make(map[StoreID]struct{}, len(definition.ReadStoreIDs))
 	for _, storeID := range definition.ReadStoreIDs {

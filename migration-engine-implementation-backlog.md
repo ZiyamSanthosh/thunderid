@@ -47,6 +47,9 @@ The current implementation contains:
 - an atomic complete-store executor that reuses ThunderID's transactioner to verify reservation
   ownership, pre-verify, execute or skip, post-verify and complete operation progress in one
   transaction;
+- a resumable complete-store executor that commits bounded data batches independently, persists
+  each checkpoint in the same transaction as its data changes, rejects checkpoints that do not
+  advance and continues an interrupted operation from its last committed checkpoint;
 - transactional store finalization that validates completed operation progress and conditionally
   advances only the run's still-reserved store to its target level;
 - conditional run-state recovery primitives that cancel unused reservations before execution and
@@ -96,7 +99,8 @@ The current implementation contains:
 - a Docker Compose PostgreSQL integration test that builds the target ThunderID binary, obtains the
   configured source release schema from its published image, initializes all four logical
   databases, executes the complete migration twice and verifies schema and metadata outcomes in
-  both separate-database and single-shared-database layouts;
+  both separate-database and single-shared-database layouts, including interruption after a
+  committed resumable batch and continuation from its persisted checkpoint;
 - provider-neutral namespace and metadata-store selection, with PostgreSQL currently registered
   as the only implementation;
 - minimal structural database constraints; and
@@ -174,9 +178,8 @@ These capabilities belong to the second implementation phase, after the basic en
   catch-up and verification, while an advanced mode requires verified dual-read or partial-data
   compatibility;
 - capability fencing and restricted-mode behavior;
-- bounded and throttled backfills;
-- a resumable executor that persists target checkpoints and invokes optional operation rollback after execution or
-  immediate post-verification failure;
+- configurable backfill throttling and resource limits;
+- optional operation rollback after resumable execution or immediate post-verification failure;
 - programmatic operations wired with the normal ThunderID services they explicitly require;
 - change capture for every affected record set that remains writable during backfill, including but
   not limited to login and token-related data;

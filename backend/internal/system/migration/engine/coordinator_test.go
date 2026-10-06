@@ -5,6 +5,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -596,6 +597,113 @@ func TestMigrationCoordinatorResumesAbandonedInProgressRun(t *testing.T) {
 	assert.Equal(t, 2, transactioner.calls)
 }
 
+func TestMigrationCoordinatorRecognizesResumableOperationCheckpoint(t *testing.T) {
+	manifest := changedStoreManifest(StoreIDConfigDB)
+	operation := validPlanOperation(StoreIDConfigDB)
+	operation.definition.InterruptionMode = InterruptionModeResumable
+	release := ReleaseDefinition{Manifest: manifest, Plan: MigrationPlan{
+		TargetVersion: manifest.ReleaseVersion,
+		Expand:        []Operation{resumableTestOperation{testOperation: operation}},
+	}}
+	dbClient := providermock.NewDBClientInterfaceMock(t)
+	updatedAt := time.Date(2026, time.October, 6, 13, 0, 0, 0, time.UTC)
+	for _, requirement := range manifest.Stores {
+		row := coordinatorStateRow(requirement.ID, requirement.RequiredLevel,
+			StatusClean, "", "", updatedAt)
+		if requirement.ID == StoreIDConfigDB {
+			row = coordinatorStateRow(requirement.ID, requirement.AcceptedSourceLevel,
+				StatusFailed, requirement.RequiredLevel, testRunID, updatedAt)
+			row["failure_summary"] = "migration interrupted"
+		}
+		dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(requirement.ID)).
+			Return([]map[string]interface{}{row}, nil).Once()
+	}
+	progressRow := completedProgressRow(operation.Definition().ID, 0, manifest.ReleaseVersion, updatedAt)
+	progressRow["status"] = string(StatusInProgress)
+	progressRow["checkpoint_data"] = `{"lastID":"500"}`
+	dbClient.On("QueryContext", mock.Anything, queryListMigrationProgress, testStateID, testRunID).
+		Return([]map[string]interface{}{progressRow}, nil).Once()
+	coordinator := newTestMigrationCoordinator(t, release, dbClient, &testTransactioner{})
+
+	resume, err := coordinator.inspectResumableRun(context.Background())
+
+	require.NoError(t, err)
+	progress, exists := resume.resumableProgress[operation.Definition().ID]
+	require.True(t, exists)
+	assert.Equal(t, StatusInProgress, progress.Status)
+	assert.JSONEq(t, `{"lastID":"500"}`, string(progress.CheckpointData))
+	assert.Empty(t, resume.completedOperations)
+}
+
+func TestMigrationCoordinatorResumesOperationFromCheckpoint(t *testing.T) {
+	manifest := changedStoreManifest(StoreIDConfigDB)
+	baseOperation := validPlanOperation(StoreIDConfigDB)
+	baseOperation.definition.InterruptionMode = InterruptionModeResumable
+	operation := &scriptedResumableOperation{
+		definition: baseOperation.definition,
+		batches: []ResumableBatchResult{{
+			CheckpointData: json.RawMessage(`{"lastID":"750"}`), Completed: true,
+		}},
+	}
+	release := ReleaseDefinition{Manifest: manifest, Plan: MigrationPlan{
+		TargetVersion: manifest.ReleaseVersion,
+		Expand:        []Operation{operation},
+	}}
+	dbClient := providermock.NewDBClientInterfaceMock(t)
+	updatedAt := time.Date(2026, time.October, 6, 14, 0, 0, 0, time.UTC)
+	failedRow := coordinatorStateRow(StoreIDConfigDB, "1.0.0", StatusFailed,
+		manifest.ReleaseVersion, testRunID, updatedAt)
+	failedRow["failure_summary"] = "migration interrupted"
+	for _, requirement := range manifest.Stores {
+		row := coordinatorStateRow(requirement.ID, requirement.RequiredLevel,
+			StatusClean, "", "", updatedAt)
+		if requirement.ID == StoreIDConfigDB {
+			row = failedRow
+		}
+		dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(requirement.ID)).
+			Return([]map[string]interface{}{row}, nil).Once()
+	}
+	inProgress := completedProgressRow(operation.Definition().ID, 0, manifest.ReleaseVersion, updatedAt)
+	inProgress["status"] = string(StatusInProgress)
+	inProgress["checkpoint_data"] = `{"lastID":"500"}`
+	dbClient.On("QueryContext", mock.Anything, queryListMigrationProgress, testStateID, testRunID).
+		Return([]map[string]interface{}{inProgress}, nil).Once()
+	dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(StoreIDConfigDB)).
+		Return([]map[string]interface{}{failedRow}, nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryResumeMigrationState,
+		string(StatusInProgress), mock.Anything, testStateID, string(StoreIDConfigDB), 1,
+		"1.0.0", manifest.ReleaseVersion, string(MigrationStageExpanding), string(StatusFailed), testRunID,
+		"migration interrupted", updatedAt).Return(int64(1), nil).Once()
+	expectReservedState(dbClient, StoreIDConfigDB, manifest.ReleaseVersion, testRunID, updatedAt)
+	dbClient.On("ExecuteContext", mock.Anything, queryUpdateMigrationProgress,
+		string(StatusCompleted), `{"lastID":"750"}`, updatedAt,
+		testProgressID, testStateID, testRunID).Return(int64(1), nil).Once()
+	expectReservedState(dbClient, StoreIDConfigDB, manifest.ReleaseVersion, testRunID, updatedAt)
+	completed := completedProgressRow(operation.Definition().ID, 0, manifest.ReleaseVersion, updatedAt)
+	completed["checkpoint_data"] = `{"lastID":"750"}`
+	dbClient.On("QueryContext", mock.Anything, queryListMigrationProgress, testStateID, testRunID).
+		Return([]map[string]interface{}{completed}, nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryFinalizeMigrationState,
+		manifest.ReleaseVersion, string(MigrationStageComplete), string(StatusClean), mock.Anything,
+		testStateID, string(StoreIDConfigDB), 1, "1.0.0", string(MigrationStageExpanding),
+		string(StatusInProgress), testRunID).Return(int64(1), nil).Once()
+	transactioner := &testTransactioner{}
+	coordinator := newTestMigrationCoordinator(t, release, dbClient, transactioner)
+	coordinator.namespaces[0].resumableExecutor.now = func() time.Time { return updatedAt }
+
+	result, err := coordinator.Resume(context.Background())
+
+	require.NoError(t, err)
+	require.Len(t, result.Operations, 1)
+	assert.Equal(t, 1, result.Operations[0].CommittedBatches)
+	assert.JSONEq(t, `{"lastID":"750"}`, string(result.Operations[0].Progress.CheckpointData))
+	require.Len(t, operation.checkpoints, 1)
+	assert.JSONEq(t, `{"lastID":"500"}`, string(operation.checkpoints[0]))
+	require.Len(t, result.Finalizations, 1)
+	assert.True(t, result.Finalizations[0].Finalized)
+	assert.Equal(t, 3, transactioner.calls)
+}
+
 func TestMigrationCoordinatorResumeAcceptsStoreThatCompletedTheActivePhase(t *testing.T) {
 	manifest := changedStoreManifest(StoreIDConfigDB)
 	for index := range manifest.Stores {
@@ -675,7 +783,7 @@ func TestMigrationCoordinatorRefusesResumeWithoutResumableRun(t *testing.T) {
 	assert.Empty(t, result.RunID)
 }
 
-func TestNewMigrationCoordinatorValidatesNamespaceCoverageAndBasicOperations(t *testing.T) {
+func TestNewMigrationCoordinatorValidatesNamespaceCoverageAndOperationExecutors(t *testing.T) {
 	release := coordinatorTestRelease()
 	dbClient := providermock.NewDBClientInterfaceMock(t)
 	transactioner := &testTransactioner{}
@@ -689,11 +797,11 @@ func TestNewMigrationCoordinatorValidatesNamespaceCoverageAndBasicOperations(t *
 		Client: dbClient, Transactioner: transactioner,
 	}})
 
-	unsupportedRelease := release
-	unsupportedOperation := validPlanOperation(StoreIDConfigDB)
-	unsupportedOperation.definition.InterruptionMode = InterruptionModeResumable
-	unsupportedRelease.Plan.Expand = []Operation{unsupportedOperation}
-	_, unsupportedOperationErr := NewMigrationCoordinator(unsupportedRelease, []MigrationNamespace{{
+	resumableRelease := release
+	resumableOperation := validPlanOperation(StoreIDConfigDB)
+	resumableOperation.definition.InterruptionMode = InterruptionModeResumable
+	resumableRelease.Plan.Expand = []Operation{resumableTestOperation{testOperation: resumableOperation}}
+	resumableCoordinator, resumableErr := NewMigrationCoordinator(resumableRelease, []MigrationNamespace{{
 		StoreIDs: append([]StoreID(nil), supportedStoreIDs...), DatabaseType: DatabaseTypePostgres,
 		Client: dbClient, Transactioner: transactioner, Locker: testMigrationExecutionLocker{},
 	}})
@@ -710,8 +818,8 @@ func TestNewMigrationCoordinatorValidatesNamespaceCoverageAndBasicOperations(t *
 	assert.ErrorContains(t, missingNamespaceErr, "has no database namespace")
 	require.Error(t, missingLockerErr)
 	assert.ErrorContains(t, missingLockerErr, "execution locker is required")
-	require.Error(t, unsupportedOperationErr)
-	assert.ErrorContains(t, unsupportedOperationErr, "not supported by the basic executor")
+	require.NoError(t, resumableErr)
+	assert.NotNil(t, resumableCoordinator)
 	require.NoError(t, phaseErr)
 	assert.NotNil(t, phaseCoordinator)
 }

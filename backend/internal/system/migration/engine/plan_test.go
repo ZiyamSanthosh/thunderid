@@ -5,6 +5,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -15,8 +16,20 @@ type testOperation struct {
 	definition OperationDefinition
 }
 
-type rollbackTestOperation struct {
+type resumableTestOperation struct {
 	testOperation
+}
+
+func (resumableTestOperation) ExecuteBatch(
+	context.Context,
+	OperationExecution,
+	json.RawMessage,
+) (ResumableBatchResult, error) {
+	return ResumableBatchResult{Completed: true}, nil
+}
+
+type rollbackTestOperation struct {
+	resumableTestOperation
 }
 
 func (rollbackTestOperation) Rollback(context.Context, OperationExecution, error) error {
@@ -110,7 +123,9 @@ func TestPlanRegistryAcceptsOptionalRollbackForResumableOperation(t *testing.T) 
 
 	registry, err := NewPlanRegistry(manifest, MigrationPlan{
 		TargetVersion: manifest.ReleaseVersion,
-		Expand:        []Operation{rollbackTestOperation{testOperation: operation}},
+		Expand: []Operation{rollbackTestOperation{
+			resumableTestOperation: resumableTestOperation{testOperation: operation},
+		}},
 	})
 
 	require.NoError(t, err)
@@ -179,9 +194,20 @@ func TestPlanRegistryRejectsInvalidPlan(t *testing.T) {
 			name: "rollback on atomic operation",
 			mutate: func(_ *ReleaseManifest, plan *MigrationPlan) {
 				operation := plan.Expand[0].(testOperation)
-				plan.Expand[0] = rollbackTestOperation{testOperation: operation}
+				plan.Expand[0] = rollbackTestOperation{
+					resumableTestOperation: resumableTestOperation{testOperation: operation},
+				}
 			},
 			errorMatch: "atomic operations cannot define rollback behavior",
+		},
+		{
+			name: "resumable declaration without implementation",
+			mutate: func(_ *ReleaseManifest, plan *MigrationPlan) {
+				operation := plan.Expand[0].(testOperation)
+				operation.definition.InterruptionMode = InterruptionModeResumable
+				plan.Expand[0] = operation
+			},
+			errorMatch: "does not implement ResumableOperation",
 		},
 	}
 
@@ -227,6 +253,10 @@ func TestPlanRegistryRejectsInvalidOperationDefinition(t *testing.T) {
 		{name: "invalid interruption mode", mutate: func(definition *OperationDefinition) {
 			definition.InterruptionMode = "unknown"
 		}, errorMatch: "interruption mode"},
+		{name: "resumable schema change", mutate: func(definition *OperationDefinition) {
+			definition.Kind = OperationKindSchemaChange
+			definition.InterruptionMode = InterruptionModeResumable
+		}, errorMatch: "resumable execution requires a data-change operation"},
 		{name: "unknown read store", mutate: func(definition *OperationDefinition) {
 			definition.ReadStoreIDs = []StoreID{"unknown"}
 		}, errorMatch: "reads undeclared"},

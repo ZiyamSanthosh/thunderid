@@ -32,6 +32,7 @@ func runPostgresMigrationSuite(t *testing.T, configFile string) {
 	verifyResumeAfterFinalizationFailure(t, environment)
 	verifyResumeAbandonedRun(t, environment)
 	verifyConcurrentMigrationRejected(t, environment)
+	verifyResumableBackfill(t, environment)
 }
 
 func verifyReleaseState(t *testing.T, environment migrationharness.Environment) {

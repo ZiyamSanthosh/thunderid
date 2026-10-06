@@ -44,7 +44,7 @@ type MigrationRunResult struct {
 	Preflight       PreflightReport
 	Reservations    []ReservationResult
 	Resumptions     []ResumeResult
-	Operations      []AtomicExecutionResult
+	Operations      []OperationExecutionResult
 	Finalizations   []FinalizationResult
 	AlreadyAtTarget bool
 	Resumed         bool
@@ -61,16 +61,18 @@ type migrationResumeContext struct {
 	activeStores        map[StoreID]struct{}
 	failedByNamespace   map[int][]State
 	completedOperations map[OperationID]struct{}
+	resumableProgress   map[OperationID]Progress
 	storeAssessments    []StoreMigrationAssessment
 }
 
 type migrationNamespaceRuntime struct {
-	storeIDs      []StoreID
-	metadataStore *MetadataStore
-	transactioner providers.Transactioner
-	locker        MigrationExecutionLocker
-	controller    *MigrationStateController
-	executor      *AtomicOperationExecutor
+	storeIDs          []StoreID
+	metadataStore     *MetadataStore
+	transactioner     providers.Transactioner
+	locker            MigrationExecutionLocker
+	controller        *MigrationStateController
+	atomicExecutor    *AtomicOperationExecutor
+	resumableExecutor *ResumableOperationExecutor
 }
 
 // MigrationCoordinator owns the complete basic migration run across all database namespaces.
@@ -96,14 +98,6 @@ func NewMigrationCoordinator(
 	}
 
 	plan := registry.Plan()
-	for _, operation := range plan.Operations() {
-		definition := operation.Definition()
-		if definition.InterruptionMode != InterruptionModeAtomic {
-			return nil, fmt.Errorf(
-				"create migration coordinator: operation %q is not supported by the basic executor",
-				definition.ID)
-		}
-	}
 
 	requirements := make(map[StoreID]int, len(release.Manifest.Stores))
 	for index, requirement := range release.Manifest.Stores {
@@ -177,8 +171,14 @@ func NewMigrationCoordinator(
 		if err != nil {
 			return nil, err
 		}
+		resumableExecutor, err := NewResumableOperationExecutor(
+			runtimes[index].metadataStore, runtimes[index].transactioner, stores)
+		if err != nil {
+			return nil, err
+		}
 		runtimes[index].controller = controller
-		runtimes[index].executor = executor
+		runtimes[index].atomicExecutor = executor
+		runtimes[index].resumableExecutor = resumableExecutor
 	}
 
 	return &MigrationCoordinator{
@@ -358,8 +358,8 @@ func (c *MigrationCoordinator) applyPhase(
 			continue
 		}
 		namespaceIndex := namespaceByStore[definition.StoreID]
-		execution, executeErr := c.namespaces[namespaceIndex].executor.Execute(
-			ctx, operation, selection, runID, operationOrder)
+		execution, executeErr := c.executeOperation(
+			ctx, namespaceIndex, operation, selection, runID, operationOrder, nil)
 		if executeErr != nil {
 			return result, errors.Join(executeErr, c.markFailed(ctx, reservedStores, runID, executeErr))
 		}
@@ -446,8 +446,14 @@ func (c *MigrationCoordinator) resume(ctx context.Context) (MigrationRunResult, 
 		}
 		namespaceIndex := namespaceByStore[definition.StoreID]
 		if _, completed := resume.completedOperations[definition.ID]; !completed {
-			execution, executeErr := c.namespaces[namespaceIndex].executor.Execute(
-				ctx, operation, MigrationSelection{}, resume.runID, operationOrder)
+			progress, hasProgress := resume.resumableProgress[definition.ID]
+			var existingProgress *Progress
+			if hasProgress {
+				existingProgress = &progress
+			}
+			execution, executeErr := c.executeOperation(
+				ctx, namespaceIndex, operation, MigrationSelection{}, resume.runID, operationOrder,
+				existingProgress)
 			if executeErr != nil {
 				return result, errors.Join(executeErr,
 					c.markFailed(ctx, resume.activeStores, resume.runID, executeErr))
@@ -468,6 +474,48 @@ func (c *MigrationCoordinator) resume(ctx context.Context) (MigrationRunResult, 
 	return result, nil
 }
 
+func (c *MigrationCoordinator) executeOperation(
+	ctx context.Context,
+	namespaceIndex int,
+	operation Operation,
+	selection MigrationSelection,
+	runID string,
+	operationOrder int,
+	progress *Progress,
+) (OperationExecutionResult, error) {
+	definition := operation.Definition()
+	switch definition.InterruptionMode {
+	case InterruptionModeAtomic:
+		if progress != nil {
+			return OperationExecutionResult{}, fmt.Errorf(
+				"execute operation %q: atomic operation cannot have resumable progress", definition.ID)
+		}
+		atomicOperation, ok := operation.(AtomicOperation)
+		if !ok {
+			return OperationExecutionResult{}, fmt.Errorf(
+				"execute operation %q: operation does not implement AtomicOperation", definition.ID)
+		}
+		return c.namespaces[namespaceIndex].atomicExecutor.Execute(
+			ctx, atomicOperation, selection, runID, operationOrder)
+	case InterruptionModeResumable:
+		resumableOperation, ok := operation.(ResumableOperation)
+		if !ok {
+			return OperationExecutionResult{}, fmt.Errorf(
+				"execute operation %q: operation does not implement ResumableOperation", definition.ID)
+		}
+		if progress != nil {
+			return c.namespaces[namespaceIndex].resumableExecutor.Resume(
+				ctx, resumableOperation, selection, *progress)
+		}
+		return c.namespaces[namespaceIndex].resumableExecutor.Execute(
+			ctx, resumableOperation, selection, runID, operationOrder)
+	default:
+		return OperationExecutionResult{}, fmt.Errorf(
+			"execute operation %q: unsupported interruption mode %q",
+			definition.ID, definition.InterruptionMode)
+	}
+}
+
 func (c *MigrationCoordinator) withExecutionLocks(
 	ctx context.Context,
 	namespaceIndex int,
@@ -486,6 +534,7 @@ func (c *MigrationCoordinator) inspectResumableRun(ctx context.Context) (migrati
 		activeStores:        make(map[StoreID]struct{}),
 		failedByNamespace:   make(map[int][]State),
 		completedOperations: make(map[OperationID]struct{}),
+		resumableProgress:   make(map[OperationID]Progress),
 		storeAssessments:    make([]StoreMigrationAssessment, 0, len(c.release.Manifest.Stores)),
 	}
 	namespaceByStore := c.namespaceIndexes()
@@ -611,8 +660,9 @@ func (c *MigrationCoordinator) inspectCompletedProgress(
 	states map[StoreID]State,
 ) error {
 	operations := make(map[string]struct {
-		storeID StoreID
-		order   int
+		storeID   StoreID
+		order     int
+		operation Operation
 	}, len(c.plan.Operations()))
 	for _, planned := range c.plan.plannedOperations() {
 		if planned.phase != resume.phase {
@@ -620,10 +670,12 @@ func (c *MigrationCoordinator) inspectCompletedProgress(
 		}
 		definition := planned.operation.Definition()
 		operations[string(definition.ID)] = struct {
-			storeID StoreID
-			order   int
-		}{storeID: definition.StoreID, order: planned.order}
+			storeID   StoreID
+			order     int
+			operation Operation
+		}{storeID: definition.StoreID, order: planned.order, operation: planned.operation}
 	}
+	seenProgress := make(map[OperationID]struct{})
 	for storeID, state := range states {
 		namespaceIndex := c.namespaceIndexes()[storeID]
 		progress, err := c.namespaces[namespaceIndex].metadataStore.ListProgress(ctx, state.ID, resume.runID)
@@ -637,19 +689,35 @@ func (c *MigrationCoordinator) inspectCompletedProgress(
 					storeID, item.OperationID)
 			}
 			if item.RunID != resume.runID || item.MigrationStateID != state.ID ||
-				item.TargetLevel != state.TargetLevel || item.Status != StatusCompleted {
-				return fmt.Errorf("inspect migration resume progress for store %q: operation %q is not completed for the active run",
+				item.TargetLevel != state.TargetLevel {
+				return fmt.Errorf("inspect migration resume progress for store %q: operation %q does not match the active run",
 					storeID, item.OperationID)
 			}
 			operationID := OperationID(item.OperationID)
-			if _, duplicate := resume.completedOperations[operationID]; duplicate {
+			if _, duplicate := seenProgress[operationID]; duplicate {
 				return fmt.Errorf("inspect migration resume progress: operation %q is duplicated", item.OperationID)
 			}
-			resume.completedOperations[operationID] = struct{}{}
+			seenProgress[operationID] = struct{}{}
+			switch item.Status {
+			case StatusCompleted:
+				resume.completedOperations[operationID] = struct{}{}
+			case StatusInProgress:
+				if expected.operation.Definition().InterruptionMode != InterruptionModeResumable {
+					return fmt.Errorf(
+						"inspect migration resume progress for store %q: atomic operation %q is in progress",
+						storeID, item.OperationID)
+				}
+				resume.resumableProgress[operationID] = item
+			default:
+				return fmt.Errorf(
+					"inspect migration resume progress for store %q: operation %q has unsupported status %q",
+					storeID, item.OperationID, item.Status)
+			}
 		}
 	}
 	for storeID := range states {
 		pendingFound := false
+		activeFound := false
 		for _, planned := range c.plan.plannedOperations() {
 			if planned.phase != resume.phase {
 				continue
@@ -659,14 +727,23 @@ func (c *MigrationCoordinator) inspectCompletedProgress(
 				continue
 			}
 			_, completed := resume.completedOperations[definition.ID]
-			if !completed {
-				pendingFound = true
+			if completed {
+				if pendingFound {
+					return fmt.Errorf(
+						"inspect migration resume progress for store %q: completed operations are not a plan prefix",
+						storeID)
+				}
 				continue
 			}
-			if pendingFound {
-				return fmt.Errorf("inspect migration resume progress for store %q: completed operations are not a plan prefix",
-					storeID)
+			if _, active := resume.resumableProgress[definition.ID]; active {
+				if activeFound || pendingFound {
+					return fmt.Errorf(
+						"inspect migration resume progress for store %q: in-progress operation is not the first pending operation",
+						storeID)
+				}
+				activeFound = true
 			}
+			pendingFound = true
 		}
 	}
 	return nil
