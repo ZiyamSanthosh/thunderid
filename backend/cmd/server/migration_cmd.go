@@ -113,7 +113,7 @@ func runMigrationCommand(
 		return nil, fmt.Errorf("run migration %s: database provider is required", args[1])
 	}
 
-	releaseDefinition, err := current.Definition()
+	releaseDefinition, err := current.DefinitionWithDependencies(current.Dependencies{})
 	if err != nil {
 		return nil, fmt.Errorf("run migration %s: %w", args[1], err)
 	}

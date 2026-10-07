@@ -39,6 +39,22 @@ func TestDefinitionMatchesProductVersion(t *testing.T) {
 	}
 }
 
+func TestDefinitionWithDependenciesMatchesDefaultDefinition(t *testing.T) {
+	defaultDefinition, err := Definition()
+	require.NoError(t, err)
+	dependencyDefinition, err := DefinitionWithDependencies(Dependencies{})
+	require.NoError(t, err)
+
+	assert.Equal(t, defaultDefinition.Manifest, dependencyDefinition.Manifest)
+	assert.Equal(t, defaultDefinition.Plan.TargetVersion, dependencyDefinition.Plan.TargetVersion)
+	require.Len(t, dependencyDefinition.Plan.Expand, len(defaultDefinition.Plan.Expand))
+	for index := range defaultDefinition.Plan.Expand {
+		assert.Equal(t,
+			defaultDefinition.Plan.Expand[index].Definition(),
+			dependencyDefinition.Plan.Expand[index].Definition())
+	}
+}
+
 func TestFreshRuntimePersistentSchemasDoNotRestrictRevocationReasons(t *testing.T) {
 	for _, path := range []string{
 		"../../../../../dbscripts/runtime_persistent/postgres.sql",

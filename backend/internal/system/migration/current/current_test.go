@@ -18,6 +18,14 @@ func TestDefinitionSelectsVersion2(t *testing.T) {
 	assert.Equal(t, "2.0.0", definition.Plan.TargetVersion)
 }
 
+func TestDefinitionForwardsDependenciesToCurrentRelease(t *testing.T) {
+	definition, err := DefinitionWithDependencies(Dependencies{})
+
+	require.NoError(t, err)
+	assert.Equal(t, "2.0.0", definition.Manifest.ReleaseVersion)
+	assert.Equal(t, "2.0.0", definition.Plan.TargetVersion)
+}
+
 func TestCatalogContainsCurrentRelease(t *testing.T) {
 	catalog, err := Catalog()
 
