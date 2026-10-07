@@ -702,9 +702,40 @@ func (c AuthZENPDPConfig) Validate() error {
 	return nil
 }
 
+// APIAccessMode controls which HTTP API surface the server exposes.
+type APIAccessMode string
+
+const (
+	// APIAccessModeFull exposes the complete API surface.
+	APIAccessModeFull APIAccessMode = "full"
+	// APIAccessModeLoginOnly exposes only the endpoints required for login and token operations.
+	APIAccessModeLoginOnly APIAccessMode = "login_only"
+)
+
+// APIAccessConfig holds the server API access mode.
+type APIAccessConfig struct {
+	Mode APIAccessMode `yaml:"mode" json:"mode"`
+}
+
+// IsLoginOnly reports whether the server is restricted to login and token operations.
+func (c APIAccessConfig) IsLoginOnly() bool {
+	return c.Mode == APIAccessModeLoginOnly
+}
+
+// Validate checks that the configured API access mode is supported.
+func (c APIAccessConfig) Validate() error {
+	switch c.Mode {
+	case "", APIAccessModeFull, APIAccessModeLoginOnly:
+		return nil
+	default:
+		return fmt.Errorf("unsupported API access mode %q", c.Mode)
+	}
+}
+
 // Config holds the complete configuration details of the server.
 type Config struct {
 	Server               engineconfig.ServerConfig         `yaml:"server"                json:"server"`
+	APIAccess            APIAccessConfig                   `yaml:"api_access"            json:"api_access"`
 	Gateway              GatewayConfig                     `yaml:"gateway"               json:"gateway"`
 	AuthZENPDP           AuthZENPDPConfig                  `yaml:"authzen_pdp"           json:"authzen_pdp"`
 	Log                  LogConfig                         `yaml:"log"                   json:"log"`
@@ -856,6 +887,9 @@ func LoadConfig(configPath string, defaultPath string, serverHome string) (*Conf
 		return nil, err
 	}
 	if err := cfg.AuthZENPDP.Validate(); err != nil {
+		return nil, err
+	}
+	if err := cfg.APIAccess.Validate(); err != nil {
 		return nil, err
 	}
 

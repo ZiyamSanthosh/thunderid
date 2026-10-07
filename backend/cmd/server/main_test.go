@@ -92,6 +92,32 @@ func TestCreateHTTPServer_WithHTTPOnly(t *testing.T) {
 	assert.NotZero(t, server.IdleTimeout)
 }
 
+func TestCreateHTTPServer_LoginOnlyModeRestrictsManagementAPI(t *testing.T) {
+	logger := log.GetLogger()
+	cfg := &config.Config{
+		Server: engineconfig.ServerConfig{
+			Hostname: "localhost",
+			Port:     0,
+			HTTPOnly: true,
+		},
+		APIAccess: config.APIAccessConfig{Mode: config.APIAccessModeLoginOnly},
+	}
+
+	managementHandlerCalled := false
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /applications", func(w http.ResponseWriter, _ *http.Request) {
+		managementHandlerCalled = true
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	server := createHTTPServer(context.Background(), logger, cfg, mux, nil, nil)
+	recorder := httptest.NewRecorder()
+	server.Handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/applications", nil))
+
+	assert.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+	assert.False(t, managementHandlerCalled)
+}
+
 func TestCreateListener_Success(t *testing.T) {
 	logger := log.GetLogger()
 	server := &http.Server{
