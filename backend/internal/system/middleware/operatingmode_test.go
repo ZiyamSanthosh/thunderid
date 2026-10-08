@@ -11,11 +11,11 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestAPIAccessModeMiddlewareFullMode(t *testing.T) {
+func TestRestrictedModeMiddlewareDisabled(t *testing.T) {
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	handler := APIAccessModeMiddleware(false)(next)
+	handler := RestrictedModeMiddleware(false)(next)
 
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodDelete, "/applications/example", nil))
@@ -23,7 +23,7 @@ func TestAPIAccessModeMiddlewareFullMode(t *testing.T) {
 	assert.Equal(t, http.StatusNoContent, recorder.Code)
 }
 
-func TestAPIAccessModeMiddlewareLoginOnlyMode(t *testing.T) {
+func TestRestrictedModeMiddlewareEnabled(t *testing.T) {
 	tests := []struct {
 		name       string
 		path       string
@@ -50,7 +50,7 @@ func TestAPIAccessModeMiddlewareLoginOnlyMode(t *testing.T) {
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	handler := APIAccessModeMiddleware(true)(next)
+	handler := RestrictedModeMiddleware(true)(next)
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -60,8 +60,8 @@ func TestAPIAccessModeMiddlewareLoginOnlyMode(t *testing.T) {
 			assert.Equal(t, tt.wantStatus, recorder.Code)
 			if tt.wantStatus == http.StatusServiceUnavailable {
 				assert.JSONEq(t, `{
-					"error": "api_restricted",
-					"error_description": "The requested API is unavailable while ThunderID is in login-only mode."
+					"error": "feature_unavailable",
+					"error_description": "The requested feature is unavailable while ThunderID is in restricted mode."
 				}`, recorder.Body.String())
 			}
 		})

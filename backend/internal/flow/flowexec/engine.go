@@ -20,6 +20,7 @@ import (
 	"github.com/thunder-id/thunderid/internal/flow/executor"
 	"github.com/thunder-id/thunderid/internal/flow/graphbuilder"
 	"github.com/thunder-id/thunderid/internal/flow/session"
+	"github.com/thunder-id/thunderid/internal/system/featuregate"
 	"github.com/thunder-id/thunderid/internal/system/log"
 	"github.com/thunder-id/thunderid/internal/system/observability/event"
 	sysutils "github.com/thunder-id/thunderid/internal/system/utils"
@@ -40,6 +41,7 @@ type flowEngine struct {
 	observabilitySvc  providers.ObservabilityProvider
 	flowProvider      providers.FlowProvider
 	graphBuilder      graphbuilder.GraphBuilderInterface
+	featureGate       *featuregate.Gate
 	logger            *log.Logger
 }
 
@@ -50,6 +52,7 @@ func newFlowEngine(
 	observabilitySvc providers.ObservabilityProvider,
 	flowProvider providers.FlowProvider,
 	graphBuilder graphbuilder.GraphBuilderInterface,
+	featureGate *featuregate.Gate,
 ) flowEngineInterface {
 	return &flowEngine{
 		executorRegistry:  executorRegistry,
@@ -57,6 +60,7 @@ func newFlowEngine(
 		observabilitySvc:  observabilitySvc,
 		flowProvider:      flowProvider,
 		graphBuilder:      graphBuilder,
+		featureGate:       featureGate,
 		logger:            log.GetLogger().With(log.String(log.LoggerKeyComponentName, "FlowEngine")),
 	}
 }
@@ -1015,6 +1019,10 @@ func (fe *flowEngine) handleCallResponse(ctx *EngineContext,
 		logger.Error(ctx.Context, "Failed to build call target graph",
 			log.String("targetFlowID", nodeResp.CallTargetFlowID))
 		return nil, &tidcommon.InternalServerError
+	}
+	if required, ok := requiredFlowFeature(calleeGraph.GetType()); ok &&
+		!fe.featureGate.IsEnabled(required) {
+		return nil, &ErrorFlowFeatureDisabled
 	}
 
 	return fe.switchContextToCallee(ctx, nodeResp, calleeGraph, logger)

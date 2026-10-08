@@ -66,6 +66,12 @@ func (s *HandlerTestSuite) TestHandleFlowError_AdministrationAuthenticationRequi
 	s.Equal(http.StatusUnauthorized, w.Code)
 }
 
+func (s *HandlerTestSuite) TestHandleFlowError_FeatureDisabled_Returns503() {
+	w := httptest.NewRecorder()
+	handleFlowError(context.Background(), w, &ErrorFlowFeatureDisabled, "")
+	s.Equal(http.StatusServiceUnavailable, w.Code)
+}
+
 func (s *HandlerTestSuite) TestHandleFlowError_ServerError_Returns500() {
 	w := httptest.NewRecorder()
 	svcErr := &tidcommon.ServiceError{

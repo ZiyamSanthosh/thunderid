@@ -447,15 +447,16 @@ func accessLogExcludePaths(configured []string) []string {
 func createHTTPServer(ctx context.Context, logger *log.Logger, cfg *config.Config, mux *http.ServeMux,
 	jwtService jwt.JWTServiceInterface, revocationEnforcer revocationcache.EnforcerInterface) *http.Server {
 	securityMiddleware := createSecurityMiddleware(ctx, logger, cfg, mux, jwtService, revocationEnforcer)
-	apiAccessMiddleware := middleware.APIAccessModeMiddleware(cfg.APIAccess.IsLoginOnly())(securityMiddleware)
+	operatingModeMiddleware := middleware.RestrictedModeMiddleware(
+		cfg.OperatingMode.IsRestricted())(securityMiddleware)
 
 	// Build the middleware chain with proper execution order.
 	// Request flow: CorrelationID (outermost) -> DeploymentID -> SecurityHeaders -> AccessLog ->
-	// APIAccessMode -> Security -> Route Handler (innermost)
+	// RestrictedMode -> Security -> Route Handler (innermost)
 	// Note: Middlewares are wrapped in reverse order - the last added will execute first.
 	// The Gate and Console frontend paths are always excluded from the access log to keep it
 	// focused on API traffic. Additional prefixes can be excluded via log.access.exclude_paths.
-	handler := log.AccessLogHandler(logger, accessLogExcludePaths(cfg.Log.Access.ExcludePaths), apiAccessMiddleware)
+	handler := log.AccessLogHandler(logger, accessLogExcludePaths(cfg.Log.Access.ExcludePaths), operatingModeMiddleware)
 	handler = middleware.SecurityHeadersMiddleware()(handler)
 	// Outside the security layer, so that every request carries the deployment id it acts for by the
 	// time any store is reached.

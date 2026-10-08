@@ -92,7 +92,7 @@ func TestCreateHTTPServer_WithHTTPOnly(t *testing.T) {
 	assert.NotZero(t, server.IdleTimeout)
 }
 
-func TestCreateHTTPServer_LoginOnlyModeRestrictsManagementAPI(t *testing.T) {
+func TestCreateHTTPServer_RestrictedModeRestrictsManagementAPI(t *testing.T) {
 	logger := log.GetLogger()
 	cfg := &config.Config{
 		Server: engineconfig.ServerConfig{
@@ -100,7 +100,7 @@ func TestCreateHTTPServer_LoginOnlyModeRestrictsManagementAPI(t *testing.T) {
 			Port:     0,
 			HTTPOnly: true,
 		},
-		APIAccess: config.APIAccessConfig{Mode: config.APIAccessModeLoginOnly},
+		OperatingMode: config.OperatingModeRestricted,
 	}
 
 	managementHandlerCalled := false

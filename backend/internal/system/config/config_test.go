@@ -30,29 +30,28 @@ func TestAuthZENPDPDefaultsMergeAndValidation(t *testing.T) {
 	assert.Error(t, (AuthZENPDPConfig{RetryCount: &negative}).Validate())
 }
 
-func TestAPIAccessConfigValidation(t *testing.T) {
+func TestOperatingModeValidation(t *testing.T) {
 	tests := []struct {
 		name    string
-		mode    APIAccessMode
+		mode    OperatingMode
 		wantErr bool
 	}{
-		{name: "unset defaults to full access", mode: ""},
-		{name: "full", mode: APIAccessModeFull},
-		{name: "login only", mode: APIAccessModeLoginOnly},
+		{name: "unset defaults to normal", mode: ""},
+		{name: "full", mode: OperatingModeFull},
+		{name: "restricted", mode: OperatingModeRestricted},
 		{name: "unsupported", mode: "management_only", wantErr: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := APIAccessConfig{Mode: tt.mode}
-			err := cfg.Validate()
+			err := tt.mode.Validate()
 			if tt.wantErr {
 				assert.Error(t, err)
 				return
 			}
 
 			assert.NoError(t, err)
-			assert.Equal(t, tt.mode == APIAccessModeLoginOnly, cfg.IsLoginOnly())
+			assert.Equal(t, tt.mode == OperatingModeRestricted, tt.mode.IsRestricted())
 		})
 	}
 }

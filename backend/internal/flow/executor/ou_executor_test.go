@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
 
+	"github.com/thunder-id/thunderid/internal/system/featuregate"
 	"github.com/thunder-id/thunderid/internal/system/log"
 	"github.com/thunder-id/thunderid/tests/mocks/authnprovider/managermock"
 	"github.com/thunder-id/thunderid/tests/mocks/entitytypemock"
@@ -60,7 +61,7 @@ func (suite *OUExecutorTestSuite) SetupTest() {
 		Return(newMockExecutor("TestOUExecutor", providers.ExecutorTypeUtility, defaultInputs, []providers.Input{}))
 
 	suite.executor = newOUExecutor(
-		suite.mockFlowFactory, suite.mockOUService, suite.mockAuthnProvider, suite.mockEntityTypeService)
+		suite.mockFlowFactory, suite.mockOUService, suite.mockAuthnProvider, suite.mockEntityTypeService, nil)
 }
 
 // newMockExecutor creates a mock executor for testing purposes
@@ -124,7 +125,7 @@ func (suite *OUExecutorTestSuite) TestNewOUExecutor() {
 
 	mockAuthnProvider := managermock.NewAuthnProviderManagerMock(suite.T())
 	mockEntityTypeService := entitytypemock.NewEntityTypeServiceInterfaceMock(suite.T())
-	executor := newOUExecutor(mockFlowFactory, mockOUService, mockAuthnProvider, mockEntityTypeService)
+	executor := newOUExecutor(mockFlowFactory, mockOUService, mockAuthnProvider, mockEntityTypeService, nil)
 
 	assert.NotNil(suite.T(), executor)
 	assert.Equal(suite.T(), "OUExecutor", executor.GetName())
@@ -253,6 +254,44 @@ func (suite *OUExecutorTestSuite) TestExecute_NonRegistrationFlow() {
 			assert.Empty(suite.T(), result.RuntimeData[ouIDKey])
 		})
 	}
+}
+
+func (suite *OUExecutorTestSuite) TestExecute_AuthenticationFlowJITRestricted() {
+	suite.executor.featureGate = featuregate.NewGate(featuregate.OrganizationUnitCreation)
+	ctx := &providers.NodeContext{
+		ExecutionID: "flow-123",
+		FlowType:    providers.FlowTypeAuthentication,
+		UserInputs: map[string]string{
+			userInputOuName:   "Engineering",
+			userInputOuHandle: "engineering",
+		},
+	}
+
+	result, err := suite.executor.Execute(ctx)
+
+	assert.NoError(suite.T(), err)
+	assert.NotNil(suite.T(), result)
+	assert.Equal(suite.T(), providers.ExecFailure, result.Status)
+	assert.Equal(suite.T(), ErrOUCreationRestricted.Code, result.Error.Code)
+	suite.mockOUService.AssertNotCalled(suite.T(), "CreateOrganizationUnit", mock.Anything, mock.Anything)
+}
+
+func (suite *OUExecutorTestSuite) TestExecute_AuthenticationFlowExistingUserAllowed() {
+	suite.executor.featureGate = featuregate.NewGate(featuregate.OrganizationUnitCreation)
+	authUser := newAuthenticatedAuthUser()
+	expectEntityReferenceResolved(suite.mockAuthnProvider, authUser)
+	ctx := &providers.NodeContext{
+		ExecutionID: "flow-123",
+		FlowType:    providers.FlowTypeAuthentication,
+		AuthUser:    authUser,
+	}
+
+	result, err := suite.executor.Execute(ctx)
+
+	assert.NoError(suite.T(), err)
+	assert.NotNil(suite.T(), result)
+	assert.Equal(suite.T(), providers.ExecComplete, result.Status)
+	suite.mockOUService.AssertNotCalled(suite.T(), "CreateOrganizationUnit", mock.Anything, mock.Anything)
 }
 
 type ExecutePrerequisitesFailureTestCase struct {

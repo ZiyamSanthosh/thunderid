@@ -19,6 +19,7 @@ import (
 	"github.com/thunder-id/thunderid/internal/flow/core"
 	"github.com/thunder-id/thunderid/internal/group"
 	"github.com/thunder-id/thunderid/internal/role"
+	"github.com/thunder-id/thunderid/internal/system/featuregate"
 	"github.com/thunder-id/thunderid/internal/system/log"
 	systemutils "github.com/thunder-id/thunderid/internal/system/utils"
 )
@@ -45,6 +46,7 @@ type provisioningExecutor struct {
 	roleAssignmentService role.RoleAssignmentServiceInterface
 	entityTypeService     entitytype.EntityTypeServiceInterface
 	authnProvider         providers.AuthnProviderManager
+	featureGate           *featuregate.Gate
 	logger                *log.Logger
 }
 
@@ -62,6 +64,7 @@ func newProvisioningExecutor(
 	agentMgtProvider providers.AgentMgtProvider,
 	entityTypeService entitytype.EntityTypeServiceInterface,
 	authnProvider providers.AuthnProviderManager,
+	featureGate *featuregate.Gate,
 ) *provisioningExecutor {
 	logger := log.GetLogger().With(log.String(log.LoggerKeyComponentName, ExecutorNameProvisioning),
 		log.String(log.LoggerKeyExecutorName, ExecutorNameProvisioning))
@@ -101,6 +104,7 @@ func newProvisioningExecutor(
 		roleAssignmentService:        roleAssignmentService,
 		entityTypeService:            entityTypeService,
 		authnProvider:                authnProvider,
+		featureGate:                  featureGate,
 		logger:                       logger,
 	}
 }
@@ -186,6 +190,11 @@ func (p *provisioningExecutor) Execute(ctx *providers.NodeContext) (*providers.E
 		if !ok || eligible != dataValueTrue {
 			logger.Debug(ctx.Context, "Entity is not eligible for auto provisioning, skipping execution")
 			execResp.Status = providers.ExecComplete
+			return execResp, nil
+		}
+		if !p.featureGate.IsEnabled(featuregate.UserProvisioning) {
+			execResp.Status = providers.ExecFailure
+			execResp.Error = &ErrJITProvisionRestricted
 			return execResp, nil
 		}
 	}

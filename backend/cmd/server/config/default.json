@@ -20,9 +20,7 @@
       "direct_auth_secret": ""
     }
   },
-  "api_access": {
-    "mode": "full"
-  },
+  "operating_mode": "full",
   "gate_client": {
     "path": "/gate"
   },

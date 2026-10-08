@@ -32,6 +32,7 @@ import (
 	"github.com/thunder-id/thunderid/internal/system/cache"
 	"github.com/thunder-id/thunderid/internal/system/config"
 	"github.com/thunder-id/thunderid/internal/system/cryptolib"
+	"github.com/thunder-id/thunderid/internal/system/featuregate"
 	"github.com/thunder-id/thunderid/internal/system/kmprovider/defaultkm"
 	"github.com/thunder-id/thunderid/internal/system/log"
 	"github.com/thunder-id/thunderid/internal/system/security"
@@ -88,6 +89,35 @@ type ServiceTestSuite struct {
 
 func TestServiceTestSuite(t *testing.T) {
 	suite.Run(t, new(ServiceTestSuite))
+}
+
+func TestValidateFlowFeature(t *testing.T) {
+	service := &flowExecService{featureGate: featuregate.NewGate(
+		featuregate.UserRegistration,
+		featuregate.AccountRecovery,
+		featuregate.AdministrativeOperations,
+	)}
+
+	for _, flowType := range []providers.FlowType{
+		providers.FlowTypeRegistration,
+		providers.FlowTypeUserOnboarding,
+		providers.FlowTypeRecovery,
+		providers.FlowTypeAdministration,
+	} {
+		err := service.validateFlowFeature(flowType)
+		if assert.NotNil(t, err) {
+			assert.Equal(t, ErrorFlowFeatureDisabled.Code, err.Code)
+		}
+	}
+
+	assert.Nil(t, service.validateFlowFeature(providers.FlowTypeAuthentication))
+	assert.Nil(t, service.validateFlowFeature(providers.FlowTypeSignOut))
+}
+
+func TestValidateFlowFeatureWithoutGate(t *testing.T) {
+	service := &flowExecService{}
+
+	assert.Nil(t, service.validateFlowFeature(providers.FlowTypeRegistration))
 }
 
 func TestInitiateFlowNilContext(t *testing.T) {

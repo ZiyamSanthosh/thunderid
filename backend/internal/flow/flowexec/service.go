@@ -22,6 +22,7 @@ import (
 	"github.com/thunder-id/thunderid/internal/flow/session"
 	sysContext "github.com/thunder-id/thunderid/internal/system/context"
 	"github.com/thunder-id/thunderid/internal/system/cryptolib"
+	"github.com/thunder-id/thunderid/internal/system/featuregate"
 	"github.com/thunder-id/thunderid/internal/system/jose/jwt"
 	"github.com/thunder-id/thunderid/internal/system/log"
 	"github.com/thunder-id/thunderid/internal/system/observability/event"
@@ -50,6 +51,7 @@ type flowExecService struct {
 	attestationVerifier providers.AttestationProvider
 	jwtService          jwt.JWTServiceInterface
 	serverConfigSvc     serverConfigProvider
+	featureGate         *featuregate.Gate
 	cfg                 flowconfig.Config
 }
 
@@ -64,6 +66,7 @@ func newFlowExecService(flowProvider providers.FlowProvider,
 	graphBuilder graphbuilder.GraphBuilderInterface,
 	jwtService jwt.JWTServiceInterface,
 	serverConfigSvc serverConfigProvider,
+	featureGate *featuregate.Gate,
 	cfg flowconfig.Config) FlowExecServiceInterface {
 	return &flowExecService{
 		flowProvider:        flowProvider,
@@ -77,6 +80,7 @@ func newFlowExecService(flowProvider providers.FlowProvider,
 		graphBuilder:        graphBuilder,
 		jwtService:          jwtService,
 		serverConfigSvc:     serverConfigSvc,
+		featureGate:         featureGate,
 		cfg:                 cfg,
 	}
 }
@@ -147,6 +151,9 @@ func (s *flowExecService) execute(ctx context.Context, flowID, appID, executionI
 		// flow, not only the one that started it. New flows are gated inside loadNewContext, as soon
 		// as the flow type is known and before any lookup work is done on the caller's behalf.
 		if svcErr := validateAdministrationCaller(ctx, engineCtx.FlowType); svcErr != nil {
+			return nil, svcErr
+		}
+		if svcErr := s.validateFlowFeature(engineCtx.FlowType); svcErr != nil {
 			return nil, svcErr
 		}
 	}
@@ -286,6 +293,30 @@ func validateAdministrationCaller(ctx context.Context, flowType providers.FlowTy
 	return nil
 }
 
+func (s *flowExecService) validateFlowFeature(flowType providers.FlowType) *tidcommon.ServiceError {
+	required, ok := requiredFlowFeature(flowType)
+	if !ok {
+		return nil
+	}
+	if s.featureGate.IsEnabled(required) {
+		return nil
+	}
+	return &ErrorFlowFeatureDisabled
+}
+
+func requiredFlowFeature(flowType providers.FlowType) (featuregate.Feature, bool) {
+	switch flowType {
+	case providers.FlowTypeRegistration, providers.FlowTypeUserOnboarding:
+		return featuregate.UserRegistration, true
+	case providers.FlowTypeRecovery:
+		return featuregate.AccountRecovery, true
+	case providers.FlowTypeAdministration:
+		return featuregate.AdministrativeOperations, true
+	default:
+		return "", false
+	}
+}
+
 // applyInboundSSO selects the SSO handle carried for this flow from the request-scoped
 // transport inputs and stashes it on the engine context for the SSO-Check node to consume.
 // It is a no-op when no inbound transport is present.
@@ -340,6 +371,9 @@ func (s *flowExecService) loadNewContext(ctx context.Context, flowID, appID, flo
 	// Gate administration flows before any further resolution so an unauthenticated caller cannot
 	// drive application lookups or context creation.
 	if svcErr := validateAdministrationCaller(ctx, flowType); svcErr != nil {
+		return nil, svcErr
+	}
+	if svcErr := s.validateFlowFeature(flowType); svcErr != nil {
 		return nil, svcErr
 	}
 
@@ -951,6 +985,9 @@ func (s *flowExecService) InitiateFlow(ctx context.Context,
 	if svcErr := validateAdministrationCaller(ctx, flowType); svcErr != nil {
 		return "", svcErr
 	}
+	if svcErr := s.validateFlowFeature(flowType); svcErr != nil {
+		return "", svcErr
+	}
 
 	// Application ID is required for all flows except Invite Registration
 	if flowType != providers.FlowTypeUserOnboarding && initContext.ApplicationID == "" {
@@ -1008,6 +1045,9 @@ func (s *flowExecService) InitiateAndExecute(ctx context.Context,
 
 	// See InitiateFlow: gated here so no initiation entry point bypasses the administration check.
 	if svcErr := validateAdministrationCaller(ctx, flowType); svcErr != nil {
+		return nil, svcErr
+	}
+	if svcErr := s.validateFlowFeature(flowType); svcErr != nil {
 		return nil, svcErr
 	}
 

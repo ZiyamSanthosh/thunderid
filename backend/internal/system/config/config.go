@@ -702,40 +702,35 @@ func (c AuthZENPDPConfig) Validate() error {
 	return nil
 }
 
-// APIAccessMode controls which HTTP API surface the server exposes.
-type APIAccessMode string
+// OperatingMode controls which product features the server exposes.
+type OperatingMode string
 
 const (
-	// APIAccessModeFull exposes the complete API surface.
-	APIAccessModeFull APIAccessMode = "full"
-	// APIAccessModeLoginOnly exposes only the endpoints required for login and token operations.
-	APIAccessModeLoginOnly APIAccessMode = "login_only"
+	// OperatingModeFull exposes all configured product features.
+	OperatingModeFull OperatingMode = "full"
+	// OperatingModeRestricted exposes only the features allowed while the server is restricted.
+	OperatingModeRestricted OperatingMode = "restricted"
 )
 
-// APIAccessConfig holds the server API access mode.
-type APIAccessConfig struct {
-	Mode APIAccessMode `yaml:"mode" json:"mode"`
+// IsRestricted reports whether the server is operating with feature restrictions.
+func (m OperatingMode) IsRestricted() bool {
+	return m == OperatingModeRestricted
 }
 
-// IsLoginOnly reports whether the server is restricted to login and token operations.
-func (c APIAccessConfig) IsLoginOnly() bool {
-	return c.Mode == APIAccessModeLoginOnly
-}
-
-// Validate checks that the configured API access mode is supported.
-func (c APIAccessConfig) Validate() error {
-	switch c.Mode {
-	case "", APIAccessModeFull, APIAccessModeLoginOnly:
+// Validate checks that the configured operating mode is supported.
+func (m OperatingMode) Validate() error {
+	switch m {
+	case "", OperatingModeFull, OperatingModeRestricted:
 		return nil
 	default:
-		return fmt.Errorf("unsupported API access mode %q", c.Mode)
+		return fmt.Errorf("unsupported operating mode %q", m)
 	}
 }
 
 // Config holds the complete configuration details of the server.
 type Config struct {
 	Server               engineconfig.ServerConfig         `yaml:"server"                json:"server"`
-	APIAccess            APIAccessConfig                   `yaml:"api_access"            json:"api_access"`
+	OperatingMode        OperatingMode                     `yaml:"operating_mode"        json:"operating_mode"`
 	Gateway              GatewayConfig                     `yaml:"gateway"               json:"gateway"`
 	AuthZENPDP           AuthZENPDPConfig                  `yaml:"authzen_pdp"           json:"authzen_pdp"`
 	Log                  LogConfig                         `yaml:"log"                   json:"log"`
@@ -889,7 +884,7 @@ func LoadConfig(configPath string, defaultPath string, serverHome string) (*Conf
 	if err := cfg.AuthZENPDP.Validate(); err != nil {
 		return nil, err
 	}
-	if err := cfg.APIAccess.Validate(); err != nil {
+	if err := cfg.OperatingMode.Validate(); err != nil {
 		return nil, err
 	}
 

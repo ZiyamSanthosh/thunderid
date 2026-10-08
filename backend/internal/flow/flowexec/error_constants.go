@@ -283,3 +283,17 @@ var ErrorAdministrationPermissionRequired = tidcommon.ServiceError{
 		DefaultValue: "Administrative flows require the system permission",
 	},
 }
+
+// ErrorFlowFeatureDisabled defines the error returned when the current operating mode disables a flow feature.
+var ErrorFlowFeatureDisabled = tidcommon.ServiceError{
+	Code: "FES-1020",
+	Type: tidcommon.ClientErrorType,
+	Error: tidcommon.I18nMessage{
+		Key:          "error.flowexecservice.feature_disabled",
+		DefaultValue: "Operation temporarily unavailable",
+	},
+	ErrorDescription: tidcommon.I18nMessage{
+		Key:          "error.flowexecservice.feature_disabled_description",
+		DefaultValue: "This operation is unavailable while ThunderID is in restricted mode",
+	},
+}

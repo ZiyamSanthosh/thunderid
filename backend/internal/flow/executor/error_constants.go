@@ -1568,6 +1568,34 @@ var (
 			DefaultValue: "The {{param(input)}} input is required and must not be empty",
 		},
 	}
+
+	// ErrJITProvisionRestricted is returned when server policy fences JIT provisioning.
+	ErrJITProvisionRestricted = tidcommon.ServiceError{
+		Type: tidcommon.ClientErrorType,
+		Code: "FET-1112",
+		Error: tidcommon.I18nMessage{
+			Key:          "flows.executor.errors.jit_provision_restricted",
+			DefaultValue: "JIT provisioning temporarily unavailable",
+		},
+		ErrorDescription: tidcommon.I18nMessage{
+			Key:          "flows.executor.errors.jit_provision_restricted_desc",
+			DefaultValue: "JIT provisioning is unavailable while ThunderID is in restricted mode",
+		},
+	}
+
+	// ErrOUCreationRestricted is returned when server policy fences organization-unit creation.
+	ErrOUCreationRestricted = tidcommon.ServiceError{
+		Type: tidcommon.ClientErrorType,
+		Code: "FET-1113",
+		Error: tidcommon.I18nMessage{
+			Key:          "flows.executor.errors.ou_creation_restricted",
+			DefaultValue: "Organization unit creation temporarily unavailable",
+		},
+		ErrorDescription: tidcommon.I18nMessage{
+			Key:          "flows.executor.errors.ou_creation_restricted_desc",
+			DefaultValue: "Organization unit creation is unavailable while ThunderID is in restricted mode",
+		},
+	}
 )
 
 // errForEntityCategory returns a copy of err whose messages name the entity category they are

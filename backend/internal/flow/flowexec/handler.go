@@ -158,6 +158,8 @@ func handleFlowError(ctx context.Context, w http.ResponseWriter, flowErr *tidcom
 		case ErrorDirectFlowInitiationNotPermitted.Code, ErrorFlowIDExecutionNotPermitted.Code,
 			ErrorAdministrationPermissionRequired.Code:
 			statusCode = http.StatusForbidden
+		case ErrorFlowFeatureDisabled.Code:
+			statusCode = http.StatusServiceUnavailable
 		case ErrorFlowSecretRequired.Code, ErrorFlowSecretInvalid.Code,
 			ErrorAttestationRequired.Code, ErrorAttestationInvalid.Code,
 			ErrorAdministrationAuthenticationRequired.Code:

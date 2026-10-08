@@ -10,11 +10,11 @@ import (
 )
 
 const (
-	apiRestrictedErrorCode        = "api_restricted"
-	apiRestrictedErrorDescription = "The requested API is unavailable while ThunderID is in login-only mode."
+	featureUnavailableErrorCode        = "feature_unavailable"
+	featureUnavailableErrorDescription = "The requested feature is unavailable while ThunderID is in restricted mode."
 )
 
-var loginOnlyExactPaths = map[string]struct{}{
+var restrictedModeExactPaths = map[string]struct{}{
 	"/.well-known/oauth-authorization-server": {},
 	"/.well-known/openid-configuration":       {},
 	"/design/resolve":                         {},
@@ -35,36 +35,36 @@ var loginOnlyExactPaths = map[string]struct{}{
 	"/oauth2/userinfo":                        {},
 }
 
-var loginOnlyPathPrefixes = []string{
+var restrictedModePathPrefixes = []string{
 	"/gate/",
 	"/health/",
 	"/openid4vp/",
 }
 
-// APIAccessModeMiddleware restricts the HTTP surface to login and token endpoints when loginOnly is true.
-func APIAccessModeMiddleware(loginOnly bool) func(http.Handler) http.Handler {
+// RestrictedModeMiddleware restricts the HTTP surface to the endpoints allowed in restricted mode.
+func RestrictedModeMiddleware(enabled bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
-		if !loginOnly {
+		if !enabled {
 			return next
 		}
 
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if isLoginOnlyPathAllowed(r.URL.Path) {
+			if isRestrictedModePathAllowed(r.URL.Path) {
 				next.ServeHTTP(w, r)
 				return
 			}
 
-			writeAPIRestrictedError(w)
+			writeFeatureUnavailableError(w)
 		})
 	}
 }
 
-func isLoginOnlyPathAllowed(path string) bool {
-	if _, ok := loginOnlyExactPaths[path]; ok {
+func isRestrictedModePathAllowed(path string) bool {
+	if _, ok := restrictedModeExactPaths[path]; ok {
 		return true
 	}
 
-	for _, prefix := range loginOnlyPathPrefixes {
+	for _, prefix := range restrictedModePathPrefixes {
 		if strings.HasPrefix(path, prefix) {
 			return true
 		}
@@ -87,11 +87,11 @@ func isTranslationResolvePath(path string) bool {
 	return language != "" && !strings.Contains(language, "/")
 }
 
-func writeAPIRestrictedError(w http.ResponseWriter) {
+func writeFeatureUnavailableError(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusServiceUnavailable)
 	_ = json.NewEncoder(w).Encode(map[string]string{
-		"error":             apiRestrictedErrorCode,
-		"error_description": apiRestrictedErrorDescription,
+		"error":             featureUnavailableErrorCode,
+		"error_description": featureUnavailableErrorDescription,
 	})
 }

@@ -1,7 +1,7 @@
 // Copyright 2026 The ThunderID Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package apiaccess
+package operatingmode
 
 import (
 	"bytes"
@@ -15,55 +15,59 @@ import (
 	"github.com/thunder-id/thunderid/tests/integration/testutils"
 )
 
-const apiAccessConfigKey = "api_access"
+const operatingModeConfigKey = "operating_mode"
 
-type apiAccessError struct {
+type operatingModeError struct {
 	Code        string `json:"error"`
 	Description string `json:"error_description"`
 }
 
-// APIAccessTestSuite verifies that login-only mode is loaded by a real ThunderID process and
-// restricts the exposed HTTP surface without preventing login and token issuance.
-type APIAccessTestSuite struct {
+type flowFeatureError struct {
+	Code string `json:"code"`
+}
+
+// OperatingModeTestSuite verifies that restricted mode is loaded by a real ThunderID process and restricts
+// the exposed HTTP surface without preventing authentication, authorization, and token operations.
+type OperatingModeTestSuite struct {
 	suite.Suite
 	client         *http.Client
 	originalConfig interface{}
 }
 
-func TestAPIAccessTestSuite(t *testing.T) {
-	suite.Run(t, new(APIAccessTestSuite))
+func TestOperatingModeTestSuite(t *testing.T) {
+	suite.Run(t, new(OperatingModeTestSuite))
 }
 
-func (ts *APIAccessTestSuite) SetupSuite() {
+func (ts *OperatingModeTestSuite) SetupSuite() {
 	ts.client = testutils.GetRawHTTPClient()
 
-	original, err := testutils.ReadDeploymentConfigKey(apiAccessConfigKey)
-	ts.Require().NoError(err, "failed to read the API access configuration")
+	original, err := testutils.ReadDeploymentConfigKey(operatingModeConfigKey)
+	ts.Require().NoError(err, "failed to read the operating mode")
 	ts.originalConfig = original
 
 	ts.Require().NoError(testutils.PatchDeploymentConfig(map[string]interface{}{
-		apiAccessConfigKey: map[string]interface{}{"mode": "login_only"},
-	}), "failed to enable login-only API access")
-	ts.Require().NoError(testutils.RestartServer(), "failed to restart ThunderID in login-only mode")
+		operatingModeConfigKey: "restricted",
+	}), "failed to enable restricted mode")
+	ts.Require().NoError(testutils.RestartServer(), "failed to restart ThunderID in restricted mode")
 
 	// This performs the normal password-based authentication flow and token exchange. Its success
 	// proves that login and token issuance remain functional after the API restriction is active.
 	ts.Require().NoError(testutils.ObtainAdminAccessToken(),
-		"failed to obtain an access token in login-only mode")
+		"failed to obtain an access token in restricted mode")
 }
 
-func (ts *APIAccessTestSuite) TearDownSuite() {
+func (ts *OperatingModeTestSuite) TearDownSuite() {
 	// Use non-fatal assertions so every restoration step is attempted even if an earlier one fails.
 	ts.Assert().NoError(testutils.PatchDeploymentConfig(map[string]interface{}{
-		apiAccessConfigKey: ts.originalConfig,
-	}), "teardown: failed to restore the API access configuration")
+		operatingModeConfigKey: ts.originalConfig,
+	}), "teardown: failed to restore the operating mode")
 	ts.Assert().NoError(testutils.RestartServer(),
-		"teardown: failed to restart ThunderID after restoring API access")
+		"teardown: failed to restart ThunderID after restoring the operating mode")
 	ts.Assert().NoError(testutils.ObtainAdminAccessToken(),
 		"teardown: failed to restore the shared admin access token")
 }
 
-func (ts *APIAccessTestSuite) TestLoginSupportEndpointsRemainAvailable() {
+func (ts *OperatingModeTestSuite) TestAuthenticationAuthorizationAndTokenEndpointsRemainAvailable() {
 	tests := []struct {
 		name   string
 		method string
@@ -83,12 +87,12 @@ func (ts *APIAccessTestSuite) TestLoginSupportEndpointsRemainAvailable() {
 
 			ts.NotEqual(http.StatusServiceUnavailable, resp.StatusCode,
 				"%s must reach its registered handler; body: %s", tt.path, body)
-			ts.NotContains(string(body), `"error":"api_restricted"`)
+			ts.NotContains(string(body), `"error":"feature_unavailable"`)
 		})
 	}
 }
 
-func (ts *APIAccessTestSuite) TestManagementEndpointsAreRestricted() {
+func (ts *OperatingModeTestSuite) TestManagementEndpointsAreRestricted() {
 	tests := []struct {
 		name   string
 		method string
@@ -110,15 +114,35 @@ func (ts *APIAccessTestSuite) TestManagementEndpointsAreRestricted() {
 			ts.Equal(http.StatusServiceUnavailable, resp.StatusCode,
 				"%s should be restricted; body: %s", tt.path, body)
 
-			var errResp apiAccessError
+			var errResp operatingModeError
 			ts.Require().NoError(json.Unmarshal(body, &errResp))
-			ts.Equal("api_restricted", errResp.Code)
+			ts.Equal("feature_unavailable", errResp.Code)
 			ts.NotEmpty(errResp.Description)
 		})
 	}
 }
 
-func (ts *APIAccessTestSuite) send(method, path string, body []byte) (*http.Response, []byte) {
+func (ts *OperatingModeTestSuite) TestNonAuthenticationFlowsAreRestricted() {
+	for _, flowType := range []string{"REGISTRATION", "RECOVERY"} {
+		ts.Run(flowType, func() {
+			requestBody, err := json.Marshal(map[string]string{
+				"applicationId": "01900000-0000-7000-8000-000000000060",
+				"flowType":      flowType,
+			})
+			ts.Require().NoError(err)
+
+			resp, body := ts.send(http.MethodPost, "/flow/execute", requestBody)
+			defer resp.Body.Close()
+
+			ts.Equal(http.StatusServiceUnavailable, resp.StatusCode, "body: %s", body)
+			var errResp flowFeatureError
+			ts.Require().NoError(json.Unmarshal(body, &errResp))
+			ts.Equal("FES-1020", errResp.Code)
+		})
+	}
+}
+
+func (ts *OperatingModeTestSuite) send(method, path string, body []byte) (*http.Response, []byte) {
 	req, err := http.NewRequest(method, testutils.TestServerURL+path, bytes.NewReader(body))
 	ts.Require().NoError(err)
 	if body != nil {
