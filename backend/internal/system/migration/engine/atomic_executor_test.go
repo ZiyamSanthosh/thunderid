@@ -40,7 +40,7 @@ func TestAtomicOperationExecutorExecutesAndCompletesProgress(t *testing.T) {
 	expectReservedState(dbClient, StoreIDEntityDB, "2.0.0", testRunID, executedAt)
 	dbClient.On("ExecuteContext", mock.Anything, queryInsertMigrationProgress,
 		testProgressID, testStateID, testRunID, "2.0.0", string(operation.Definition().ID), 3,
-		string(StatusInProgress), nil, executedAt).Return(int64(1), nil).Once()
+		"", string(StatusInProgress), nil, executedAt).Return(int64(1), nil).Once()
 	dbClient.On("ExecuteContext", mock.Anything, executedQuery).Return(int64(0), nil).Once()
 	dbClient.On("ExecuteContext", mock.Anything, queryUpdateMigrationProgress,
 		string(StatusCompleted), nil, executedAt, testProgressID, testStateID, testRunID).
@@ -66,7 +66,7 @@ func TestAtomicOperationExecutorSkipsVerifiedTarget(t *testing.T) {
 	expectReservedState(dbClient, StoreIDEntityDB, "2.0.0", testRunID, executedAt)
 	dbClient.On("ExecuteContext", mock.Anything, queryInsertMigrationProgress,
 		testProgressID, testStateID, testRunID, "2.0.0", string(operation.Definition().ID), 0,
-		string(StatusInProgress), nil, executedAt).Return(int64(1), nil).Once()
+		"", string(StatusInProgress), nil, executedAt).Return(int64(1), nil).Once()
 	dbClient.On("ExecuteContext", mock.Anything, queryUpdateMigrationProgress,
 		string(StatusCompleted), nil, executedAt, testProgressID, testStateID, testRunID).
 		Return(int64(1), nil).Once()
@@ -88,7 +88,7 @@ func TestAtomicOperationExecutorRejectsInvalidPreVerification(t *testing.T) {
 	expectReservedState(dbClient, StoreIDEntityDB, "2.0.0", testRunID, executedAt)
 	dbClient.On("ExecuteContext", mock.Anything, queryInsertMigrationProgress,
 		testProgressID, testStateID, testRunID, "2.0.0", string(operation.Definition().ID), 0,
-		string(StatusInProgress), nil, executedAt).Return(int64(1), nil).Once()
+		"", string(StatusInProgress), nil, executedAt).Return(int64(1), nil).Once()
 	transactioner := &testTransactioner{}
 	executor := newTestAtomicExecutor(t, dbClient, transactioner)
 	executor.newID = sequenceIDs(testProgressID)
@@ -131,16 +131,37 @@ func TestAtomicOperationExecutorRejectsUnsupportedExecution(t *testing.T) {
 	_, orderErr := executor.Execute(context.Background(), operation, MigrationSelection{}, testRunID, -1)
 	_, interruptionErr := executor.Execute(
 		context.Background(), operation, MigrationSelection{}, testRunID, 0)
-	operation.definition.InterruptionMode = InterruptionModeAtomic
-	_, deploymentTargetErr := executor.Execute(context.Background(),
-		deploymentTargetTestOperation{testOperation: operation},
-		MigrationSelection{DeploymentIDs: []string{"deployment-a"}}, testRunID, 0)
 
 	require.Error(t, nilOperationErr)
 	require.Error(t, runIDErr)
 	require.Error(t, orderErr)
 	assert.ErrorContains(t, interruptionErr, "must be atomic")
-	assert.ErrorContains(t, deploymentTargetErr, "does not support deployment-targeted execution")
+}
+
+func TestAtomicOperationExecutorPersistsDeploymentTarget(t *testing.T) {
+	dbClient := providermock.NewDBClientInterfaceMock(t)
+	operation := deploymentTargetTestOperation{testOperation: testOperation{definition: OperationDefinition{
+		ID: "2.0.0/entitydb/deployment-operation", Description: "Deployment operation",
+		StoreID: StoreIDEntityDB, Kind: OperationKindDataChange,
+		InterruptionMode: InterruptionModeAtomic,
+	}}}
+	executedAt := time.Date(2026, time.October, 1, 12, 0, 0, 0, time.UTC)
+	expectReservedState(dbClient, StoreIDEntityDB, "2.0.0", testRunID, executedAt)
+	dbClient.On("ExecuteContext", mock.Anything, queryInsertMigrationProgress,
+		testProgressID, testStateID, testRunID, "2.0.0", string(operation.Definition().ID), 0,
+		"deployment-a", string(StatusInProgress), nil, executedAt).Return(int64(1), nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryUpdateMigrationProgress,
+		string(StatusCompleted), nil, executedAt, testProgressID, testStateID, testRunID).
+		Return(int64(1), nil).Once()
+	executor := newTestAtomicExecutor(t, dbClient, &testTransactioner{})
+	executor.newID = sequenceIDs(testProgressID)
+	executor.now = func() time.Time { return executedAt }
+
+	result, err := executor.Execute(context.Background(), operation,
+		MigrationSelection{DeploymentIDs: []string{"deployment-a"}}, testRunID, 0)
+
+	require.NoError(t, err)
+	assert.Equal(t, "deployment-a", result.Progress.ExecutionTargetID)
 }
 
 func TestNewAtomicOperationExecutorValidatesDependencies(t *testing.T) {

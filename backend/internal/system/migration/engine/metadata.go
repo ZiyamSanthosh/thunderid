@@ -15,10 +15,48 @@ import (
 )
 
 const (
-	maxFailureSummaryLength = 1024
-	maxOperationIDLength    = 255
-	maxCheckpointSize       = 64 * 1024
+	maxFailureSummaryLength    = 1024
+	maxOperationIDLength       = 255
+	maxExecutionTargetIDLength = 255
+	maxDeploymentIDLength      = 255
+	maxCheckpointSize          = 64 * 1024
 )
+
+// DeploymentState records that one deployment has completed a release's data migration for a logical store.
+type DeploymentState struct {
+	ID               string
+	MigrationStateID string
+	DeploymentID     string
+	CompletedLevel   string
+	UpdatedAt        time.Time
+}
+
+// Validate verifies that the deployment completion marker can be persisted.
+func (s DeploymentState) Validate() error {
+	if !isUUIDv7(s.ID) {
+		return errors.New("deployment migration state ID must be a canonical UUIDv7")
+	}
+	if !isUUIDv7(s.MigrationStateID) {
+		return errors.New("deployment migration state parent ID must be a canonical UUIDv7")
+	}
+	if strings.TrimSpace(s.DeploymentID) == "" {
+		return errors.New("deployment migration state deployment ID is required")
+	}
+	if s.DeploymentID != strings.TrimSpace(s.DeploymentID) {
+		return errors.New("deployment migration state deployment ID contains surrounding whitespace")
+	}
+	if utf8.RuneCountInString(s.DeploymentID) > maxDeploymentIDLength {
+		return fmt.Errorf("deployment migration state deployment ID exceeds %d characters", maxDeploymentIDLength)
+	}
+	if !isCanonicalVersion(s.CompletedLevel) {
+		return fmt.Errorf("deployment migration state completed level %q is not canonical semantic version",
+			s.CompletedLevel)
+	}
+	if s.UpdatedAt.IsZero() {
+		return errors.New("deployment migration state update time is required")
+	}
+	return nil
+}
 
 // Status represents a migration state or operation status.
 type Status string
@@ -158,15 +196,16 @@ func (s MigrationStage) executing() bool {
 
 // Progress is the durable execution state of one migration operation.
 type Progress struct {
-	ID               string
-	MigrationStateID string
-	RunID            string
-	TargetLevel      string
-	OperationID      string
-	OperationOrder   int
-	Status           Status
-	CheckpointData   json.RawMessage
-	UpdatedAt        time.Time
+	ID                string
+	MigrationStateID  string
+	RunID             string
+	TargetLevel       string
+	OperationID       string
+	OperationOrder    int
+	ExecutionTargetID string
+	Status            Status
+	CheckpointData    json.RawMessage
+	UpdatedAt         time.Time
 }
 
 // Validate verifies that the operation progress can be persisted by the migration engine.
@@ -191,6 +230,12 @@ func (p Progress) Validate() error {
 	}
 	if p.OperationOrder < 0 {
 		return errors.New("migration progress operation order cannot be negative")
+	}
+	if p.ExecutionTargetID != strings.TrimSpace(p.ExecutionTargetID) {
+		return errors.New("migration progress execution target ID contains surrounding whitespace")
+	}
+	if utf8.RuneCountInString(p.ExecutionTargetID) > maxExecutionTargetIDLength {
+		return fmt.Errorf("migration progress execution target ID exceeds %d characters", maxExecutionTargetIDLength)
 	}
 	if p.Status != StatusInProgress && p.Status != StatusCompleted && p.Status != StatusFailed {
 		return fmt.Errorf("unsupported migration progress status %q", p.Status)

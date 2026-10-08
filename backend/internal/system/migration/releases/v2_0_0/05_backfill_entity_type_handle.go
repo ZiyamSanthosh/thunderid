@@ -23,17 +23,19 @@ var (
 	queryEntityTypesForHandleBackfill = dbmodel.DBQuery{
 		ID: "MIG-CFG_MGT-06",
 		PostgresQuery: `SELECT ID, NAME, CATEGORY, HANDLE, DEPLOYMENT_ID
-			FROM "ENTITY_TYPES" ORDER BY DEPLOYMENT_ID, CATEGORY, ID`,
+			FROM "ENTITY_TYPES" WHERE ($1 = '' OR DEPLOYMENT_ID = $1)
+			ORDER BY DEPLOYMENT_ID, CATEGORY, ID`,
 	}
 	queryEntityTypeHandleBackfillBatch = dbmodel.DBQuery{
 		ID: "MIG-CFG_MGT-07",
 		PostgresQuery: `SELECT ID, NAME, CATEGORY, DEPLOYMENT_ID FROM "ENTITY_TYPES"
-			WHERE HANDLE IS NULL AND ID > $1 ORDER BY ID LIMIT 100`,
+			WHERE HANDLE IS NULL AND ID > $1 AND ($2 = '' OR DEPLOYMENT_ID = $2)
+			ORDER BY ID LIMIT 100`,
 	}
 	queryExistingEntityTypeHandles = dbmodel.DBQuery{
 		ID: "MIG-CFG_MGT-08",
 		PostgresQuery: `SELECT HANDLE, CATEGORY, DEPLOYMENT_ID FROM "ENTITY_TYPES"
-			WHERE HANDLE IS NOT NULL`,
+			WHERE HANDLE IS NOT NULL AND ($1 = '' OR DEPLOYMENT_ID = $1)`,
 	}
 	queryUpdateEntityTypeHandle = dbmodel.DBQuery{
 		ID: "MIG-CFG_MGT-09",
@@ -71,19 +73,26 @@ func (*backfillEntityTypeHandleOperation) Definition() engine.OperationDefinitio
 }
 
 func (*backfillEntityTypeHandleOperation) ResolveTargets(
-	context.Context,
-	engine.ReadAccess,
-	engine.MigrationSelection,
+	_ context.Context,
+	_ engine.ReadAccess,
+	selection engine.MigrationSelection,
 ) ([]engine.ExecutionTarget, error) {
+	if len(selection.DeploymentIDs) > 0 {
+		targets := make([]engine.ExecutionTarget, 0, len(selection.DeploymentIDs))
+		for _, deploymentID := range selection.DeploymentIDs {
+			targets = append(targets, engine.ExecutionTarget{DeploymentID: deploymentID})
+		}
+		return targets, nil
+	}
 	return []engine.ExecutionTarget{{}}, nil
 }
 
 func (*backfillEntityTypeHandleOperation) PreVerify(
 	ctx context.Context,
 	access engine.ReadAccess,
-	_ engine.ExecutionTarget,
+	target engine.ExecutionTarget,
 ) (engine.VerificationResult, error) {
-	return verifyEntityTypeHandleBackfill(ctx, access)
+	return verifyEntityTypeHandleBackfill(ctx, access, target.DeploymentID)
 }
 
 func (*backfillEntityTypeHandleOperation) ExecuteBatch(
@@ -98,12 +107,13 @@ func (*backfillEntityTypeHandleOperation) ExecuteBatch(
 		}
 	}
 
-	usedHandles, err := readExistingEntityTypeHandles(ctx, execution.Access())
+	usedHandles, err := readExistingEntityTypeHandles(
+		ctx, execution.Access(), execution.Target().DeploymentID)
 	if err != nil {
 		return engine.ResumableBatchResult{}, err
 	}
 	rows, err := execution.Access().Query(ctx, engine.StoreIDConfigDB,
-		queryEntityTypeHandleBackfillBatch, checkpoint.LastID)
+		queryEntityTypeHandleBackfillBatch, checkpoint.LastID, execution.Target().DeploymentID)
 	if err != nil {
 		return engine.ResumableBatchResult{}, fmt.Errorf("read entity-type handle backfill batch: %w", err)
 	}
@@ -137,16 +147,17 @@ func (*backfillEntityTypeHandleOperation) ExecuteBatch(
 func (*backfillEntityTypeHandleOperation) PostVerify(
 	ctx context.Context,
 	access engine.ReadAccess,
-	_ engine.ExecutionTarget,
+	target engine.ExecutionTarget,
 ) (engine.VerificationResult, error) {
-	return verifyEntityTypeHandleBackfill(ctx, access)
+	return verifyEntityTypeHandleBackfill(ctx, access, target.DeploymentID)
 }
 
 func verifyEntityTypeHandleBackfill(
 	ctx context.Context,
 	access engine.ReadAccess,
+	deploymentID string,
 ) (engine.VerificationResult, error) {
-	records, err := readEntityTypeHandleRecords(ctx, access)
+	records, err := readEntityTypeHandleRecords(ctx, access, deploymentID)
 	if err != nil {
 		return engine.VerificationResult{}, err
 	}
@@ -183,14 +194,17 @@ func verifyEntityTypeHandleBackfill(
 			State: engine.VerificationTarget, Summary: "Every entity type has a valid unique handle",
 		}, nil
 	}
-	return invalidEntityTypeHandleBackfill("Entity-type handles are only partially backfilled"), nil
+	return engine.VerificationResult{
+		State: engine.VerificationSource, Summary: "Some entity-type handles still require backfilling",
+	}, nil
 }
 
 func readEntityTypeHandleRecords(
 	ctx context.Context,
 	access engine.ReadAccess,
+	deploymentID string,
 ) ([]entityTypeHandleRecord, error) {
-	rows, err := access.Query(ctx, engine.StoreIDConfigDB, queryEntityTypesForHandleBackfill)
+	rows, err := access.Query(ctx, engine.StoreIDConfigDB, queryEntityTypesForHandleBackfill, deploymentID)
 	if err != nil {
 		return nil, fmt.Errorf("inspect entity-type handles: %w", err)
 	}
@@ -240,8 +254,9 @@ func readEntityTypeHandleBatchRecord(row engine.QueryRow) (entityTypeHandleRecor
 func readExistingEntityTypeHandles(
 	ctx context.Context,
 	access engine.ReadAccess,
+	deploymentID string,
 ) (map[string]struct{}, error) {
-	rows, err := access.Query(ctx, engine.StoreIDConfigDB, queryExistingEntityTypeHandles)
+	rows, err := access.Query(ctx, engine.StoreIDConfigDB, queryExistingEntityTypeHandles, deploymentID)
 	if err != nil {
 		return nil, fmt.Errorf("inspect existing entity-type handles: %w", err)
 	}

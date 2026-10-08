@@ -12,19 +12,21 @@ import (
 )
 
 const (
-	metadataStateTable    = "MIGRATION_STATE"
-	metadataProgressTable = "MIGRATION_PROGRESS"
+	metadataStateTable           = "MIGRATION_STATE"
+	metadataProgressTable        = "MIGRATION_PROGRESS"
+	metadataDeploymentStateTable = "MIGRATION_DEPLOYMENT_STATE"
+	metadataRunTargetTable       = "MIGRATION_RUN_TARGET"
 )
 
 // SchemaStatus describes whether the metadata tables exist in a database namespace.
 type SchemaStatus string
 
 const (
-	// SchemaAbsent means neither metadata table exists.
+	// SchemaAbsent means no migration metadata tables exist.
 	SchemaAbsent SchemaStatus = "absent"
-	// SchemaReady means both metadata tables exist.
+	// SchemaReady means all migration metadata tables exist.
 	SchemaReady SchemaStatus = "ready"
-	// SchemaPartial means exactly one metadata table exists.
+	// SchemaPartial means some, but not all, migration metadata tables exist.
 	SchemaPartial SchemaStatus = "partial"
 )
 
@@ -36,7 +38,8 @@ var (
 		ID: "MIG-METADATA_MGT-07",
 		PostgresQuery: `SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
             WHERE TABLE_SCHEMA = CURRENT_SCHEMA()
-            AND TABLE_NAME IN ('MIGRATION_STATE', 'MIGRATION_PROGRESS')`,
+			AND TABLE_NAME IN ('MIGRATION_STATE', 'MIGRATION_PROGRESS',
+				'MIGRATION_DEPLOYMENT_STATE', 'MIGRATION_RUN_TARGET')`,
 	}
 	queryCreateMetadataSchema = dbmodel.DBQuery{
 		ID:            "MIG-METADATA_MGT-08",
@@ -44,7 +47,7 @@ var (
 	}
 )
 
-// InspectSchema reports the presence of the two migration metadata tables.
+// InspectSchema reports the presence of the migration metadata tables.
 func (r *MetadataStore) InspectSchema(ctx context.Context) (SchemaStatus, error) {
 	rows, err := r.dbClient.QueryContext(ctx, r.queries.inspectSchema)
 	if err != nil {
@@ -62,17 +65,19 @@ func (r *MetadataStore) InspectSchema(ctx context.Context) (SchemaStatus, error)
 
 	_, hasState := found[metadataStateTable]
 	_, hasProgress := found[metadataProgressTable]
+	_, hasDeploymentState := found[metadataDeploymentStateTable]
+	_, hasRunTarget := found[metadataRunTargetTable]
 	switch {
-	case !hasState && !hasProgress:
+	case !hasState && !hasProgress && !hasDeploymentState && !hasRunTarget:
 		return SchemaAbsent, nil
-	case hasState && hasProgress:
+	case hasState && hasProgress && hasDeploymentState && hasRunTarget:
 		return SchemaReady, nil
 	default:
 		return SchemaPartial, nil
 	}
 }
 
-// CreateSchema creates both migration metadata tables using the configured database implementation.
+// CreateSchema creates the migration metadata tables using the configured database implementation.
 func (r *MetadataStore) CreateSchema(ctx context.Context) error {
 	if _, err := r.dbClient.ExecuteContext(ctx, r.queries.createSchema); err != nil {
 		return fmt.Errorf("create migration metadata schema: %w", err)

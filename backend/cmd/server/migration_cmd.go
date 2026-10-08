@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"strings"
 
 	"github.com/thunder-id/thunderid/internal/system/config"
 	dbprovider "github.com/thunder-id/thunderid/internal/system/database/provider"
@@ -15,6 +16,11 @@ import (
 	"github.com/thunder-id/thunderid/internal/system/migration/engine"
 	"github.com/thunder-id/thunderid/pkg/thunderidengine/providers"
 )
+
+type migrationCommandOptions struct {
+	phase     engine.OperationPhase
+	selection engine.MigrationSelection
+}
 
 const (
 	migrationSubcommand       = "migration"
@@ -94,7 +100,7 @@ func runMigrationCommand(
 	cfg *config.Config,
 	dbProvider dbprovider.DBProviderInterface,
 ) (*migrationCommandResult, error) {
-	if len(args) < 2 || len(args) > 3 || args[0] != migrationSubcommand {
+	if len(args) < 2 || args[0] != migrationSubcommand {
 		return nil, errors.New(migrationCommandUsage())
 	}
 	if args[1] != migrationInitializeAction && args[1] != migrationStatusAction &&
@@ -103,10 +109,11 @@ func runMigrationCommand(
 		return nil, fmt.Errorf(
 			"unsupported migration action %q; %s", args[1], migrationCommandUsage())
 	}
-	phase, err := migrationCommandPhase(args)
+	options, err := parseMigrationCommandOptions(args)
 	if err != nil {
 		return nil, err
 	}
+	phase := options.phase
 	if cfg == nil {
 		return nil, fmt.Errorf("run migration %s: configuration is required", args[1])
 	}
@@ -179,7 +186,8 @@ func runMigrationCommand(
 		if phase == engine.OperationPhaseContract {
 			application, err = runMigrationContract(ctx, *releaseDefinition, namespaces)
 		} else {
-			application, err = runMigrationApply(ctx, *releaseDefinition, namespaces, phase)
+			application, err = runMigrationApply(
+				ctx, *releaseDefinition, namespaces, phase, options.selection)
 		}
 		result := &migrationCommandResult{action: args[1], application: &application}
 		if err != nil {
@@ -219,7 +227,44 @@ func runMigrationApplySafe(
 }
 
 func migrationCommandUsage() string {
-	return "usage: thunderid migration <initialize|status|check|apply|resume> [expand|migrate|contract]"
+	return "usage: thunderid migration <initialize|status|check|apply|resume> " +
+		"[expand|migrate|contract] [--deployment-id <id>]"
+}
+
+func parseMigrationCommandOptions(args []string) (migrationCommandOptions, error) {
+	options := migrationCommandOptions{}
+	positional := []string{args[0], args[1]}
+	for index := 2; index < len(args); index++ {
+		argument := args[index]
+		switch {
+		case argument == "--deployment-id":
+			index++
+			if index >= len(args) || strings.TrimSpace(args[index]) == "" {
+				return options, fmt.Errorf("--deployment-id requires a value; %s", migrationCommandUsage())
+			}
+			options.selection.DeploymentIDs = append(options.selection.DeploymentIDs, args[index])
+		case strings.HasPrefix(argument, "--deployment-id="):
+			deploymentID := strings.TrimPrefix(argument, "--deployment-id=")
+			if strings.TrimSpace(deploymentID) == "" {
+				return options, fmt.Errorf("--deployment-id requires a value; %s", migrationCommandUsage())
+			}
+			options.selection.DeploymentIDs = append(options.selection.DeploymentIDs, deploymentID)
+		case strings.HasPrefix(argument, "-"):
+			return options, fmt.Errorf("unsupported migration option %q; %s", argument, migrationCommandUsage())
+		default:
+			positional = append(positional, argument)
+		}
+	}
+	phase, err := migrationCommandPhase(positional)
+	if err != nil {
+		return options, err
+	}
+	options.phase = phase
+	if len(options.selection.DeploymentIDs) > 0 &&
+		(args[1] != migrationApplyAction || phase != engine.OperationPhaseMigrate) {
+		return options, errors.New("--deployment-id is supported only by migration apply migrate")
+	}
+	return options, nil
 }
 
 func migrationCommandPhase(args []string) (engine.OperationPhase, error) {
@@ -291,6 +336,7 @@ func runMigrationApply(
 	release engine.ReleaseDefinition,
 	namespaces []migrationNamespace,
 	phase engine.OperationPhase,
+	selection engine.MigrationSelection,
 ) (engine.MigrationRunResult, error) {
 	executionNamespaces, err := migrationExecutionNamespaces(namespaces, "apply")
 	if err != nil {
@@ -301,7 +347,7 @@ func runMigrationApply(
 	if err != nil {
 		return engine.MigrationRunResult{}, fmt.Errorf("create migration coordinator: %w", err)
 	}
-	result, err := coordinator.ApplyPhase(ctx, phase, engine.MigrationSelection{})
+	result, err := coordinator.ApplyPhase(ctx, phase, selection)
 	if err != nil {
 		return result, fmt.Errorf("apply migration: %w", err)
 	}
@@ -363,11 +409,30 @@ func runStartupCompatibilityCheck(
 	if err != nil {
 		return nil, fmt.Errorf("check startup migration compatibility: %w", err)
 	}
-	report, err := runMigrationStatus(ctx, releaseDefinition.Manifest, namespaces, releaseCatalog...)
+	report, err := runMigrationDeploymentStatus(
+		ctx, releaseDefinition.Manifest, namespaces, cfg.Server.Identifier, releaseCatalog...)
 	if err != nil {
 		return nil, fmt.Errorf("check startup migration compatibility: %w", err)
 	}
 	return &report, nil
+}
+
+func runMigrationDeploymentStatus(
+	ctx context.Context,
+	manifest engine.ReleaseManifest,
+	namespaces []migrationNamespace,
+	deploymentID string,
+	releaseCatalog ...engine.ReleaseManifest,
+) (engine.CompatibilityReport, error) {
+	metadataStores, _, err := migrationReadResources(namespaces)
+	if err != nil {
+		return engine.CompatibilityReport{}, err
+	}
+	gate, err := engine.NewCompatibilityGate(manifest, releaseCatalog...)
+	if err != nil {
+		return engine.CompatibilityReport{}, err
+	}
+	return gate.CheckDeployment(ctx, metadataStores, deploymentID), nil
 }
 
 func startupCompatibilityCheckSupported(cfg *config.Config) bool {

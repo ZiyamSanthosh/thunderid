@@ -163,6 +163,12 @@ func TestProgressValidate(t *testing.T) {
 		{name: "missing operation ID", mutate: func(progress *Progress) { progress.OperationID = "  " }, errorMatch: "operation ID is required"},
 		{name: "long operation ID", mutate: func(progress *Progress) { progress.OperationID = strings.Repeat("x", maxOperationIDLength+1) }, errorMatch: "operation ID exceeds"},
 		{name: "negative operation order", mutate: func(progress *Progress) { progress.OperationOrder = -1 }, errorMatch: "operation order"},
+		{name: "execution target with whitespace", mutate: func(progress *Progress) {
+			progress.ExecutionTargetID = " deployment-a"
+		}, errorMatch: "execution target ID"},
+		{name: "long execution target", mutate: func(progress *Progress) {
+			progress.ExecutionTargetID = strings.Repeat("x", maxExecutionTargetIDLength+1)
+		}, errorMatch: "execution target ID exceeds"},
 		{name: "clean progress status", mutate: func(progress *Progress) { progress.Status = StatusClean }, errorMatch: "progress status"},
 		{name: "oversized checkpoint", mutate: func(progress *Progress) {
 			progress.CheckpointData = json.RawMessage(strings.Repeat("x", maxCheckpointSize+1))
@@ -189,6 +195,17 @@ func TestProgressValidate(t *testing.T) {
 	}
 }
 
+func TestDeploymentStateValidate(t *testing.T) {
+	state := DeploymentState{
+		ID: testProgressID, MigrationStateID: testStateID, DeploymentID: "deployment-a",
+		CompletedLevel: "2.0.0", UpdatedAt: time.Now().UTC(),
+	}
+	require.NoError(t, state.Validate())
+
+	state.DeploymentID = " "
+	require.Error(t, state.Validate())
+}
+
 func TestIsUUIDv7(t *testing.T) {
 	assert.True(t, isUUIDv7(testStateID))
 	assert.False(t, isUUIDv7("0199A123-4567-7ABC-8DEF-0123456789AB"))
@@ -210,14 +227,15 @@ func validState() State {
 
 func validProgress() Progress {
 	return Progress{
-		ID:               testProgressID,
-		MigrationStateID: testStateID,
-		RunID:            testRunID,
-		TargetLevel:      "1.1.0",
-		OperationID:      "1.1.0/add-session-subject",
-		OperationOrder:   0,
-		Status:           StatusInProgress,
-		CheckpointData:   json.RawMessage(`{"lastID":"0199a123-4567-7abc-8def-0123456789ab"}`),
-		UpdatedAt:        time.Now().UTC(),
+		ID:                testProgressID,
+		MigrationStateID:  testStateID,
+		RunID:             testRunID,
+		TargetLevel:       "1.1.0",
+		OperationID:       "1.1.0/add-session-subject",
+		OperationOrder:    0,
+		ExecutionTargetID: "deployment-a",
+		Status:            StatusInProgress,
+		CheckpointData:    json.RawMessage(`{"lastID":"0199a123-4567-7abc-8def-0123456789ab"}`),
+		UpdatedAt:         time.Now().UTC(),
 	}
 }

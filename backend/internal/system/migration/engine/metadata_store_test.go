@@ -112,6 +112,55 @@ func TestNewMetadataStore(t *testing.T) {
 	assert.ErrorContains(t, unsupportedErr, "unsupported database type")
 }
 
+func TestMetadataStoreDeploymentState(t *testing.T) {
+	ctx := context.Background()
+	updatedAt := time.Now().UTC()
+	state := DeploymentState{
+		ID: testProgressID, MigrationStateID: testStateID, DeploymentID: "deployment-a",
+		CompletedLevel: "2.0.0", UpdatedAt: updatedAt,
+	}
+	dbClient := providermock.NewDBClientInterfaceMock(t)
+	dbClient.On("ExecuteContext", mock.Anything, queryUpsertDeploymentMigrationState,
+		state.ID, state.MigrationStateID, state.DeploymentID, state.CompletedLevel, state.UpdatedAt).
+		Return(int64(1), nil).Once()
+	dbClient.On("QueryContext", mock.Anything, queryGetDeploymentMigrationState,
+		state.DeploymentID, state.MigrationStateID).Return([]map[string]interface{}{{
+		"id": state.ID, "migration_state_id": state.MigrationStateID,
+		"deployment_id": state.DeploymentID, "completed_level": state.CompletedLevel,
+		"updated_at": state.UpdatedAt,
+	}}, nil).Once()
+	store := newTestMetadataStore(t, dbClient)
+
+	require.NoError(t, store.UpsertDeploymentState(ctx, state))
+	stored, err := store.GetDeploymentState(ctx, state.MigrationStateID, state.DeploymentID)
+
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, state, *stored)
+}
+
+func TestMetadataStoreMigrationRunTargets(t *testing.T) {
+	ctx := context.Background()
+	updatedAt := time.Now().UTC()
+	dbClient := providermock.NewDBClientInterfaceMock(t)
+	for _, deploymentID := range []string{"deployment-a", "deployment-b"} {
+		dbClient.On("ExecuteContext", mock.Anything, queryInsertMigrationRunTarget,
+			testRunID, deploymentID, updatedAt).Return(int64(1), nil).Once()
+	}
+	dbClient.On("QueryContext", mock.Anything, queryListMigrationRunTargets, testRunID).
+		Return([]map[string]interface{}{
+			{"deployment_id": "deployment-a"}, {"deployment_id": []byte("deployment-b")},
+		}, nil).Once()
+	store := newTestMetadataStore(t, dbClient)
+
+	require.NoError(t, store.RecordRunTargets(
+		ctx, testRunID, []string{"deployment-a", "deployment-b"}, updatedAt))
+	targets, err := store.ListRunTargets(ctx, testRunID)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"deployment-a", "deployment-b"}, targets)
+}
+
 func newTestMetadataStore(
 	t *testing.T,
 	dbClient *providermock.DBClientInterfaceMock,
@@ -205,6 +254,7 @@ func TestMetadataStoreListProgress(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, progress, 1)
 		assert.Equal(t, "1.1.0/add-session-subject", progress[0].OperationID)
+		assert.Equal(t, "deployment-a", progress[0].ExecutionTargetID)
 		assert.JSONEq(t, `{"lastID":"0199a123-4567-7abc-8def-0123456789ab"}`,
 			string(progress[0].CheckpointData))
 	})
@@ -252,7 +302,7 @@ func TestMetadataStoreWritesProgress(t *testing.T) {
 		progress := validProgress()
 		dbClient.On("ExecuteContext", mock.Anything, queryInsertMigrationProgress,
 			progress.ID, progress.MigrationStateID, progress.RunID, progress.TargetLevel,
-			progress.OperationID, progress.OperationOrder, string(progress.Status),
+			progress.OperationID, progress.OperationOrder, progress.ExecutionTargetID, string(progress.Status),
 			string(progress.CheckpointData), progress.UpdatedAt).Return(int64(1), nil).Once()
 
 		err := newTestMetadataStore(t, dbClient).InsertProgress(ctx, progress)
@@ -309,7 +359,7 @@ func validProgressRow(updatedAt time.Time) map[string]interface{} {
 	return map[string]interface{}{
 		"id": testProgressID, "migration_state_id": testStateID, "run_id": testRunID,
 		"target_level": "1.1.0", "operation_id": "1.1.0/add-session-subject",
-		"operation_order": int32(0), "status": "in_progress",
+		"operation_order": int32(0), "execution_target_id": "deployment-a", "status": "in_progress",
 		"checkpoint_data": []byte(`{"lastID":"0199a123-4567-7abc-8def-0123456789ab"}`),
 		"updated_at":      updatedAt,
 	}

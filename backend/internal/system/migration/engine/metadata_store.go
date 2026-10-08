@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	dbmodel "github.com/thunder-id/thunderid/internal/system/database/model"
@@ -36,14 +37,15 @@ var (
 	queryListMigrationProgress = dbmodel.DBQuery{
 		ID: "MIG-METADATA_MGT-04",
 		PostgresQuery: `SELECT ID, MIGRATION_STATE_ID, RUN_ID, TARGET_LEVEL, OPERATION_ID, OPERATION_ORDER,
-            STATUS, CHECKPOINT_DATA, UPDATED_AT FROM "MIGRATION_PROGRESS"
-            WHERE MIGRATION_STATE_ID = $1 AND RUN_ID = $2 ORDER BY OPERATION_ORDER, OPERATION_ID`,
+			EXECUTION_TARGET_ID, STATUS, CHECKPOINT_DATA, UPDATED_AT FROM "MIGRATION_PROGRESS"
+			WHERE MIGRATION_STATE_ID = $1 AND RUN_ID = $2
+			ORDER BY OPERATION_ORDER, OPERATION_ID, EXECUTION_TARGET_ID`,
 	}
 	queryInsertMigrationProgress = dbmodel.DBQuery{
 		ID: "MIG-METADATA_MGT-05",
 		PostgresQuery: `INSERT INTO "MIGRATION_PROGRESS" (ID, MIGRATION_STATE_ID, RUN_ID, TARGET_LEVEL,
-            OPERATION_ID, OPERATION_ORDER, STATUS, CHECKPOINT_DATA, UPDATED_AT)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+			OPERATION_ID, OPERATION_ORDER, EXECUTION_TARGET_ID, STATUS, CHECKPOINT_DATA, UPDATED_AT)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 	}
 	queryUpdateMigrationProgress = dbmodel.DBQuery{
 		ID: "MIG-METADATA_MGT-06",
@@ -113,6 +115,30 @@ var (
                 SELECT 1 FROM "MIGRATION_PROGRESS" WHERE MIGRATION_STATE_ID = $5 AND RUN_ID = $12
             )`,
 	}
+	queryUpsertDeploymentMigrationState = dbmodel.DBQuery{
+		ID: "MIG-METADATA_MGT-16",
+		PostgresQuery: `INSERT INTO "MIGRATION_DEPLOYMENT_STATE"
+			(ID, MIGRATION_STATE_ID, DEPLOYMENT_ID, COMPLETED_LEVEL, UPDATED_AT)
+			VALUES ($1, $2, $3, $4, $5)
+			ON CONFLICT (DEPLOYMENT_ID, MIGRATION_STATE_ID) DO UPDATE
+			SET COMPLETED_LEVEL = EXCLUDED.COMPLETED_LEVEL, UPDATED_AT = EXCLUDED.UPDATED_AT`,
+	}
+	queryGetDeploymentMigrationState = dbmodel.DBQuery{
+		ID: "MIG-METADATA_MGT-17",
+		PostgresQuery: `SELECT ID, MIGRATION_STATE_ID, DEPLOYMENT_ID, COMPLETED_LEVEL, UPDATED_AT
+			FROM "MIGRATION_DEPLOYMENT_STATE"
+			WHERE DEPLOYMENT_ID = $1 AND MIGRATION_STATE_ID = $2`,
+	}
+	queryInsertMigrationRunTarget = dbmodel.DBQuery{
+		ID: "MIG-METADATA_MGT-18",
+		PostgresQuery: `INSERT INTO "MIGRATION_RUN_TARGET" (RUN_ID, DEPLOYMENT_ID, UPDATED_AT)
+			VALUES ($1, $2, $3) ON CONFLICT (DEPLOYMENT_ID, RUN_ID) DO NOTHING`,
+	}
+	queryListMigrationRunTargets = dbmodel.DBQuery{
+		ID: "MIG-METADATA_MGT-19",
+		PostgresQuery: `SELECT DEPLOYMENT_ID FROM "MIGRATION_RUN_TARGET"
+			WHERE RUN_ID = $1 ORDER BY DEPLOYMENT_ID`,
+	}
 )
 
 // DatabaseType identifies a database implementation supported by the migration engine.
@@ -124,21 +150,25 @@ const (
 )
 
 type metadataQuerySet struct {
-	getState        dbmodel.DBQuery
-	insertState     dbmodel.DBQuery
-	updateState     dbmodel.DBQuery
-	listProgress    dbmodel.DBQuery
-	insertProgress  dbmodel.DBQuery
-	updateProgress  dbmodel.DBQuery
-	reserveState    dbmodel.DBQuery
-	finalizeState   dbmodel.DBQuery
-	cancelState     dbmodel.DBQuery
-	failState       dbmodel.DBQuery
-	resumeState     dbmodel.DBQuery
-	transitionState dbmodel.DBQuery
-	cancelPhase     dbmodel.DBQuery
-	inspectSchema   dbmodel.DBQuery
-	createSchema    dbmodel.DBQuery
+	getState              dbmodel.DBQuery
+	insertState           dbmodel.DBQuery
+	updateState           dbmodel.DBQuery
+	listProgress          dbmodel.DBQuery
+	insertProgress        dbmodel.DBQuery
+	updateProgress        dbmodel.DBQuery
+	reserveState          dbmodel.DBQuery
+	finalizeState         dbmodel.DBQuery
+	cancelState           dbmodel.DBQuery
+	failState             dbmodel.DBQuery
+	resumeState           dbmodel.DBQuery
+	transitionState       dbmodel.DBQuery
+	cancelPhase           dbmodel.DBQuery
+	upsertDeploymentState dbmodel.DBQuery
+	getDeploymentState    dbmodel.DBQuery
+	insertRunTarget       dbmodel.DBQuery
+	listRunTargets        dbmodel.DBQuery
+	inspectSchema         dbmodel.DBQuery
+	createSchema          dbmodel.DBQuery
 }
 
 var migrationMetadataQueries = metadataQuerySet{
@@ -147,10 +177,110 @@ var migrationMetadataQueries = metadataQuerySet{
 	insertProgress: queryInsertMigrationProgress, updateProgress: queryUpdateMigrationProgress,
 	reserveState: queryReserveMigrationState, finalizeState: queryFinalizeMigrationState,
 	cancelState: queryCancelMigrationState, failState: queryFailMigrationState,
-	resumeState:     queryResumeMigrationState,
-	transitionState: queryTransitionMigrationState,
-	cancelPhase:     queryCancelMigrationPhase,
-	inspectSchema:   queryInspectMetadataSchema, createSchema: queryCreateMetadataSchema,
+	resumeState:           queryResumeMigrationState,
+	transitionState:       queryTransitionMigrationState,
+	cancelPhase:           queryCancelMigrationPhase,
+	upsertDeploymentState: queryUpsertDeploymentMigrationState,
+	getDeploymentState:    queryGetDeploymentMigrationState,
+	insertRunTarget:       queryInsertMigrationRunTarget,
+	listRunTargets:        queryListMigrationRunTargets,
+	inspectSchema:         queryInspectMetadataSchema, createSchema: queryCreateMetadataSchema,
+}
+
+// RecordRunTargets durably records the complete deployment selection for one migration run.
+func (r *MetadataStore) RecordRunTargets(
+	ctx context.Context,
+	runID string,
+	deploymentIDs []string,
+	updatedAt time.Time,
+) error {
+	if !isUUIDv7(runID) {
+		return errors.New("record migration run targets: run ID must be a canonical UUIDv7")
+	}
+	if updatedAt.IsZero() {
+		return errors.New("record migration run targets: update time is required")
+	}
+	if err := validateMigrationSelection(MigrationSelection{DeploymentIDs: deploymentIDs}); err != nil {
+		return fmt.Errorf("record migration run targets: %w", err)
+	}
+	for _, deploymentID := range deploymentIDs {
+		rowsAffected, err := r.dbClient.ExecuteContext(
+			ctx, r.queries.insertRunTarget, runID, deploymentID, updatedAt)
+		if err != nil {
+			return fmt.Errorf("record migration run target %q: %w", deploymentID, err)
+		}
+		if rowsAffected < 0 || rowsAffected > 1 {
+			return fmt.Errorf("record migration run target %q: expected at most one affected row, got %d",
+				deploymentID, rowsAffected)
+		}
+	}
+	return nil
+}
+
+// ListRunTargets returns the deployment selection retained for one migration run.
+func (r *MetadataStore) ListRunTargets(ctx context.Context, runID string) ([]string, error) {
+	if !isUUIDv7(runID) {
+		return nil, errors.New("list migration run targets: run ID must be a canonical UUIDv7")
+	}
+	rows, err := r.dbClient.QueryContext(ctx, r.queries.listRunTargets, runID)
+	if err != nil {
+		return nil, fmt.Errorf("list migration run targets: %w", err)
+	}
+	targets := make([]string, 0, len(rows))
+	for index, row := range rows {
+		deploymentID, err := requiredString(row, "deployment_id")
+		if err != nil {
+			return nil, fmt.Errorf("list migration run targets row %d: %w", index, err)
+		}
+		targets = append(targets, deploymentID)
+	}
+	if err := validateMigrationSelection(MigrationSelection{DeploymentIDs: targets}); err != nil {
+		return nil, fmt.Errorf("list migration run targets: %w", err)
+	}
+	return targets, nil
+}
+
+// UpsertDeploymentState records the release level completed by one deployment in a logical store.
+func (r *MetadataStore) UpsertDeploymentState(ctx context.Context, state DeploymentState) error {
+	if err := state.Validate(); err != nil {
+		return fmt.Errorf("upsert deployment migration state: %w", err)
+	}
+	rowsAffected, err := r.dbClient.ExecuteContext(ctx, r.queries.upsertDeploymentState,
+		state.ID, state.MigrationStateID, state.DeploymentID, state.CompletedLevel, state.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("upsert deployment migration state for deployment %q: %w", state.DeploymentID, err)
+	}
+	return requireOneRow("upsert deployment migration state", rowsAffected)
+}
+
+// GetDeploymentState returns a deployment completion marker, or nil when it has not been migrated.
+func (r *MetadataStore) GetDeploymentState(
+	ctx context.Context,
+	migrationStateID string,
+	deploymentID string,
+) (*DeploymentState, error) {
+	if !isUUIDv7(migrationStateID) {
+		return nil, errors.New("read deployment migration state: parent ID must be a canonical UUIDv7")
+	}
+	if strings.TrimSpace(deploymentID) == "" || deploymentID != strings.TrimSpace(deploymentID) {
+		return nil, errors.New("read deployment migration state: deployment ID is invalid")
+	}
+	rows, err := r.dbClient.QueryContext(ctx, r.queries.getDeploymentState, deploymentID, migrationStateID)
+	if err != nil {
+		return nil, fmt.Errorf("read deployment migration state for deployment %q: %w", deploymentID, err)
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	if len(rows) != 1 {
+		return nil, fmt.Errorf("read deployment migration state for deployment %q: expected one row, got %d",
+			deploymentID, len(rows))
+	}
+	state, err := deploymentStateFromRow(rows[0])
+	if err != nil {
+		return nil, fmt.Errorf("read deployment migration state for deployment %q: %w", deploymentID, err)
+	}
+	return &state, nil
 }
 
 // CancelPhaseState conditionally restores a phase boundary when its run has no operation progress.
@@ -524,7 +654,7 @@ func (r *MetadataStore) InsertProgress(ctx context.Context, progress Progress) e
 
 	rowsAffected, err := r.dbClient.ExecuteContext(ctx, r.queries.insertProgress,
 		progress.ID, progress.MigrationStateID, progress.RunID, progress.TargetLevel,
-		progress.OperationID, progress.OperationOrder, string(progress.Status),
+		progress.OperationID, progress.OperationOrder, progress.ExecutionTargetID, string(progress.Status),
 		nullableCheckpoint(progress.CheckpointData), progress.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("insert migration progress for operation %q: %w", progress.OperationID, err)
@@ -607,6 +737,37 @@ func stateFromRow(row map[string]interface{}) (State, error) {
 	return state, nil
 }
 
+func deploymentStateFromRow(row map[string]interface{}) (DeploymentState, error) {
+	id, err := requiredString(row, "id")
+	if err != nil {
+		return DeploymentState{}, err
+	}
+	migrationStateID, err := requiredString(row, "migration_state_id")
+	if err != nil {
+		return DeploymentState{}, err
+	}
+	deploymentID, err := requiredString(row, "deployment_id")
+	if err != nil {
+		return DeploymentState{}, err
+	}
+	completedLevel, err := requiredString(row, "completed_level")
+	if err != nil {
+		return DeploymentState{}, err
+	}
+	updatedAt, err := requiredTime(row, "updated_at")
+	if err != nil {
+		return DeploymentState{}, err
+	}
+	state := DeploymentState{
+		ID: id, MigrationStateID: migrationStateID, DeploymentID: deploymentID,
+		CompletedLevel: completedLevel, UpdatedAt: updatedAt,
+	}
+	if err := state.Validate(); err != nil {
+		return DeploymentState{}, fmt.Errorf("invalid stored deployment migration state: %w", err)
+	}
+	return state, nil
+}
+
 func progressFromRow(row map[string]interface{}) (Progress, error) {
 	id, err := requiredString(row, "id")
 	if err != nil {
@@ -632,6 +793,10 @@ func progressFromRow(row map[string]interface{}) (Progress, error) {
 	if err != nil {
 		return Progress{}, err
 	}
+	executionTargetID, err := requiredString(row, "execution_target_id")
+	if err != nil {
+		return Progress{}, err
+	}
 	status, err := requiredString(row, "status")
 	if err != nil {
 		return Progress{}, err
@@ -646,15 +811,16 @@ func progressFromRow(row map[string]interface{}) (Progress, error) {
 	}
 
 	progress := Progress{
-		ID:               id,
-		MigrationStateID: migrationStateID,
-		RunID:            runID,
-		TargetLevel:      targetLevel,
-		OperationID:      operationID,
-		OperationOrder:   operationOrder,
-		Status:           Status(status),
-		CheckpointData:   json.RawMessage(checkpoint),
-		UpdatedAt:        updatedAt,
+		ID:                id,
+		MigrationStateID:  migrationStateID,
+		RunID:             runID,
+		TargetLevel:       targetLevel,
+		OperationID:       operationID,
+		OperationOrder:    operationOrder,
+		ExecutionTargetID: executionTargetID,
+		Status:            Status(status),
+		CheckpointData:    json.RawMessage(checkpoint),
+		UpdatedAt:         updatedAt,
 	}
 	if err := progress.Validate(); err != nil {
 		return Progress{}, fmt.Errorf("invalid stored migration progress: %w", err)

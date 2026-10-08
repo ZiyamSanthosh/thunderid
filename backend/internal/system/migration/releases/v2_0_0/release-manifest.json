@@ -1,7 +1,7 @@
 {
   "manifestVersion": 1,
   "releaseVersion": "2.0.0",
-  "migrationMetadataVersion": 1,
+  "migrationMetadataVersion": 2,
   "migrationDocumentation": "https://thunderid.dev/docs/migrations",
   "stores": [
     {

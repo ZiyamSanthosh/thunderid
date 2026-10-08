@@ -18,6 +18,7 @@ import (
 
 type scriptedResumableOperation struct {
 	definition  OperationDefinition
+	target      ExecutionTarget
 	batches     []ResumableBatchResult
 	checkpoints []json.RawMessage
 }
@@ -31,7 +32,7 @@ func (o *scriptedResumableOperation) ResolveTargets(
 	ReadAccess,
 	MigrationSelection,
 ) ([]ExecutionTarget, error) {
-	return []ExecutionTarget{{}}, nil
+	return []ExecutionTarget{o.target}, nil
 }
 
 func (o *scriptedResumableOperation) PreVerify(
@@ -71,7 +72,7 @@ func TestResumableOperationExecutorCommitsBatchesWithCheckpoints(t *testing.T) {
 	expectResumableReservedState(dbClient, 3, executedAt)
 	dbClient.On("ExecuteContext", mock.Anything, queryInsertMigrationProgress,
 		testProgressID, testStateID, testRunID, "2.0.0", string(operation.Definition().ID), 2,
-		string(StatusInProgress), nil, executedAt).Return(int64(1), nil).Once()
+		"", string(StatusInProgress), nil, executedAt).Return(int64(1), nil).Once()
 	dbClient.On("ExecuteContext", mock.Anything, queryUpdateMigrationProgress,
 		string(StatusInProgress), `{"lastID":"500"}`, executedAt,
 		testProgressID, testStateID, testRunID).Return(int64(1), nil).Once()
@@ -119,6 +120,29 @@ func TestResumableOperationExecutorResumesFromCommittedCheckpoint(t *testing.T) 
 	assert.Equal(t, 1, transactioner.calls)
 }
 
+func TestResumableOperationExecutorPersistsDeploymentTarget(t *testing.T) {
+	dbClient := providermock.NewDBClientInterfaceMock(t)
+	operation := newScriptedResumableOperation(ResumableBatchResult{Completed: true})
+	operation.target = ExecutionTarget{DeploymentID: "deployment-a"}
+	executedAt := time.Date(2026, time.October, 6, 11, 30, 0, 0, time.UTC)
+	expectResumableReservedState(dbClient, 2, executedAt)
+	dbClient.On("ExecuteContext", mock.Anything, queryInsertMigrationProgress,
+		testProgressID, testStateID, testRunID, "2.0.0", string(operation.Definition().ID), 0,
+		"deployment-a", string(StatusInProgress), nil, executedAt).Return(int64(1), nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryUpdateMigrationProgress,
+		string(StatusCompleted), nil, executedAt,
+		testProgressID, testStateID, testRunID).Return(int64(1), nil).Once()
+	executor := newTestResumableExecutor(t, dbClient, &testTransactioner{})
+	executor.newID = sequenceIDs(testProgressID)
+	executor.now = func() time.Time { return executedAt }
+
+	result, err := executor.Execute(context.Background(), operation,
+		MigrationSelection{DeploymentIDs: []string{"deployment-a"}}, testRunID, 0)
+
+	require.NoError(t, err)
+	assert.Equal(t, "deployment-a", result.Progress.ExecutionTargetID)
+}
+
 func TestResumableOperationExecutorRejectsBatchWithoutCheckpointProgress(t *testing.T) {
 	dbClient := providermock.NewDBClientInterfaceMock(t)
 	operation := newScriptedResumableOperation(ResumableBatchResult{})
@@ -126,7 +150,7 @@ func TestResumableOperationExecutorRejectsBatchWithoutCheckpointProgress(t *test
 	expectResumableReservedState(dbClient, 2, executedAt)
 	dbClient.On("ExecuteContext", mock.Anything, queryInsertMigrationProgress,
 		testProgressID, testStateID, testRunID, "2.0.0", string(operation.Definition().ID), 0,
-		string(StatusInProgress), nil, executedAt).Return(int64(1), nil).Once()
+		"", string(StatusInProgress), nil, executedAt).Return(int64(1), nil).Once()
 	transactioner := &testTransactioner{}
 	executor := newTestResumableExecutor(t, dbClient, transactioner)
 	executor.newID = sequenceIDs(testProgressID)

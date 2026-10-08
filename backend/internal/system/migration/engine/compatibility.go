@@ -111,6 +111,40 @@ func (g *CompatibilityGate) Check(
 	return report
 }
 
+// CheckDeployment evaluates serving compatibility for one deployment in a shared physical store.
+func (g *CompatibilityGate) CheckDeployment(
+	ctx context.Context,
+	metadataStores map[StoreID]*MetadataStore,
+	deploymentID string,
+) CompatibilityReport {
+	if deploymentID == "" {
+		return g.Check(ctx, metadataStores)
+	}
+	report := CompatibilityReport{Stores: make([]StoreCompatibility, 0, len(g.manifest.Stores))}
+	for _, requirement := range g.manifest.Stores {
+		metadataStore := metadataStores[requirement.ID]
+		result := g.checkStore(ctx, requirement, metadataStore)
+		if result.Reason == CompatibilityReasonTargetNotReady && metadataStore != nil {
+			state, err := metadataStore.GetState(ctx, requirement.ID)
+			if err != nil {
+				result.Reason = CompatibilityReasonUnverifiable
+				result.Err = err
+			} else if state != nil {
+				deploymentState, err := metadataStore.GetDeploymentState(ctx, state.ID, deploymentID)
+				switch {
+				case err != nil:
+					result.Reason = CompatibilityReasonUnverifiable
+					result.Err = err
+				case deploymentState != nil && deploymentState.CompletedLevel == requirement.RequiredLevel:
+					result.Reason = CompatibilityReasonNone
+				}
+			}
+		}
+		report.Stores = append(report.Stores, result)
+	}
+	return report
+}
+
 func (g *CompatibilityGate) resolveMigrationRoute(report *CompatibilityReport) {
 	if report.Compatible() {
 		return

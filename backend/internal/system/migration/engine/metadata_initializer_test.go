@@ -204,6 +204,8 @@ func expectReadySchema(dbClient *providermock.DBClientInterfaceMock) {
 		Return([]map[string]interface{}{
 			{"table_name": metadataStateTable},
 			{"table_name": metadataProgressTable},
+			{"table_name": metadataDeploymentStateTable},
+			{"table_name": metadataRunTargetTable},
 		}, nil).Once()
 }
 

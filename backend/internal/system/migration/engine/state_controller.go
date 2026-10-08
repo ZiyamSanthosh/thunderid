@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/thunder-id/thunderid/internal/system/utils"
 	"github.com/thunder-id/thunderid/pkg/thunderidengine/providers"
 )
 
@@ -48,6 +49,7 @@ type MigrationStateController struct {
 	metadataStore *MetadataStore
 	transactioner providers.Transactioner
 	now           func() time.Time
+	newID         func() (string, error)
 }
 
 // NewMigrationStateController creates a state controller for one physical database namespace.
@@ -68,7 +70,8 @@ func NewMigrationStateController(
 	}
 	return &MigrationStateController{
 		manifest: release.Manifest, plan: registry.Plan(), metadataStore: metadataStore, transactioner: transactioner,
-		now: func() time.Time { return time.Now().UTC() },
+		now:   func() time.Time { return time.Now().UTC() },
+		newID: utils.GenerateUUIDv7,
 	}, nil
 }
 
@@ -404,6 +407,17 @@ func (r *MigrationStateController) CompletePhase(
 	phase OperationPhase,
 	runID string,
 ) (FinalizationResult, error) {
+	return r.CompletePhaseSelection(ctx, storeID, phase, runID, MigrationSelection{})
+}
+
+// CompletePhaseSelection finalizes a complete-store phase or records deployment-selective migrate completion.
+func (r *MigrationStateController) CompletePhaseSelection(
+	ctx context.Context,
+	storeID StoreID,
+	phase OperationPhase,
+	runID string,
+	selection MigrationSelection,
+) (FinalizationResult, error) {
 	if !isUUIDv7(runID) {
 		return FinalizationResult{}, errors.New("finalize migration store: run ID must be a canonical UUIDv7")
 	}
@@ -455,7 +469,32 @@ func (r *MigrationStateController) CompletePhase(
 		finalizedAt := r.now()
 		finalized := false
 		completedStage := MigrationStageComplete
-		if phasePlan.next == "" {
+		selective := len(selection.DeploymentIDs) > 0
+		if selective {
+			if phase != OperationPhaseMigrate {
+				return errors.New("deployment-selective finalization is supported only for the migrate phase")
+			}
+			for _, deploymentID := range selection.DeploymentIDs {
+				deploymentStateID, err := r.newID()
+				if err != nil {
+					return fmt.Errorf("generate deployment migration state ID: %w", err)
+				}
+				if err := r.metadataStore.UpsertDeploymentState(txCtx, DeploymentState{
+					ID: deploymentStateID, MigrationStateID: state.ID, DeploymentID: deploymentID,
+					CompletedLevel: requirement.RequiredLevel, UpdatedAt: finalizedAt,
+				}); err != nil {
+					return err
+				}
+			}
+			next := *state
+			next.Stage = MigrationStageExpanded
+			next.Status = StatusCompleted
+			next.ActiveRunID = ""
+			next.FailureSummary = ""
+			next.UpdatedAt = finalizedAt
+			finalized, err = r.metadataStore.TransitionState(txCtx, *state, next)
+			completedStage = MigrationStageExpanded
+		} else if phasePlan.next == "" {
 			finalized, err = r.metadataStore.FinalizeState(txCtx, *state, finalizedAt)
 		} else {
 			next := *state
@@ -476,7 +515,10 @@ func (r *MigrationStateController) CompletePhase(
 		if !finalized {
 			return fmt.Errorf("%w for store %q", ErrFinalizationConflict, storeID)
 		}
-		if phasePlan.next == "" {
+		if selective {
+			state.Stage = MigrationStageExpanded
+			state.Status = StatusCompleted
+		} else if phasePlan.next == "" {
 			state.CompletedLevel = state.TargetLevel
 			state.TargetLevel = ""
 			state.Stage = MigrationStageComplete
@@ -654,20 +696,22 @@ func validateCompletedProgress(
 	progress []Progress,
 	expected map[string]int,
 ) error {
-	if len(progress) != len(expected) {
-		return fmt.Errorf("finalize migration store %q: found %d completed progress records, expected %d",
+	if len(progress) < len(expected) {
+		return fmt.Errorf("finalize migration store %q: found %d completed progress records, expected at least %d",
 			storeID, len(progress), len(expected))
 	}
 	seen := make(map[string]struct{}, len(progress))
+	completedOperations := make(map[string]struct{}, len(expected))
 	for _, item := range progress {
 		expectedOrder, exists := expected[item.OperationID]
 		if !exists {
 			return fmt.Errorf("finalize migration store %q: progress references unknown operation %q",
 				storeID, item.OperationID)
 		}
-		if _, duplicate := seen[item.OperationID]; duplicate {
-			return fmt.Errorf("finalize migration store %q: progress repeats operation %q",
-				storeID, item.OperationID)
+		progressKey := item.OperationID + "\x00" + item.ExecutionTargetID
+		if _, duplicate := seen[progressKey]; duplicate {
+			return fmt.Errorf("finalize migration store %q: progress repeats operation %q target %q",
+				storeID, item.OperationID, item.ExecutionTargetID)
 		}
 		if item.MigrationStateID != state.ID || item.RunID != state.ActiveRunID ||
 			item.TargetLevel != state.TargetLevel {
@@ -682,7 +726,14 @@ func validateCompletedProgress(
 			return fmt.Errorf("finalize migration store %q: operation %q status is %q instead of %q",
 				storeID, item.OperationID, item.Status, StatusCompleted)
 		}
-		seen[item.OperationID] = struct{}{}
+		seen[progressKey] = struct{}{}
+		completedOperations[item.OperationID] = struct{}{}
+	}
+	for operationID := range expected {
+		if _, completed := completedOperations[operationID]; !completed {
+			return fmt.Errorf("finalize migration store %q: operation %q has no completed progress",
+				storeID, operationID)
+		}
 	}
 	return nil
 }

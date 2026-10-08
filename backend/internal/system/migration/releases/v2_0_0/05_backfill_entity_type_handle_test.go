@@ -26,7 +26,7 @@ func TestBackfillEntityTypeHandleOperation(t *testing.T) {
 	targets, err := operation.ResolveTargets(context.Background(), nil,
 		engine.MigrationSelection{DeploymentIDs: []string{"deployment-a"}})
 	require.NoError(t, err)
-	assert.Equal(t, []engine.ExecutionTarget{{}}, targets)
+	assert.Equal(t, []engine.ExecutionTarget{{DeploymentID: "deployment-a"}}, targets)
 
 	source, err := operation.PreVerify(context.Background(), entityTypeHandleAccess(
 		entityTypeHandleRow("id-1", "Legacy Person", nil),
@@ -41,6 +41,13 @@ func TestBackfillEntityTypeHandleOperation(t *testing.T) {
 	), engine.ExecutionTarget{})
 	require.NoError(t, err)
 	assert.Equal(t, engine.VerificationTarget, target.State)
+
+	partial, err := operation.PreVerify(context.Background(), entityTypeHandleAccess(
+		entityTypeHandleRow("id-1", "Legacy Person", "legacy-person"),
+		entityTypeHandleRow("id-2", "Customer", nil),
+	), engine.ExecutionTarget{})
+	require.NoError(t, err)
+	assert.Equal(t, engine.VerificationSource, partial.State)
 
 	invalid, err := operation.PreVerify(context.Background(), entityTypeHandleAccess(
 		entityTypeHandleRow("id-1", "Legacy Person", "Invalid Handle"),

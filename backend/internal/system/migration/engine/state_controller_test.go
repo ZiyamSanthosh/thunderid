@@ -367,7 +367,7 @@ func TestMigrationStateControllerFinalizationRequiresCompleteProgress(t *testing
 
 	require.Error(t, err)
 	assert.False(t, result.Finalized)
-	assert.ErrorContains(t, err, "expected 1")
+	assert.ErrorContains(t, err, "expected at least 1")
 }
 
 func TestMigrationStateControllerFinalizationReportsConditionalUpdateConflict(t *testing.T) {
@@ -525,6 +525,44 @@ func TestMigrationStateControllerCompletesMigrateAtContractReadyBoundary(t *test
 	assert.Equal(t, StatusCompleted, result.State.Status)
 }
 
+func TestMigrationStateControllerCompletesSelectedDeploymentWithoutAdvancingGlobalBoundary(t *testing.T) {
+	release := phaseAwareStateControllerTestRelease()
+	startedAt := time.Date(2026, time.October, 3, 9, 0, 0, 0, time.UTC)
+	completedAt := startedAt.Add(time.Minute)
+	progressRow := completedProgressRow(
+		release.Plan.Migrate[0].Definition().ID, 1, release.Manifest.ReleaseVersion, startedAt)
+	progressRow["execution_target_id"] = "deployment-a"
+	dbClient := providermock.NewDBClientInterfaceMock(t)
+	dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(StoreIDConfigDB)).
+		Return([]map[string]interface{}{phaseStateRow(
+			MigrationStageMigrating, StatusInProgress, release.Manifest.ReleaseVersion, testRunID, startedAt,
+		)}, nil).Once()
+	dbClient.On("QueryContext", mock.Anything, queryListMigrationProgress, testStateID, testRunID).
+		Return([]map[string]interface{}{progressRow}, nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryUpsertDeploymentMigrationState,
+		testProgressID, testStateID, "deployment-a", release.Manifest.ReleaseVersion, completedAt).
+		Return(int64(1), nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryTransitionMigrationState,
+		"1.0.0", release.Manifest.ReleaseVersion, string(MigrationStageExpanded), string(StatusCompleted),
+		nil, nil, completedAt, testStateID, string(StoreIDConfigDB), 1, "1.0.0",
+		release.Manifest.ReleaseVersion, string(MigrationStageMigrating), string(StatusInProgress),
+		testRunID, nil, startedAt).
+		Return(int64(1), nil).Once()
+	controller := newTestFinalizationController(t, release, dbClient, &testTransactioner{})
+	controller.now = func() time.Time { return completedAt }
+	controller.newID = sequenceIDs(testProgressID)
+
+	result, err := controller.CompletePhaseSelection(
+		context.Background(), StoreIDConfigDB, OperationPhaseMigrate, testRunID,
+		MigrationSelection{DeploymentIDs: []string{"deployment-a"}})
+
+	require.NoError(t, err)
+	assert.True(t, result.Finalized)
+	assert.Equal(t, MigrationStageExpanded, result.State.Stage)
+	assert.Equal(t, "1.0.0", result.State.CompletedLevel)
+	assert.Equal(t, release.Manifest.ReleaseVersion, result.State.TargetLevel)
+}
+
 func TestMigrationStateControllerCompletesContractAtTarget(t *testing.T) {
 	release := phaseAwareStateControllerTestRelease()
 	startedAt := time.Date(2026, time.October, 3, 10, 0, 0, 0, time.UTC)
@@ -609,7 +647,7 @@ func completedProgressRow(
 	return map[string]interface{}{
 		"id": testProgressID, "migration_state_id": testStateID, "run_id": testRunID,
 		"target_level": targetLevel, "operation_id": string(operationID),
-		"operation_order": int32(operationOrder), "status": string(StatusCompleted),
+		"operation_order": int32(operationOrder), "execution_target_id": "", "status": string(StatusCompleted),
 		"checkpoint_data": nil, "updated_at": updatedAt,
 	}
 }

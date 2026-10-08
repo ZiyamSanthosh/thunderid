@@ -89,14 +89,9 @@ func (e *AtomicOperationExecutor) Execute(
 	}
 	if len(targets) != 1 {
 		return OperationExecutionResult{}, fmt.Errorf(
-			"execute operation %q: basic atomic executor requires exactly one execution target", definition.ID)
+			"execute operation %q: atomic executor currently requires exactly one execution target", definition.ID)
 	}
 	target := targets[0]
-	if target.DeploymentID != "" {
-		return OperationExecutionResult{}, fmt.Errorf(
-			"execute operation %q: basic atomic executor does not support deployment-targeted execution",
-			definition.ID)
-	}
 
 	progressID, err := e.newID()
 	if err != nil {
@@ -120,7 +115,8 @@ func (e *AtomicOperationExecutor) Execute(
 		progress := Progress{
 			ID: progressID, MigrationStateID: state.ID, RunID: runID, TargetLevel: state.TargetLevel,
 			OperationID: string(definition.ID), OperationOrder: operationOrder,
-			Status: StatusInProgress, UpdatedAt: e.now(),
+			ExecutionTargetID: target.DeploymentID,
+			Status:            StatusInProgress, UpdatedAt: e.now(),
 		}
 		if err := e.metadataStore.InsertProgress(txCtx, progress); err != nil {
 			return err

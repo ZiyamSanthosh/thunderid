@@ -41,6 +41,42 @@ func TestCompatibilityGateAcceptsCompatibleStores(t *testing.T) {
 	}
 }
 
+func TestCompatibilityGateAcceptsMigratedDeploymentAtExpandedBoundary(t *testing.T) {
+	manifest := validTestManifest()
+	manifest.Stores[0].RequiredLevel = manifest.ReleaseVersion
+	manifest.Stores[0].Changed = true
+	metadataStores := make(map[StoreID]*MetadataStore, len(manifest.Stores))
+	for _, requirement := range manifest.Stores {
+		dbClient := providermock.NewDBClientInterfaceMock(t)
+		expectReadySchema(dbClient)
+		row := compatibilityStateRow(requirement.ID, requirement.RequiredLevel)
+		if requirement.ID == StoreIDConfigDB {
+			row["completed_level"] = requirement.AcceptedSourceLevel
+			row["target_level"] = requirement.RequiredLevel
+			row["stage"] = string(MigrationStageExpanded)
+			row["status"] = string(StatusCompleted)
+			dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(requirement.ID)).
+				Return([]map[string]interface{}{row}, nil).Twice()
+			dbClient.On("QueryContext", mock.Anything, queryGetDeploymentMigrationState,
+				"deployment-a", testStateID).Return([]map[string]interface{}{{
+				"id": testProgressID, "migration_state_id": testStateID,
+				"deployment_id": "deployment-a", "completed_level": requirement.RequiredLevel,
+				"updated_at": row["updated_at"],
+			}}, nil).Once()
+		} else {
+			dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(requirement.ID)).
+				Return([]map[string]interface{}{row}, nil).Once()
+		}
+		metadataStores[requirement.ID] = newTestMetadataStore(t, dbClient)
+	}
+	gate, err := NewCompatibilityGate(manifest)
+	require.NoError(t, err)
+
+	report := gate.CheckDeployment(context.Background(), metadataStores, "deployment-a")
+
+	assert.True(t, report.Compatible())
+}
+
 func TestCompatibilityGateKeepsSourceCompatibleDuringMigrateFailure(t *testing.T) {
 	manifest := validTestManifest()
 	dbClient := providermock.NewDBClientInterfaceMock(t)

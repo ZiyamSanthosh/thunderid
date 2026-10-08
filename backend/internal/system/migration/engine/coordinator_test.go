@@ -210,7 +210,7 @@ func TestMigrationCoordinatorAppliesBasicMigration(t *testing.T) {
 	expectReservedState(dbClient, StoreIDConfigDB, release.Manifest.ReleaseVersion, testRunID, updatedAt)
 	dbClient.On("ExecuteContext", mock.Anything, queryInsertMigrationProgress,
 		mock.Anything, testStateID, testRunID, release.Manifest.ReleaseVersion,
-		string(release.Plan.Expand[0].Definition().ID), 0, string(StatusInProgress), nil, mock.Anything).
+		string(release.Plan.Expand[0].Definition().ID), 0, "", string(StatusInProgress), nil, mock.Anything).
 		Return(int64(1), nil).Once()
 	dbClient.On("ExecuteContext", mock.Anything, queryUpdateMigrationProgress,
 		string(StatusCompleted), nil, mock.Anything, mock.Anything, testStateID, testRunID).
@@ -274,7 +274,7 @@ func TestMigrationCoordinatorAppliesSelectedMigratePhase(t *testing.T) {
 		dbClient, StoreIDConfigDB, release.Manifest.ReleaseVersion, MigrationStageMigrating, testRunID, updatedAt)
 	dbClient.On("ExecuteContext", mock.Anything, queryInsertMigrationProgress,
 		mock.Anything, testStateID, testRunID, release.Manifest.ReleaseVersion,
-		string(release.Plan.Migrate[0].Definition().ID), 1, string(StatusInProgress), nil, mock.Anything).
+		string(release.Plan.Migrate[0].Definition().ID), 1, "", string(StatusInProgress), nil, mock.Anything).
 		Return(int64(1), nil).Once()
 	dbClient.On("ExecuteContext", mock.Anything, queryUpdateMigrationProgress,
 		string(StatusCompleted), nil, mock.Anything, mock.Anything, testStateID, testRunID).
@@ -410,7 +410,7 @@ func TestMigrationCoordinatorMarksStoreFailedAfterExecutionError(t *testing.T) {
 	expectReservedState(dbClient, StoreIDConfigDB, release.Manifest.ReleaseVersion, testRunID, updatedAt)
 	dbClient.On("ExecuteContext", mock.Anything, queryInsertMigrationProgress,
 		mock.Anything, testStateID, testRunID, release.Manifest.ReleaseVersion,
-		string(baseOperation.Definition().ID), 0, string(StatusInProgress), nil, mock.Anything).
+		string(baseOperation.Definition().ID), 0, "", string(StatusInProgress), nil, mock.Anything).
 		Return(int64(1), nil).Once()
 	expectReservedState(dbClient, StoreIDConfigDB, release.Manifest.ReleaseVersion, testRunID, updatedAt)
 	dbClient.On("ExecuteContext", mock.Anything, queryFailMigrationState,
@@ -515,7 +515,7 @@ func TestMigrationCoordinatorResumesPendingOperation(t *testing.T) {
 	expectReservedState(dbClient, StoreIDConfigDB, release.Manifest.ReleaseVersion, testRunID, updatedAt)
 	dbClient.On("ExecuteContext", mock.Anything, queryInsertMigrationProgress,
 		mock.Anything, testStateID, testRunID, release.Manifest.ReleaseVersion,
-		string(release.Plan.Expand[0].Definition().ID), 0, string(StatusInProgress), nil, mock.Anything).
+		string(release.Plan.Expand[0].Definition().ID), 0, "", string(StatusInProgress), nil, mock.Anything).
 		Return(int64(1), nil).Once()
 	dbClient.On("ExecuteContext", mock.Anything, queryUpdateMigrationProgress,
 		string(StatusCompleted), nil, mock.Anything, mock.Anything, testStateID, testRunID).
@@ -565,7 +565,7 @@ func TestMigrationCoordinatorResumesAbandonedInProgressRun(t *testing.T) {
 	expectReservedState(dbClient, StoreIDConfigDB, release.Manifest.ReleaseVersion, testRunID, updatedAt)
 	dbClient.On("ExecuteContext", mock.Anything, queryInsertMigrationProgress,
 		mock.Anything, testStateID, testRunID, release.Manifest.ReleaseVersion,
-		string(release.Plan.Expand[0].Definition().ID), 0, string(StatusInProgress), nil, mock.Anything).
+		string(release.Plan.Expand[0].Definition().ID), 0, "", string(StatusInProgress), nil, mock.Anything).
 		Return(int64(1), nil).Once()
 	dbClient.On("ExecuteContext", mock.Anything, queryUpdateMigrationProgress,
 		string(StatusCompleted), nil, mock.Anything, mock.Anything, testStateID, testRunID).
@@ -748,6 +748,8 @@ func TestMigrationCoordinatorResumeAcceptsStoreThatCompletedTheActivePhase(t *te
 		dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(requirement.ID)).
 			Return([]map[string]interface{}{row}, nil).Once()
 	}
+	dbClient.On("QueryContext", mock.Anything, queryListMigrationRunTargets, testRunID).
+		Return([]map[string]interface{}{}, nil).Once()
 	dbClient.On("QueryContext", mock.Anything, queryListMigrationProgress, testStateID, testRunID).
 		Return([]map[string]interface{}{}, nil).Once()
 	coordinator := newTestMigrationCoordinator(t, release, dbClient, &testTransactioner{})

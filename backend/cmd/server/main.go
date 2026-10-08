@@ -290,6 +290,7 @@ func logMigrationApplication(
 	for _, execution := range result.Operations {
 		logger.Info(ctx, "Migration operation completed",
 			log.String("operation", execution.Progress.OperationID),
+			log.String("executionTarget", execution.Progress.ExecutionTargetID),
 			log.String("runID", execution.Progress.RunID),
 			log.Bool("executionSkipped", execution.ExecutionSkipped),
 			log.Int("committedBatches", execution.CommittedBatches))

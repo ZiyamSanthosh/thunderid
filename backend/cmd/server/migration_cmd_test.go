@@ -33,7 +33,7 @@ func TestRunMigrationInitializeForSharedNamespace(t *testing.T) {
 		Return(int64(0), nil).Once()
 	for range 4 {
 		dbClient.On("ExecuteContext", mock.Anything, mock.Anything,
-			mock.Anything, mock.Anything, 1, "1.0.0", nil, "complete", "clean", nil, nil, mock.Anything).
+			mock.Anything, mock.Anything, 2, "1.0.0", nil, "complete", "clean", nil, nil, mock.Anything).
 			Return(int64(1), nil).Once()
 	}
 
@@ -68,6 +68,8 @@ func TestRunMigrationStatusForSharedNamespace(t *testing.T) {
 		Return([]map[string]interface{}{
 			{"table_name": "MIGRATION_STATE"},
 			{"table_name": "MIGRATION_PROGRESS"},
+			{"table_name": "MIGRATION_DEPLOYMENT_STATE"},
+			{"table_name": "MIGRATION_RUN_TARGET"},
 		}, nil).Times(4)
 	for _, storeID := range []engine.StoreID{
 		engine.StoreIDConfigDB,
@@ -125,6 +127,8 @@ func TestRunMigrationStatusReportsDirectMigrationRoute(t *testing.T) {
 		Return([]map[string]interface{}{
 			{"table_name": "MIGRATION_STATE"},
 			{"table_name": "MIGRATION_PROGRESS"},
+			{"table_name": "MIGRATION_DEPLOYMENT_STATE"},
+			{"table_name": "MIGRATION_RUN_TARGET"},
 		}, nil).Times(4)
 	for _, storeID := range []engine.StoreID{
 		engine.StoreIDConfigDB,
@@ -161,6 +165,8 @@ func TestRunStartupCompatibilityCheckAcceptsCompatibleSharedNamespace(t *testing
 		Return([]map[string]interface{}{
 			{"table_name": "MIGRATION_STATE"},
 			{"table_name": "MIGRATION_PROGRESS"},
+			{"table_name": "MIGRATION_DEPLOYMENT_STATE"},
+			{"table_name": "MIGRATION_RUN_TARGET"},
 		}, nil).Times(4)
 	for _, storeID := range []engine.StoreID{
 		engine.StoreIDConfigDB,
@@ -213,6 +219,8 @@ func TestRunStartupCompatibilityCheckAcceptsContractReadyTarget(t *testing.T) {
 		Return([]map[string]interface{}{
 			{"table_name": "MIGRATION_STATE"},
 			{"table_name": "MIGRATION_PROGRESS"},
+			{"table_name": "MIGRATION_DEPLOYMENT_STATE"},
+			{"table_name": "MIGRATION_RUN_TARGET"},
 		}, nil).Times(4)
 	for _, storeID := range []engine.StoreID{
 		engine.StoreIDConfigDB,
@@ -250,6 +258,8 @@ func TestRunStartupCompatibilityCheckRejectsExpandedTarget(t *testing.T) {
 		Return([]map[string]interface{}{
 			{"table_name": "MIGRATION_STATE"},
 			{"table_name": "MIGRATION_PROGRESS"},
+			{"table_name": "MIGRATION_DEPLOYMENT_STATE"},
+			{"table_name": "MIGRATION_RUN_TARGET"},
 		}, nil).Times(4)
 	for _, storeID := range []engine.StoreID{
 		engine.StoreIDConfigDB,
@@ -313,6 +323,8 @@ func TestRunMigrationCheckForSharedNamespace(t *testing.T) {
 		Return([]map[string]interface{}{
 			{"table_name": "MIGRATION_STATE"},
 			{"table_name": "MIGRATION_PROGRESS"},
+			{"table_name": "MIGRATION_DEPLOYMENT_STATE"},
+			{"table_name": "MIGRATION_RUN_TARGET"},
 		}, nil).Times(4)
 	for _, storeID := range []engine.StoreID{
 		engine.StoreIDConfigDB,
@@ -375,6 +387,8 @@ func TestRunMigrationApplyReturnsNoOpWhenStoresAreAtTarget(t *testing.T) {
 		Return([]map[string]interface{}{
 			{"table_name": "MIGRATION_STATE"},
 			{"table_name": "MIGRATION_PROGRESS"},
+			{"table_name": "MIGRATION_DEPLOYMENT_STATE"},
+			{"table_name": "MIGRATION_RUN_TARGET"},
 		}, nil).Times(8)
 	for _, storeID := range []engine.StoreID{
 		engine.StoreIDConfigDB,
@@ -538,15 +552,35 @@ func TestMigrationCommandPhase(t *testing.T) {
 	}
 }
 
+func TestParseMigrationCommandOptionsAcceptsDeploymentSelection(t *testing.T) {
+	options, err := parseMigrationCommandOptions([]string{
+		migrationSubcommand, migrationApplyAction, string(engine.OperationPhaseMigrate),
+		"--deployment-id", "deployment-a", "--deployment-id=deployment-b",
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, engine.OperationPhaseMigrate, options.phase)
+	assert.Equal(t, []string{"deployment-a", "deployment-b"}, options.selection.DeploymentIDs)
+}
+
+func TestParseMigrationCommandOptionsRestrictsDeploymentSelectionToMigrateApply(t *testing.T) {
+	_, err := parseMigrationCommandOptions([]string{
+		migrationSubcommand, migrationApplyAction, "expand", "--deployment-id", "deployment-a",
+	})
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "supported only by migration apply migrate")
+}
+
 func testMigrationStateRow(storeID engine.StoreID) map[string]interface{} {
 	completedLevel := "1.0.0"
-	if storeID == engine.StoreIDRuntimePersistent || storeID == engine.StoreIDConfigDB {
+	if storeID != engine.StoreIDRuntimeTransient {
 		completedLevel = "2.0.0"
 	}
 	return map[string]interface{}{
 		"id":               "0199a123-4567-7abc-8def-0123456789ab",
 		"store_id":         string(storeID),
-		"metadata_version": int64(1),
+		"metadata_version": int64(2),
 		"completed_level":  completedLevel,
 		"target_level":     nil,
 		"stage":            "complete",

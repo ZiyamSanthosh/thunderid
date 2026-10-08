@@ -239,7 +239,7 @@ func newResumableBackfillCoordinator(
 		engine.StoreIDRuntimePersistent: "2.0.0",
 	}
 	manifest := engine.ReleaseManifest{
-		ManifestVersion: 1, ReleaseVersion: "2.1.0", MigrationMetadataVersion: 1,
+		ManifestVersion: 1, ReleaseVersion: "2.1.0", MigrationMetadataVersion: 2,
 		MigrationDocumentation: "Resumable PostgreSQL integration test",
 	}
 	for _, storeID := range []engine.StoreID{
