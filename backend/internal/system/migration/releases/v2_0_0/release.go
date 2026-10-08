@@ -40,11 +40,28 @@ func migrationPlan(Dependencies) (engine.MigrationPlan, error) {
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
+	addEntityTypeHandle, err := newAddEntityTypeHandleOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	expandEntityTypeLength, err := newExpandEntityTypeLengthOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	backfillEntityTypeHandle := newBackfillEntityTypeHandleOperation()
+	finalizeEntityTypeHandle, err := newFinalizeEntityTypeHandleOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
 	return engine.MigrationPlan{
 		TargetVersion: "2.0.0",
 		Expand: []engine.Operation{
 			removeReasonCheck,
 			createAuthorizationPDPConnection,
+			addEntityTypeHandle,
+			expandEntityTypeLength,
 		},
+		Migrate:  []engine.Operation{backfillEntityTypeHandle},
+		Contract: []engine.Operation{finalizeEntityTypeHandle},
 	}, nil
 }

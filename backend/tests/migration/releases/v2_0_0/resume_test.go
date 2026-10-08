@@ -18,6 +18,11 @@ const abandonedRunID = "0199a123-456a-7abc-8def-0123456789ab"
 func verifyResumeAfterFinalizationFailure(t *testing.T, environment migrationharness.Environment) {
 	t.Helper()
 	t.Run("resume_after_finalization_failure", func(t *testing.T) {
+		configDB := environment.OpenDatabase(t, "configdb")
+		_, err := configDB.Exec(`DELETE FROM "MIGRATION_PROGRESS"
+			WHERE OPERATION_ID = '2.0.0/configdb/05_backfill_entity_type_handle'`)
+		require.NoError(t, err)
+
 		for _, database := range []string{"configdb", "runtime_persistent"} {
 			db := environment.OpenDatabase(t, database)
 			result, err := db.Exec(`UPDATE "MIGRATION_STATE" AS state
@@ -36,14 +41,16 @@ func verifyResumeAfterFinalizationFailure(t *testing.T, environment migrationhar
 
 		environment.RunMigrationCommand(t, "resume")
 
-		for _, database := range []string{"configdb", "runtime_persistent"} {
-			db := environment.OpenDatabase(t, database)
-			migrationharness.AssertQueryValue(t, db,
-				`SELECT COMPLETED_LEVEL || ':' || STATUS FROM "MIGRATION_STATE" WHERE STORE_ID = $1`,
-				"2.0.0:clean",
-				database,
-			)
-		}
+		migrationharness.AssertQueryValue(t, configDB,
+			`SELECT COMPLETED_LEVEL || ':' || STAGE || ':' || STATUS
+				FROM "MIGRATION_STATE" WHERE STORE_ID = 'configdb'`,
+			"1.0.0:expanded:completed")
+		runtimeDB := environment.OpenDatabase(t, "runtime_persistent")
+		migrationharness.AssertQueryValue(t, runtimeDB,
+			`SELECT COMPLETED_LEVEL || ':' || STAGE || ':' || STATUS
+				FROM "MIGRATION_STATE" WHERE STORE_ID = 'runtime_persistent'`,
+			"2.0.0:complete:clean")
+		environment.RunMigrationCommand(t, "apply migrate")
 		t.Log("verified: resume reused completed operation progress and finalized both failed stores")
 	})
 }
@@ -65,14 +72,15 @@ func verifyResumeAbandonedRun(t *testing.T, environment migrationharness.Environ
 
 		environment.RunMigrationCommand(t, "resume")
 
-		for _, database := range []string{"configdb", "runtime_persistent"} {
-			db := environment.OpenDatabase(t, database)
-			migrationharness.AssertQueryValue(t, db,
-				`SELECT COMPLETED_LEVEL || ':' || STATUS FROM "MIGRATION_STATE" WHERE STORE_ID = $1`,
-				"2.0.0:clean",
-				database,
-			)
-		}
+		migrationharness.AssertQueryValue(t, configDB,
+			`SELECT COMPLETED_LEVEL || ':' || STAGE || ':' || STATUS
+				FROM "MIGRATION_STATE" WHERE STORE_ID = 'configdb'`,
+			"1.0.0:expanded:completed")
+		migrationharness.AssertQueryValue(t, runtimeDB,
+			`SELECT COMPLETED_LEVEL || ':' || STAGE || ':' || STATUS
+				FROM "MIGRATION_STATE" WHERE STORE_ID = 'runtime_persistent'`,
+			"2.0.0:complete:clean")
+		environment.RunMigrationCommand(t, "apply migrate")
 		verifyCreateAuthorizationPDPConnection(t, environment)
 		verifyRemoveRevocationReasonCheck(t, environment)
 		t.Log("verified: resume recovered an abandoned run and reapplied both pending operations")

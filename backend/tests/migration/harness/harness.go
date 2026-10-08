@@ -122,11 +122,12 @@ func (e Environment) RunServerExpectCompatibilityFailure(t *testing.T) string {
 }
 
 func migrationCommandArguments(action string) []string {
-	return []string{
+	arguments := []string{
 		"compose", "run", "--rm", "--no-deps",
 		"--entrypoint", "/opt/thunderid/thunderid", "migration-runner",
-		"-serverHome", "/opt/thunderid", "migration", action,
+		"-serverHome", "/opt/thunderid", "migration",
 	}
+	return append(arguments, strings.Fields(action)...)
 }
 
 func (e Environment) OpenDatabase(t *testing.T, database string) *sql.DB {

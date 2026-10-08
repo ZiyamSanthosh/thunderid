@@ -13,8 +13,8 @@
     {
       "id": "entitydb",
       "acceptedSourceLevel": "1.0.0",
-      "requiredLevel": "1.0.0",
-      "changed": false
+      "requiredLevel": "2.0.0",
+      "changed": true
     },
     {
       "id": "runtime_transient",

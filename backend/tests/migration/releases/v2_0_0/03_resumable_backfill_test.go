@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -43,6 +44,14 @@ type resumableBackfillCheckpoint struct {
 type resumableBackfillOperation struct {
 	failAfterBatches int
 	completedBatches int
+}
+
+func TestPostgresResumableBackfill(t *testing.T) {
+	environment := migrationharness.Start(t, filepath.Join(releaseTestDirectory(t), "config.yaml"))
+	environment.RunMigrationCommand(t, "check")
+	environment.RunMigrationCommand(t, "apply")
+	environment.RunMigrationCommand(t, "apply contract")
+	verifyResumableBackfill(t, environment)
 }
 
 func (o *resumableBackfillOperation) Definition() engine.OperationDefinition {
@@ -225,7 +234,7 @@ func newResumableBackfillCoordinator(
 	t.Helper()
 	storeLevels := map[engine.StoreID]string{
 		engine.StoreIDConfigDB:          "2.0.0",
-		engine.StoreIDEntityDB:          "1.0.0",
+		engine.StoreIDEntityDB:          "2.0.0",
 		engine.StoreIDRuntimeTransient:  "1.0.0",
 		engine.StoreIDRuntimePersistent: "2.0.0",
 	}

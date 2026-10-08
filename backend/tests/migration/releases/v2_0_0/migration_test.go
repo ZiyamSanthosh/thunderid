@@ -25,14 +25,18 @@ func TestPostgresSharedDatabaseMigration(t *testing.T) {
 func runPostgresMigrationSuite(t *testing.T, configFile string) {
 	t.Helper()
 	environment := migrationharness.Start(t, filepath.Join(releaseTestDirectory(t), configFile))
+	prepareEntityTypeMigrationSource(t, environment)
 	verifyCompatibilityGate(t, environment)
 	verifyRemoveRevocationReasonCheck(t, environment)
 	verifyCreateAuthorizationPDPConnection(t, environment)
-	verifyReleaseState(t, environment)
+	verifyAddEntityTypeHandle(t, environment)
+	verifyExpandEntityTypeLength(t, environment)
+	verifyBackfillEntityTypeHandle(t, environment)
 	verifyResumeAfterFinalizationFailure(t, environment)
 	verifyResumeAbandonedRun(t, environment)
 	verifyConcurrentMigrationRejected(t, environment)
-	verifyResumableBackfill(t, environment)
+	verifyFinalizeEntityTypeHandle(t, environment)
+	verifyReleaseState(t, environment)
 }
 
 func verifyReleaseState(t *testing.T, environment migrationharness.Environment) {
@@ -43,7 +47,7 @@ func verifyReleaseState(t *testing.T, environment migrationharness.Environment) 
 			level    string
 		}{
 			{database: "configdb", level: "2.0.0:complete:clean"},
-			{database: "entitydb", level: "1.0.0:complete:clean"},
+			{database: "entitydb", level: "2.0.0:complete:clean"},
 			{database: "runtime_transient", level: "1.0.0:complete:clean"},
 			{database: "runtime_persistent", level: "2.0.0:complete:clean"},
 		}

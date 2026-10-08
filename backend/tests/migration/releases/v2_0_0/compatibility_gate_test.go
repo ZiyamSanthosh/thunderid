@@ -32,8 +32,7 @@ func verifyCompatibilityGate(t *testing.T, environment migrationharness.Environm
 			strings.Contains(statusOutput, "compatible=true"),
 			"successful migration status did not report compatibility:\n%s", statusOutput)
 
-		environment.RunMigrationCommand(t, "check")
-		environment.RunMigrationCommand(t, "apply")
+		environment.RunMigrationCommand(t, "check contract")
 		t.Log("verified: status and normal startup reject source-level databases, and status accepts migrated databases")
 	})
 }
