@@ -380,6 +380,48 @@ func TestMigrationPreflightCheckerAcceptsSourceAndRunsAffectedOperations(t *test
 	assert.Equal(t, ReadinessReady, report.Operations[0].State)
 }
 
+func TestMigrationPreflightCheckerChecksSafeWorkflowWithoutContract(t *testing.T) {
+	manifest := changedStoreManifest(StoreIDEntityDB)
+	expandCalled := false
+	migrateCalled := false
+	contractCalled := false
+	operation := func(id OperationID, called *bool) readinessTestOperation {
+		definition := readinessDefinition(id)
+		return readinessTestOperation{
+			definition: definition,
+			check: func(context.Context, ReadAccess, PlanContext) (ReadinessResult, error) {
+				*called = true
+				return ReadinessResult{State: ReadinessReady, Summary: "Operation is ready"}, nil
+			},
+		}
+	}
+	release := ReleaseDefinition{Manifest: manifest, Plan: MigrationPlan{
+		TargetVersion: manifest.ReleaseVersion,
+		Expand:        []Operation{operation("expand-entitydb", &expandCalled)},
+		Migrate:       []Operation{operation("migrate-entitydb", &migrateCalled)},
+		Contract:      []Operation{operation("contract-entitydb", &contractCalled)},
+	}}
+	metadataStores, stores := preflightStores(t, manifest, map[StoreID]string{
+		StoreIDEntityDB: "1.0.0",
+	})
+	checker, err := NewPreflightChecker(release, stores)
+	require.NoError(t, err)
+
+	report := checker.CheckSafeWorkflow(context.Background(), metadataStores)
+
+	assert.True(t, report.Ready())
+	assert.True(t, expandCalled)
+	assert.True(t, migrateCalled)
+	assert.False(t, contractCalled)
+	require.Len(t, report.Phases, 2)
+	assert.Equal(t, OperationPhaseExpand, report.Phases[0].Phase)
+	require.Len(t, report.Phases[0].Operations, 1)
+	assert.Equal(t, OperationID("expand-entitydb"), report.Phases[0].Operations[0].OperationID)
+	assert.Equal(t, OperationPhaseMigrate, report.Phases[1].Phase)
+	require.Len(t, report.Phases[1].Operations, 1)
+	assert.Equal(t, OperationID("migrate-entitydb"), report.Phases[1].Operations[0].OperationID)
+}
+
 func TestMigrationPreflightCheckerSkipsOperationsWhenStoreIsBlocked(t *testing.T) {
 	manifest := changedStoreManifest(StoreIDEntityDB)
 	operationCalled := false

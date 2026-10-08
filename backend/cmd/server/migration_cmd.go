@@ -35,6 +35,7 @@ type migrationCommandResult struct {
 	initialization []engine.InitializationResult
 	compatibility  *engine.CompatibilityReport
 	preflight      *engine.PreflightReport
+	workflowCheck  *engine.WorkflowPreflightReport
 	application    *engine.MigrationRunResult
 	workflow       *engine.MigrationWorkflowResult
 }
@@ -145,6 +146,17 @@ func runMigrationCommand(
 		}
 		return result, nil
 	case migrationCheckAction:
+		if len(args) == 2 {
+			report, err := runMigrationWorkflowCheck(ctx, *releaseDefinition, namespaces)
+			if err != nil {
+				return nil, err
+			}
+			result := &migrationCommandResult{action: args[1], workflowCheck: &report}
+			if !report.Ready() {
+				return result, errMigrationCheckBlocked
+			}
+			return result, nil
+		}
 		report, err := runMigrationCheck(ctx, *releaseDefinition, namespaces, phase)
 		if err != nil {
 			return nil, err
@@ -212,7 +224,7 @@ func migrationCommandUsage() string {
 
 func migrationCommandPhase(args []string) (engine.OperationPhase, error) {
 	if len(args) == 2 {
-		return engine.OperationPhaseExpand, nil
+		return "", nil
 	}
 	if args[1] != migrationCheckAction && args[1] != migrationApplyAction {
 		return "", fmt.Errorf("migration action %q does not accept a phase; %s", args[1], migrationCommandUsage())
@@ -438,6 +450,22 @@ func runMigrationCheck(
 		return engine.PreflightReport{}, fmt.Errorf("create migration preflight checker: %w", err)
 	}
 	return checker.CheckPhase(ctx, metadataStores, phase)
+}
+
+func runMigrationWorkflowCheck(
+	ctx context.Context,
+	release engine.ReleaseDefinition,
+	namespaces []migrationNamespace,
+) (engine.WorkflowPreflightReport, error) {
+	metadataStores, stores, err := migrationReadResources(namespaces)
+	if err != nil {
+		return engine.WorkflowPreflightReport{}, err
+	}
+	checker, err := engine.NewPreflightChecker(release, stores)
+	if err != nil {
+		return engine.WorkflowPreflightReport{}, fmt.Errorf("create migration preflight checker: %w", err)
+	}
+	return checker.CheckSafeWorkflow(ctx, metadataStores), nil
 }
 
 func migrationReadResources(

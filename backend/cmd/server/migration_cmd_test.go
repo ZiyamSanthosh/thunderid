@@ -331,11 +331,13 @@ func TestRunMigrationCheckForSharedNamespace(t *testing.T) {
 	require.NotNil(t, result)
 	assert.Empty(t, result.initialization)
 	assert.Nil(t, result.compatibility)
-	require.NotNil(t, result.preflight)
-	assert.Equal(t, engine.OperationPhaseExpand, result.preflight.Phase)
-	assert.True(t, result.preflight.Ready())
-	require.Len(t, result.preflight.Stores, 4)
-	assert.Empty(t, result.preflight.Operations)
+	assert.Nil(t, result.preflight)
+	require.NotNil(t, result.workflowCheck)
+	assert.True(t, result.workflowCheck.Ready())
+	require.Len(t, result.workflowCheck.Stores, 4)
+	require.Len(t, result.workflowCheck.Phases, 2)
+	assert.Equal(t, engine.OperationPhaseExpand, result.workflowCheck.Phases[0].Phase)
+	assert.Equal(t, engine.OperationPhaseMigrate, result.workflowCheck.Phases[1].Phase)
 }
 
 func TestRunMigrationCheckReturnsBlockedReport(t *testing.T) {
@@ -354,9 +356,9 @@ func TestRunMigrationCheckReturnsBlockedReport(t *testing.T) {
 
 	require.ErrorIs(t, err, errMigrationCheckBlocked)
 	require.NotNil(t, result)
-	require.NotNil(t, result.preflight)
-	assert.False(t, result.preflight.Ready())
-	require.Len(t, result.preflight.Stores, 4)
+	require.NotNil(t, result.workflowCheck)
+	assert.False(t, result.workflowCheck.Ready())
+	require.Len(t, result.workflowCheck.Stores, 4)
 }
 
 func TestRunMigrationApplyReturnsNoOpWhenStoresAreAtTarget(t *testing.T) {
@@ -519,7 +521,7 @@ func TestMigrationCommandPhase(t *testing.T) {
 		args     []string
 		expected engine.OperationPhase
 	}{
-		{name: "default", args: []string{migrationSubcommand, migrationApplyAction}, expected: engine.OperationPhaseExpand},
+		{name: "not specified", args: []string{migrationSubcommand, migrationApplyAction}},
 		{name: "expand", args: []string{migrationSubcommand, migrationApplyAction, "expand"}, expected: engine.OperationPhaseExpand},
 		{name: "migrate", args: []string{migrationSubcommand, migrationApplyAction, "migrate"}, expected: engine.OperationPhaseMigrate},
 		{name: "contract check", args: []string{migrationSubcommand, migrationCheckAction, "contract"}, expected: engine.OperationPhaseContract},

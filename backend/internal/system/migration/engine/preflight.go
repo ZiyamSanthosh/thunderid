@@ -246,7 +246,7 @@ func (c *readinessEvaluator) checkPendingStores(
 	blockedStores map[StoreID]struct{},
 	completedOperations map[OperationID]struct{},
 ) operationReadinessReport {
-	return c.checkPendingStoresForPhase(ctx, nil, includedStores, blockedStores, completedOperations)
+	return c.checkPendingStoresForPhase(ctx, nil, false, includedStores, blockedStores, completedOperations)
 }
 
 func (c *readinessEvaluator) checkPendingPhaseStores(
@@ -257,12 +257,22 @@ func (c *readinessEvaluator) checkPendingPhaseStores(
 	completedOperations map[OperationID]struct{},
 ) operationReadinessReport {
 	return c.checkPendingStoresForPhase(
-		ctx, &phase, includedStores, blockedStores, completedOperations)
+		ctx, &phase, false, includedStores, blockedStores, completedOperations)
+}
+
+func (c *readinessEvaluator) checkSafeWorkflowStores(
+	ctx context.Context,
+	includedStores map[StoreID]struct{},
+	blockedStores map[StoreID]struct{},
+) operationReadinessReport {
+	lastPhase := OperationPhaseMigrate
+	return c.checkPendingStoresForPhase(ctx, &lastPhase, true, includedStores, blockedStores, nil)
 }
 
 func (c *readinessEvaluator) checkPendingStoresForPhase(
 	ctx context.Context,
 	phase *OperationPhase,
+	includePrecedingPhases bool,
 	includedStores map[StoreID]struct{},
 	blockedStores map[StoreID]struct{},
 	completedOperations map[OperationID]struct{},
@@ -277,13 +287,19 @@ func (c *readinessEvaluator) checkPendingStoresForPhase(
 		operation := planned.operation
 		definition := operation.Definition()
 		if phase != nil && planned.phase != *phase {
-			if phasePrecedes(planned.phase, *phase) {
-				resultsByID[definition.ID] = OperationReadinessReport{
-					OperationID: definition.ID, State: ReadinessReady,
-					Summary: "The preceding migration phase is complete",
+			if includePrecedingPhases {
+				if phasePrecedes(*phase, planned.phase) {
+					continue
 				}
+			} else {
+				if phasePrecedes(planned.phase, *phase) {
+					resultsByID[definition.ID] = OperationReadinessReport{
+						OperationID: definition.ID, State: ReadinessReady,
+						Summary: "The preceding migration phase is complete",
+					}
+				}
+				continue
 			}
-			continue
 		}
 		if _, completed := completedOperations[definition.ID]; completed {
 			result := OperationReadinessReport{
@@ -443,6 +459,47 @@ type PreflightReport struct {
 	Operations    []OperationReadinessReport
 }
 
+// WorkflowPhasePreflight contains operation readiness for one phase in the safe workflow.
+type WorkflowPhasePreflight struct {
+	Phase      OperationPhase
+	Operations []OperationReadinessReport
+}
+
+// Ready reports whether every operation in this workflow phase can proceed.
+func (r WorkflowPhasePreflight) Ready() bool {
+	for _, operation := range r.Operations {
+		if !operation.Ready() {
+			return false
+		}
+	}
+	return true
+}
+
+// WorkflowPreflightReport contains the complete read-only assessment for expand followed by migrate.
+type WorkflowPreflightReport struct {
+	TargetVersion string
+	Stores        []StoreMigrationAssessment
+	Phases        []WorkflowPhasePreflight
+}
+
+// Ready reports whether all stores and safe workflow phases can proceed without a known blocker.
+func (r WorkflowPreflightReport) Ready() bool {
+	if len(r.Stores) == 0 || len(r.Phases) == 0 {
+		return false
+	}
+	for _, store := range r.Stores {
+		if !store.Ready() {
+			return false
+		}
+	}
+	for _, phase := range r.Phases {
+		if !phase.Ready() {
+			return false
+		}
+	}
+	return true
+}
+
 // Ready reports whether the migration can proceed without a known preflight blocker.
 func (r PreflightReport) Ready() bool {
 	if len(r.Stores) == 0 {
@@ -493,11 +550,49 @@ func (c *PreflightChecker) Check(
 	ctx context.Context,
 	metadataStores map[StoreID]*MetadataStore,
 ) PreflightReport {
-	compatibility := c.compatibilityGate.Check(ctx, metadataStores)
-	report := PreflightReport{
-		TargetVersion: c.manifest.ReleaseVersion,
-		Stores:        make([]StoreMigrationAssessment, 0, len(c.manifest.Stores)),
+	stores, migrationStores, blockedStores := c.assessStores(ctx, metadataStores)
+	report := PreflightReport{TargetVersion: c.manifest.ReleaseVersion, Stores: stores}
+	operationReport := c.readinessEvaluator.checkStores(ctx, migrationStores, blockedStores)
+	report.Operations = operationReport.Operations
+	return report
+}
+
+// CheckSafeWorkflow evaluates expand and migrate together without including contract operations.
+func (c *PreflightChecker) CheckSafeWorkflow(
+	ctx context.Context,
+	metadataStores map[StoreID]*MetadataStore,
+) WorkflowPreflightReport {
+	stores, migrationStores, blockedStores := c.assessStores(ctx, metadataStores)
+	operationReport := c.readinessEvaluator.checkSafeWorkflowStores(ctx, migrationStores, blockedStores)
+	operationsByID := make(map[OperationID]OperationReadinessReport, len(operationReport.Operations))
+	for _, operation := range operationReport.Operations {
+		operationsByID[operation.OperationID] = operation
 	}
+
+	report := WorkflowPreflightReport{
+		TargetVersion: c.manifest.ReleaseVersion,
+		Stores:        stores,
+		Phases:        make([]WorkflowPhasePreflight, 0, 2),
+	}
+	for _, phase := range []OperationPhase{OperationPhaseExpand, OperationPhaseMigrate} {
+		phaseReport := WorkflowPhasePreflight{Phase: phase}
+		operations, _ := c.plan.OperationsForPhase(phase)
+		for _, operation := range operations {
+			if readiness, exists := operationsByID[operation.Definition().ID]; exists {
+				phaseReport.Operations = append(phaseReport.Operations, readiness)
+			}
+		}
+		report.Phases = append(report.Phases, phaseReport)
+	}
+	return report
+}
+
+func (c *PreflightChecker) assessStores(
+	ctx context.Context,
+	metadataStores map[StoreID]*MetadataStore,
+) ([]StoreMigrationAssessment, map[StoreID]struct{}, map[StoreID]struct{}) {
+	compatibility := c.compatibilityGate.Check(ctx, metadataStores)
+	stores := make([]StoreMigrationAssessment, 0, len(c.manifest.Stores))
 	requirements := make(map[StoreID]StoreRequirement, len(c.manifest.Stores))
 	for _, requirement := range c.manifest.Stores {
 		requirements[requirement.ID] = requirement
@@ -526,12 +621,9 @@ func (c *PreflightChecker) Check(
 			storeAssessment.State = StoreAssessmentBlocked
 			blockedStores[requirement.ID] = struct{}{}
 		}
-		report.Stores = append(report.Stores, storeAssessment)
+		stores = append(stores, storeAssessment)
 	}
-
-	operationReport := c.readinessEvaluator.checkStores(ctx, migrationStores, blockedStores)
-	report.Operations = operationReport.Operations
-	return report
+	return stores, migrationStores, blockedStores
 }
 
 // CheckPhase evaluates whether each store and operation can execute the selected migration phase.
