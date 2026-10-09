@@ -427,6 +427,8 @@ type StoreMigrationAssessmentState string
 const (
 	// StoreAssessmentAtTarget means that the store already satisfies the target release.
 	StoreAssessmentAtTarget StoreMigrationAssessmentState = "at_target"
+	// StoreAssessmentPhaseComplete means that the requested phase already completed for the store.
+	StoreAssessmentPhaseComplete StoreMigrationAssessmentState = "phase_complete"
 	// StoreAssessmentMigrationRequired means that the store is at the accepted source level.
 	StoreAssessmentMigrationRequired StoreMigrationAssessmentState = "migration_required"
 	// StoreAssessmentBlocked means that the store is not a recognized migration source or target.
@@ -448,7 +450,8 @@ type StoreMigrationAssessment struct {
 
 // Ready reports whether the store is either already complete or can be migrated by this release.
 func (r StoreMigrationAssessment) Ready() bool {
-	return r.State == StoreAssessmentAtTarget || r.State == StoreAssessmentMigrationRequired
+	return r.State == StoreAssessmentAtTarget || r.State == StoreAssessmentPhaseComplete ||
+		r.State == StoreAssessmentMigrationRequired
 }
 
 // PreflightReport combines store applicability and operation readiness.
@@ -727,6 +730,10 @@ func (c *PreflightChecker) assessPhaseStore(
 		assessment.Reason = CompatibilityReasonLevelMismatch
 		return assessment, false
 	}
+	if requestedPhaseCompleted(phase, requirement.RequiredLevel, state) {
+		assessment.State = StoreAssessmentPhaseComplete
+		return assessment, false
+	}
 	if err := validatePhaseBoundary(
 		requirement.ID, phase, phasePlan.previous, requirement.RequiredLevel, state); err != nil {
 		assessment.State = StoreAssessmentBlocked
@@ -736,6 +743,24 @@ func (c *PreflightChecker) assessPhaseStore(
 	}
 	assessment.State = StoreAssessmentMigrationRequired
 	return assessment, true
+}
+
+func requestedPhaseCompleted(phase OperationPhase, targetLevel string, state *State) bool {
+	if state.TargetLevel != targetLevel {
+		return false
+	}
+	switch phase {
+	case OperationPhaseExpand:
+		return state.Stage == MigrationStageExpanded && state.Status == StatusCompleted ||
+			state.Stage == MigrationStageMigrating ||
+			state.Stage == MigrationStageContractReady && state.Status == StatusCompleted ||
+			state.Stage == MigrationStageContracting
+	case OperationPhaseMigrate:
+		return state.Stage == MigrationStageContractReady && state.Status == StatusCompleted ||
+			state.Stage == MigrationStageContracting
+	default:
+		return false
+	}
 }
 
 func failedReadinessReport(

@@ -94,6 +94,31 @@ func TestMigrationCoordinatorRejectsInvalidMigrationSelection(t *testing.T) {
 	assert.Empty(t, result.RunID)
 }
 
+func TestMigrationCoordinatorTreatsCompletedPhaseAsAlreadyAtTarget(t *testing.T) {
+	release := phaseAwareStateControllerTestRelease()
+	dbClient := providermock.NewDBClientInterfaceMock(t)
+	updatedAt := time.Date(2026, time.October, 8, 16, 0, 0, 0, time.UTC)
+	for _, requirement := range release.Manifest.Stores {
+		expectReadySchema(dbClient)
+		row := compatibilityStateRow(requirement.ID, requirement.RequiredLevel)
+		if requirement.ID == StoreIDConfigDB {
+			row = phaseStateRow(
+				MigrationStageExpanded, StatusCompleted, release.Manifest.ReleaseVersion, "", updatedAt)
+		}
+		dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(requirement.ID)).
+			Return([]map[string]interface{}{row}, nil).Once()
+	}
+	coordinator := newTestMigrationCoordinator(t, release, dbClient, &testTransactioner{})
+
+	result, err := coordinator.ApplyPhase(
+		context.Background(), OperationPhaseExpand, MigrationSelection{})
+
+	require.NoError(t, err)
+	assert.True(t, result.AlreadyAtTarget)
+	assert.Empty(t, result.RunID)
+	assert.Empty(t, result.Operations)
+}
+
 func TestMigrationCoordinatorSafeWorkflowRunsExpandAndMigrateUnderOneLock(t *testing.T) {
 	release := phaseAwareStateControllerTestRelease()
 	dbClient := providermock.NewDBClientInterfaceMock(t)

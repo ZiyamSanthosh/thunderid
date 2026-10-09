@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -378,6 +379,40 @@ func TestMigrationPreflightCheckerAcceptsSourceAndRunsAffectedOperations(t *test
 	assert.Equal(t, StoreAssessmentMigrationRequired, report.Stores[1].State)
 	require.Len(t, report.Operations, 1)
 	assert.Equal(t, ReadinessReady, report.Operations[0].State)
+}
+
+func TestMigrationPreflightCheckerAcceptsAlreadyCompletedPhase(t *testing.T) {
+	release := phaseAwareStateControllerTestRelease()
+	metadataStores := make(map[StoreID]*MetadataStore, len(release.Manifest.Stores))
+	stores := make(map[StoreID]ReadStore, len(release.Manifest.Stores))
+	updatedAt := time.Date(2026, time.October, 8, 16, 0, 0, 0, time.UTC)
+	for _, requirement := range release.Manifest.Stores {
+		dbClient := providermock.NewDBClientInterfaceMock(t)
+		expectReadySchema(dbClient)
+		row := compatibilityStateRow(requirement.ID, requirement.RequiredLevel)
+		if requirement.ID == StoreIDConfigDB {
+			row = phaseStateRow(
+				MigrationStageExpanded, StatusCompleted, release.Manifest.ReleaseVersion, "", updatedAt)
+		}
+		dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(requirement.ID)).
+			Return([]map[string]interface{}{row}, nil).Once()
+		metadataStores[requirement.ID] = newTestMetadataStore(t, dbClient)
+		stores[requirement.ID] = ReadStore{DatabaseType: DatabaseTypePostgres, Client: dbClient}
+	}
+	checker, err := NewPreflightChecker(release, stores)
+	require.NoError(t, err)
+
+	report, err := checker.CheckPhase(context.Background(), metadataStores, OperationPhaseExpand)
+
+	require.NoError(t, err)
+	assert.True(t, report.Ready())
+	assert.Empty(t, report.Operations)
+	assert.Empty(t, migrationStoreSet(report))
+	for _, assessment := range report.Stores {
+		if assessment.StoreID == StoreIDConfigDB {
+			assert.Equal(t, StoreAssessmentPhaseComplete, assessment.State)
+		}
+	}
 }
 
 func TestMigrationPreflightCheckerChecksSafeWorkflowWithoutContract(t *testing.T) {
