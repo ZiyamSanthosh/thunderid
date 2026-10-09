@@ -18,17 +18,18 @@ func TestFinalizeEntityTypeHandleOperation(t *testing.T) {
 	require.NoError(t, err)
 
 	definition := operation.Definition()
-	assert.Equal(t, engine.OperationID("2.0.0/configdb/06_finalize_entity_type_handle"), definition.ID)
+	assert.Equal(t, engine.OperationID("2.0.0/configdb/07_finalize_entity_type_handle"), definition.ID)
 	assert.Equal(t, engine.OperationKindSchemaChange, definition.Kind)
 
 	implementation, err := operation.(*engine.SQLOperation).Implementation(engine.DatabaseTypePostgres)
 	require.NoError(t, err)
-	require.Len(t, implementation.Statements, 4)
-	assert.Contains(t, implementation.Statements[2].Query, `UNIQUE (HANDLE, CATEGORY, DEPLOYMENT_ID)`)
-	assert.NotContains(t, implementation.Statements[3].Query, `DROP COLUMN NAME`)
+	require.Len(t, implementation.Statements, 3)
+	assert.Contains(t, implementation.Statements[1].Query, `ALTER COLUMN HANDLE SET NOT NULL`)
+	assert.NotContains(t, implementation.Statements[2].Query, `DROP COLUMN NAME`)
 
 	source, err := operation.PreVerify(context.Background(), entityTypeContractAccess(
-		entityTypeExpandedColumnRows(), legacyEntityTypeUniqueColumns), engine.ExecutionTarget{})
+		entityTypeExpandedColumnRows(), legacyEntityTypeUniqueColumns, targetEntityTypeUniqueColumns),
+		engine.ExecutionTarget{})
 	require.NoError(t, err)
 	assert.Equal(t, engine.VerificationSource, source.State)
 
@@ -38,19 +39,7 @@ func TestFinalizeEntityTypeHandleOperation(t *testing.T) {
 	assert.Equal(t, engine.VerificationTarget, target.State)
 
 	invalid, err := operation.PreVerify(context.Background(), entityTypeContractAccess(
-		entityTypeExpandedColumnRows(), targetEntityTypeUniqueColumns), engine.ExecutionTarget{})
+		entityTypeExpandedColumnRows(), legacyEntityTypeUniqueColumns), engine.ExecutionTarget{})
 	require.NoError(t, err)
 	assert.Equal(t, engine.VerificationInvalid, invalid.State)
-}
-
-func entityTypeContractAccess(
-	columns []engine.QueryRow,
-	uniqueColumns string,
-) authorizationPDPReadAccess {
-	return authorizationPDPReadAccess{rows: map[string][]engine.QueryRow{
-		queryEntityTypeMigrationColumns.GetID(): columns,
-		queryEntityTypeUniqueConstraints.GetID(): {{
-			"constraint_name": "entity_type_unique", "column_names": uniqueColumns,
-		}},
-	}}
 }

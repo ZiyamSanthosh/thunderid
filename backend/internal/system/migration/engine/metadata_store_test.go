@@ -294,6 +294,50 @@ func TestMetadataStoreListProgress(t *testing.T) {
 	})
 }
 
+func TestMetadataStoreGetProgress(t *testing.T) {
+	ctx := context.Background()
+	updatedAt := time.Now().UTC()
+	operationID := OperationID("1.1.0/add-session-subject")
+
+	t.Run("returns matching progress", func(t *testing.T) {
+		dbClient := providermock.NewDBClientInterfaceMock(t)
+		dbClient.On("QueryContext", mock.Anything, queryGetMigrationProgress,
+			testStateID, "1.1.0", string(operationID), "deployment-a").
+			Return([]map[string]interface{}{validProgressRow(updatedAt)}, nil).Once()
+
+		progress, err := newTestMetadataStore(t, dbClient).GetProgress(
+			ctx, testStateID, "1.1.0", operationID, "deployment-a")
+
+		require.NoError(t, err)
+		require.NotNil(t, progress)
+		assert.Equal(t, string(operationID), progress.OperationID)
+	})
+
+	t.Run("returns nil when progress is absent", func(t *testing.T) {
+		dbClient := providermock.NewDBClientInterfaceMock(t)
+		dbClient.On("QueryContext", mock.Anything, queryGetMigrationProgress,
+			testStateID, "1.1.0", string(operationID), "").Return(nil, nil).Once()
+
+		progress, err := newTestMetadataStore(t, dbClient).GetProgress(
+			ctx, testStateID, "1.1.0", operationID, "")
+
+		require.NoError(t, err)
+		assert.Nil(t, progress)
+	})
+
+	t.Run("validates lookup identity", func(t *testing.T) {
+		store := newTestMetadataStore(t, providermock.NewDBClientInterfaceMock(t))
+
+		_, stateErr := store.GetProgress(ctx, "invalid", "1.1.0", operationID, "")
+		_, levelErr := store.GetProgress(ctx, testStateID, "invalid", operationID, "")
+		_, operationErr := store.GetProgress(ctx, testStateID, "1.1.0", "", "")
+
+		require.Error(t, stateErr)
+		require.Error(t, levelErr)
+		require.Error(t, operationErr)
+	})
+}
+
 func TestMetadataStoreWritesProgress(t *testing.T) {
 	ctx := context.Background()
 

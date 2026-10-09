@@ -463,7 +463,14 @@ func (r *MigrationStateController) CompletePhaseSelection(
 		if err != nil {
 			return err
 		}
-		if err := validateCompletedProgress(storeID, state, progress, expectedProgress); err != nil {
+		reusedProgress := make(map[string]struct{})
+		progress, err = r.appendReusableSchemaProgress(
+			txCtx, storeID, phase, state, progress, reusedProgress)
+		if err != nil {
+			return err
+		}
+		if err := validateCompletedProgress(
+			storeID, state, progress, expectedProgress, reusedProgress); err != nil {
 			return err
 		}
 		finalizedAt := r.now()
@@ -537,6 +544,45 @@ func (r *MigrationStateController) CompletePhaseSelection(
 		return FinalizationResult{}, fmt.Errorf("finalize migration store %q: %w", storeID, err)
 	}
 	return result, nil
+}
+
+func (r *MigrationStateController) appendReusableSchemaProgress(
+	ctx context.Context,
+	storeID StoreID,
+	phase OperationPhase,
+	state *State,
+	progress []Progress,
+	reused map[string]struct{},
+) ([]Progress, error) {
+	completed := make(map[string]struct{}, len(progress))
+	for _, item := range progress {
+		completed[item.OperationID] = struct{}{}
+	}
+	operations, err := r.plan.OperationsForPhase(phase)
+	if err != nil {
+		return nil, err
+	}
+	for _, operation := range operations {
+		definition := operation.Definition()
+		if definition.StoreID != storeID || definition.Kind != OperationKindSchemaChange {
+			continue
+		}
+		operationID := string(definition.ID)
+		if _, found := completed[operationID]; found {
+			continue
+		}
+		existing, err := r.metadataStore.GetProgress(
+			ctx, state.ID, state.TargetLevel, definition.ID, "")
+		if err != nil {
+			return nil, err
+		}
+		if existing == nil {
+			continue
+		}
+		progress = append(progress, *existing)
+		reused[operationID] = struct{}{}
+	}
+	return progress, nil
 }
 
 type storePhasePlan struct {
@@ -695,6 +741,7 @@ func validateCompletedProgress(
 	state *State,
 	progress []Progress,
 	expected map[string]int,
+	reused map[string]struct{},
 ) error {
 	if len(progress) < len(expected) {
 		return fmt.Errorf("finalize migration store %q: found %d completed progress records, expected at least %d",
@@ -713,8 +760,10 @@ func validateCompletedProgress(
 			return fmt.Errorf("finalize migration store %q: progress repeats operation %q target %q",
 				storeID, item.OperationID, item.ExecutionTargetID)
 		}
-		if item.MigrationStateID != state.ID || item.RunID != state.ActiveRunID ||
-			item.TargetLevel != state.TargetLevel {
+		_, reusable := reused[item.OperationID]
+		belongsToRun := item.RunID == state.ActiveRunID ||
+			(reusable && item.ExecutionTargetID == "")
+		if item.MigrationStateID != state.ID || !belongsToRun || item.TargetLevel != state.TargetLevel {
 			return fmt.Errorf("finalize migration store %q: operation %q progress does not belong to the active run",
 				storeID, item.OperationID)
 		}

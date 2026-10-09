@@ -41,6 +41,13 @@ var (
 			WHERE MIGRATION_STATE_ID = $1 AND RUN_ID = $2
 			ORDER BY OPERATION_ORDER, OPERATION_ID, EXECUTION_TARGET_ID`,
 	}
+	queryGetMigrationProgress = dbmodel.DBQuery{
+		ID: "MIG-METADATA_MGT-20",
+		PostgresQuery: `SELECT ID, MIGRATION_STATE_ID, RUN_ID, TARGET_LEVEL, OPERATION_ID, OPERATION_ORDER,
+			EXECUTION_TARGET_ID, STATUS, CHECKPOINT_DATA, UPDATED_AT FROM "MIGRATION_PROGRESS"
+			WHERE MIGRATION_STATE_ID = $1 AND TARGET_LEVEL = $2 AND OPERATION_ID = $3
+				AND EXECUTION_TARGET_ID = $4`,
+	}
 	queryInsertMigrationProgress = dbmodel.DBQuery{
 		ID: "MIG-METADATA_MGT-05",
 		PostgresQuery: `INSERT INTO "MIGRATION_PROGRESS" (ID, MIGRATION_STATE_ID, RUN_ID, TARGET_LEVEL,
@@ -154,6 +161,7 @@ type metadataQuerySet struct {
 	insertState           dbmodel.DBQuery
 	updateState           dbmodel.DBQuery
 	listProgress          dbmodel.DBQuery
+	getProgress           dbmodel.DBQuery
 	insertProgress        dbmodel.DBQuery
 	updateProgress        dbmodel.DBQuery
 	reserveState          dbmodel.DBQuery
@@ -174,6 +182,7 @@ type metadataQuerySet struct {
 var migrationMetadataQueries = metadataQuerySet{
 	getState: queryGetMigrationState, insertState: queryInsertMigrationState,
 	updateState: queryUpdateMigrationState, listProgress: queryListMigrationProgress,
+	getProgress:    queryGetMigrationProgress,
 	insertProgress: queryInsertMigrationProgress, updateProgress: queryUpdateMigrationProgress,
 	reserveState: queryReserveMigrationState, finalizeState: queryFinalizeMigrationState,
 	cancelState: queryCancelMigrationState, failState: queryFailMigrationState,
@@ -185,6 +194,43 @@ var migrationMetadataQueries = metadataQuerySet{
 	insertRunTarget:       queryInsertMigrationRunTarget,
 	listRunTargets:        queryListMigrationRunTargets,
 	inspectSchema:         queryInspectMetadataSchema, createSchema: queryCreateMetadataSchema,
+}
+
+// GetProgress returns the durable execution record for one operation target, if present.
+func (r *MetadataStore) GetProgress(
+	ctx context.Context,
+	migrationStateID string,
+	targetLevel string,
+	operationID OperationID,
+	executionTargetID string,
+) (*Progress, error) {
+	if !isUUIDv7(migrationStateID) {
+		return nil, errors.New("get migration progress: state ID must be a canonical UUIDv7")
+	}
+	if !isCanonicalVersion(targetLevel) {
+		return nil, errors.New("get migration progress: target level must be a canonical semantic version")
+	}
+	if strings.TrimSpace(string(operationID)) == "" {
+		return nil, errors.New("get migration progress: operation ID is required")
+	}
+
+	rows, err := r.dbClient.QueryContext(ctx, r.queries.getProgress,
+		migrationStateID, targetLevel, string(operationID), executionTargetID)
+	if err != nil {
+		return nil, fmt.Errorf("get migration progress for operation %q: %w", operationID, err)
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	if len(rows) != 1 {
+		return nil, fmt.Errorf("get migration progress for operation %q: expected at most one row, got %d",
+			operationID, len(rows))
+	}
+	progress, err := progressFromRow(rows[0])
+	if err != nil {
+		return nil, fmt.Errorf("get migration progress for operation %q: %w", operationID, err)
+	}
+	return &progress, nil
 }
 
 // RecordRunTargets durably records the complete deployment selection for one migration run.

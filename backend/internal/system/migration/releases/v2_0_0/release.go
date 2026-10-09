@@ -49,6 +49,10 @@ func migrationPlan(Dependencies) (engine.MigrationPlan, error) {
 		return engine.MigrationPlan{}, err
 	}
 	backfillEntityTypeHandle := newBackfillEntityTypeHandleOperation()
+	addEntityTypeHandleUniqueness, err := newAddEntityTypeHandleUniquenessOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
 	finalizeEntityTypeHandle, err := newFinalizeEntityTypeHandleOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
@@ -61,7 +65,10 @@ func migrationPlan(Dependencies) (engine.MigrationPlan, error) {
 			addEntityTypeHandle,
 			expandEntityTypeLength,
 		},
-		Migrate:  []engine.Operation{backfillEntityTypeHandle},
+		Migrate: []engine.Operation{
+			backfillEntityTypeHandle,
+			addEntityTypeHandleUniqueness,
+		},
 		Contract: []engine.Operation{finalizeEntityTypeHandle},
 	}, nil
 }

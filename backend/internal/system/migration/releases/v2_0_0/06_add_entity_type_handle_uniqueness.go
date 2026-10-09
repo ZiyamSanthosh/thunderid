@@ -29,33 +29,31 @@ const (
 	targetEntityTypeUniqueColumns = "HANDLE,CATEGORY,DEPLOYMENT_ID"
 )
 
-func newFinalizeEntityTypeHandleOperation() (engine.Operation, error) {
+func newAddEntityTypeHandleUniquenessOperation() (engine.Operation, error) {
 	return engine.NewSQLOperation(engine.SQLOperationConfig{
 		Definition: engine.OperationDefinition{
-			ID:               "2.0.0/configdb/06_finalize_entity_type_handle",
-			Description:      "Require entity-type handles and replace legacy name uniqueness",
+			ID:               "2.0.0/configdb/06_add_entity_type_handle_uniqueness",
+			Description:      "Enforce unique entity-type handles while retaining legacy name uniqueness",
 			StoreID:          engine.StoreIDConfigDB,
 			Kind:             engine.OperationKindSchemaChange,
 			InterruptionMode: engine.InterruptionModeAtomic,
 		},
-		PreVerifier: verifyEntityTypeFinalization,
+		PreVerifier: verifyEntityTypeHandleUniqueness,
 		Implementations: map[engine.DatabaseType]engine.SQLImplementation{
 			engine.DatabaseTypePostgres: {
 				Statements: []engine.SQLStatement{
 					{ID: "set-lock-timeout", Query: "SET LOCAL lock_timeout = '2s'"},
-					{ID: "require-handle", Query: `ALTER TABLE "ENTITY_TYPES" ALTER COLUMN HANDLE SET NOT NULL`},
 					{ID: "add-handle-uniqueness", Query: `ALTER TABLE "ENTITY_TYPES"
 	                        ADD CONSTRAINT "UQ_ENTITY_TYPES_HANDLE_CATEGORY_DEPLOYMENT"
 							UNIQUE (HANDLE, CATEGORY, DEPLOYMENT_ID)`},
-					{ID: "drop-name-uniqueness", Query: postgresDropLegacyEntityTypeUniqueConstraintSQL},
 				},
 			},
 		},
-		PostVerifier: verifyEntityTypeFinalization,
+		PostVerifier: verifyEntityTypeHandleUniqueness,
 	})
 }
 
-func verifyEntityTypeFinalization(
+func verifyEntityTypeHandleUniqueness(
 	ctx context.Context,
 	access engine.ReadAccess,
 	_ engine.ExecutionTarget,
@@ -80,21 +78,21 @@ func verifyEntityTypeFinalization(
 		legacyUnique && !targetUnique {
 		return engine.VerificationResult{
 			State:   engine.VerificationSource,
-			Summary: "The legacy entity-type name schema is ready for contract",
+			Summary: "Entity-type handles are ready for the target uniqueness constraint",
 		}, nil
 	}
 	if hasName && matchesEntityTypeColumn(name, "NO") &&
-		hasHandle && matchesEntityTypeColumn(handle, "NO") &&
-		!legacyUnique && targetUnique {
+		hasHandle && matchesEntityTypeColumn(handle, "YES") &&
+		legacyUnique && targetUnique {
 		return engine.VerificationResult{
 			State:   engine.VerificationTarget,
-			Summary: "Entity types retain names and use required unique handles",
+			Summary: "Entity-type name and handle uniqueness constraints coexist",
 		}, nil
 	}
-	summary := "The entity-type columns or unique constraints do not match the contract source or target schema"
+	summary := "The entity-type columns or unique constraints do not match the migrate source or target schema"
 	return engine.VerificationResult{
 		State: engine.VerificationInvalid, Summary: summary,
-		Findings: []engine.Finding{{Code: "unexpected_entity_type_contract_schema", Message: summary}},
+		Findings: []engine.Finding{{Code: "unexpected_entity_type_uniqueness_schema", Message: summary}},
 	}, nil
 }
 
@@ -115,24 +113,3 @@ func inspectEntityTypeUniqueConstraints(rows []engine.QueryRow) (bool, bool, err
 	}
 	return legacy, target, nil
 }
-
-const postgresDropLegacyEntityTypeUniqueConstraintSQL = `DO $migration$
-DECLARE
-    constraint_name TEXT;
-BEGIN
-    SELECT c.conname INTO constraint_name
-    FROM pg_constraint c
-    INNER JOIN pg_class t ON t.oid = c.conrelid
-    INNER JOIN pg_namespace n ON n.oid = t.relnamespace
-    CROSS JOIN LATERAL unnest(c.conkey) WITH ORDINALITY AS key_position(attnum, ordinality)
-    INNER JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = key_position.attnum
-    WHERE n.nspname = CURRENT_SCHEMA() AND t.relname = 'ENTITY_TYPES' AND c.contype = 'u'
-    GROUP BY c.oid, c.conname
-	HAVING string_agg(UPPER(a.attname), ',' ORDER BY key_position.ordinality) = 'NAME,CATEGORY,DEPLOYMENT_ID';
-
-    IF constraint_name IS NULL THEN
-        RAISE EXCEPTION 'legacy ENTITY_TYPES name uniqueness constraint was not found';
-    END IF;
-    EXECUTE format('ALTER TABLE %I.%I DROP CONSTRAINT %I', CURRENT_SCHEMA(), 'ENTITY_TYPES', constraint_name);
-END;
-$migration$;`

@@ -525,6 +525,46 @@ func TestMigrationStateControllerCompletesMigrateAtContractReadyBoundary(t *test
 	assert.Equal(t, StatusCompleted, result.State.Status)
 }
 
+func TestMigrationStateControllerReusesCompletedSchemaProgressAcrossMigrateRuns(t *testing.T) {
+	release := phaseAwareStateControllerTestRelease()
+	schemaOperation := validPlanOperation(StoreIDConfigDB)
+	schemaOperation.definition.ID = "2.0.0/configdb/migrate-schema"
+	schemaOperation.definition.Kind = OperationKindSchemaChange
+	release.Plan.Migrate = append(release.Plan.Migrate, schemaOperation)
+	startedAt := time.Date(2026, time.October, 3, 9, 30, 0, 0, time.UTC)
+	completedAt := startedAt.Add(time.Minute)
+	dbClient := providermock.NewDBClientInterfaceMock(t)
+	dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(StoreIDConfigDB)).
+		Return([]map[string]interface{}{phaseStateRow(
+			MigrationStageMigrating, StatusInProgress, release.Manifest.ReleaseVersion, testRunID, startedAt,
+		)}, nil).Once()
+	dbClient.On("QueryContext", mock.Anything, queryListMigrationProgress, testStateID, testRunID).
+		Return([]map[string]interface{}{completedProgressRow(
+			release.Plan.Migrate[0].Definition().ID, 1, release.Manifest.ReleaseVersion, startedAt,
+		)}, nil).Once()
+	oldSchemaProgress := completedProgressRow(
+		schemaOperation.Definition().ID, 2, release.Manifest.ReleaseVersion, startedAt.Add(-time.Minute))
+	oldSchemaProgress["id"] = "0199a123-4572-7abc-8def-0123456789ab"
+	oldSchemaProgress["run_id"] = "0199a123-4573-7abc-8def-0123456789ab"
+	dbClient.On("QueryContext", mock.Anything, queryGetMigrationProgress,
+		testStateID, release.Manifest.ReleaseVersion, string(schemaOperation.Definition().ID), "").
+		Return([]map[string]interface{}{oldSchemaProgress}, nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryTransitionMigrationState,
+		"1.0.0", release.Manifest.ReleaseVersion, string(MigrationStageContractReady), string(StatusCompleted),
+		nil, nil, completedAt, testStateID, string(StoreIDConfigDB), 1, "1.0.0",
+		release.Manifest.ReleaseVersion, string(MigrationStageMigrating), string(StatusInProgress),
+		testRunID, nil, startedAt).
+		Return(int64(1), nil).Once()
+	controller := newTestFinalizationController(t, release, dbClient, &testTransactioner{})
+	controller.now = func() time.Time { return completedAt }
+
+	result, err := controller.CompletePhase(
+		context.Background(), StoreIDConfigDB, OperationPhaseMigrate, testRunID)
+
+	require.NoError(t, err)
+	assert.Equal(t, MigrationStageContractReady, result.State.Stage)
+}
+
 func TestMigrationStateControllerCompletesSelectedDeploymentWithoutAdvancingGlobalBoundary(t *testing.T) {
 	release := phaseAwareStateControllerTestRelease()
 	startedAt := time.Date(2026, time.October, 3, 9, 0, 0, 0, time.UTC)

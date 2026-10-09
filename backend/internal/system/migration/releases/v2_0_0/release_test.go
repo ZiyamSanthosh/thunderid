@@ -24,7 +24,7 @@ func TestDefinitionMatchesProductVersion(t *testing.T) {
 	assert.Equal(t, expectedVersion, definition.Plan.TargetVersion)
 	assert.Len(t, definition.Manifest.Stores, 4)
 	require.Len(t, definition.Plan.Expand, 4)
-	require.Len(t, definition.Plan.Migrate, 1)
+	require.Len(t, definition.Plan.Migrate, 2)
 	require.Len(t, definition.Plan.Contract, 1)
 	assert.Equal(t, "2.0.0/runtime_persistent/01_remove_revocation_reason_check",
 		string(definition.Plan.Expand[0].Definition().ID))
@@ -36,7 +36,9 @@ func TestDefinitionMatchesProductVersion(t *testing.T) {
 		string(definition.Plan.Expand[3].Definition().ID))
 	assert.Equal(t, "2.0.0/configdb/05_backfill_entity_type_handle",
 		string(definition.Plan.Migrate[0].Definition().ID))
-	assert.Equal(t, "2.0.0/configdb/06_finalize_entity_type_handle",
+	assert.Equal(t, "2.0.0/configdb/06_add_entity_type_handle_uniqueness",
+		string(definition.Plan.Migrate[1].Definition().ID))
+	assert.Equal(t, "2.0.0/configdb/07_finalize_entity_type_handle",
 		string(definition.Plan.Contract[0].Definition().ID))
 	for _, store := range definition.Manifest.Stores {
 		if store.ID == "runtime_persistent" || store.ID == "configdb" || store.ID == "entitydb" {

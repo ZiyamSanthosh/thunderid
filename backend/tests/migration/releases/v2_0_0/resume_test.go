@@ -20,7 +20,10 @@ func verifyResumeAfterFinalizationFailure(t *testing.T, environment migrationhar
 	t.Run("resume_after_finalization_failure", func(t *testing.T) {
 		configDB := environment.OpenDatabase(t, "configdb")
 		_, err := configDB.Exec(`DELETE FROM "MIGRATION_PROGRESS"
-			WHERE OPERATION_ID = '2.0.0/configdb/05_backfill_entity_type_handle'`)
+			WHERE OPERATION_ID IN (
+				'2.0.0/configdb/05_backfill_entity_type_handle',
+				'2.0.0/configdb/06_add_entity_type_handle_uniqueness'
+			)`)
 		require.NoError(t, err)
 
 		for _, database := range []string{"configdb", "runtime_persistent"} {

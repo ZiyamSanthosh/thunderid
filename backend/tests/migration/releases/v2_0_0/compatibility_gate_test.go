@@ -6,7 +6,6 @@
 package migration_test
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -28,9 +27,8 @@ func verifyCompatibilityGate(t *testing.T, environment migrationharness.Environm
 		environment.RunMigrationCommand(t, "apply")
 
 		statusOutput = environment.RunMigrationCommand(t, "status")
-		require.True(t, strings.Contains(statusOutput, `"compatible":true`) ||
-			strings.Contains(statusOutput, "compatible=true"),
-			"successful migration status did not report compatibility:\n%s", statusOutput)
+		require.Contains(t, statusOutput, "Overall compatibility: YES",
+			"successful migration status did not report compatibility")
 
 		environment.RunMigrationCommand(t, "check contract")
 		t.Log("verified: status and normal startup reject source-level databases, and status accepts migrated databases")

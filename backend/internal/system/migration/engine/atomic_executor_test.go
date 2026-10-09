@@ -81,6 +81,37 @@ func TestAtomicOperationExecutorSkipsVerifiedTarget(t *testing.T) {
 	assert.Equal(t, StatusCompleted, result.Progress.Status)
 }
 
+func TestAtomicOperationExecutorReusesCompletedSchemaProgress(t *testing.T) {
+	dbClient := providermock.NewDBClientInterfaceMock(t)
+	config := validSQLOperationConfig()
+	config.Definition.Kind = OperationKindSchemaChange
+	config.TargetResolver = nil
+	config.PreVerifier = func(context.Context, ReadAccess, ExecutionTarget) (VerificationResult, error) {
+		return VerificationResult{State: VerificationTarget, Summary: "Schema already applied"}, nil
+	}
+	operation, err := NewSQLOperation(config)
+	require.NoError(t, err)
+	executedAt := time.Date(2026, time.October, 1, 10, 30, 0, 0, time.UTC)
+	expectReservedState(dbClient, StoreIDEntityDB, "2.0.0", testRunID, executedAt)
+	progressRow := validProgressRow(executedAt)
+	progressRow["target_level"] = "2.0.0"
+	progressRow["operation_id"] = string(operation.Definition().ID)
+	progressRow["execution_target_id"] = ""
+	progressRow["status"] = string(StatusCompleted)
+	dbClient.On("QueryContext", mock.Anything, queryGetMigrationProgress,
+		testStateID, "2.0.0", string(operation.Definition().ID), "").
+		Return([]map[string]interface{}{progressRow}, nil).Once()
+	executor := newTestAtomicExecutor(t, dbClient, &testTransactioner{})
+	executor.newID = sequenceIDs(testProgressID)
+	executor.now = func() time.Time { return executedAt }
+
+	result, err := executor.Execute(context.Background(), operation, MigrationSelection{}, testRunID, 0)
+
+	require.NoError(t, err)
+	assert.True(t, result.ExecutionSkipped)
+	assert.Equal(t, testProgressID, result.Progress.ID)
+}
+
 func TestAtomicOperationExecutorRejectsInvalidPreVerification(t *testing.T) {
 	dbClient := providermock.NewDBClientInterfaceMock(t)
 	operation := atomicTestOperation(t, VerificationInvalid, VerificationTarget)
