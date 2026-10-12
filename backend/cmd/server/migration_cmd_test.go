@@ -69,7 +69,7 @@ func TestRunMigrationStatusForSharedNamespace(t *testing.T) {
 			{"table_name": "MIGRATION_STATE"},
 			{"table_name": "MIGRATION_PROGRESS"},
 			{"table_name": "MIGRATION_DEPLOYMENT_STATE"},
-			{"table_name": "MIGRATION_RUN_TARGET"},
+			{"table_name": "MIGRATION_RUN"},
 		}, nil).Times(4)
 	for _, storeID := range []engine.StoreID{
 		engine.StoreIDConfigDB,
@@ -128,7 +128,7 @@ func TestRunMigrationStatusReportsDirectMigrationRoute(t *testing.T) {
 			{"table_name": "MIGRATION_STATE"},
 			{"table_name": "MIGRATION_PROGRESS"},
 			{"table_name": "MIGRATION_DEPLOYMENT_STATE"},
-			{"table_name": "MIGRATION_RUN_TARGET"},
+			{"table_name": "MIGRATION_RUN"},
 		}, nil).Times(4)
 	for _, storeID := range []engine.StoreID{
 		engine.StoreIDConfigDB,
@@ -166,7 +166,7 @@ func TestRunStartupCompatibilityCheckAcceptsCompatibleSharedNamespace(t *testing
 			{"table_name": "MIGRATION_STATE"},
 			{"table_name": "MIGRATION_PROGRESS"},
 			{"table_name": "MIGRATION_DEPLOYMENT_STATE"},
-			{"table_name": "MIGRATION_RUN_TARGET"},
+			{"table_name": "MIGRATION_RUN"},
 		}, nil).Times(4)
 	for _, storeID := range []engine.StoreID{
 		engine.StoreIDConfigDB,
@@ -220,7 +220,7 @@ func TestRunStartupCompatibilityCheckAcceptsContractReadyTarget(t *testing.T) {
 			{"table_name": "MIGRATION_STATE"},
 			{"table_name": "MIGRATION_PROGRESS"},
 			{"table_name": "MIGRATION_DEPLOYMENT_STATE"},
-			{"table_name": "MIGRATION_RUN_TARGET"},
+			{"table_name": "MIGRATION_RUN"},
 		}, nil).Times(4)
 	for _, storeID := range []engine.StoreID{
 		engine.StoreIDConfigDB,
@@ -259,7 +259,7 @@ func TestRunStartupCompatibilityCheckRejectsExpandedTarget(t *testing.T) {
 			{"table_name": "MIGRATION_STATE"},
 			{"table_name": "MIGRATION_PROGRESS"},
 			{"table_name": "MIGRATION_DEPLOYMENT_STATE"},
-			{"table_name": "MIGRATION_RUN_TARGET"},
+			{"table_name": "MIGRATION_RUN"},
 		}, nil).Times(4)
 	for _, storeID := range []engine.StoreID{
 		engine.StoreIDConfigDB,
@@ -311,6 +311,71 @@ func TestRunStartupCompatibilityCheckSkipsUnsupportedProviders(t *testing.T) {
 	assert.Nil(t, report)
 }
 
+func TestRunStartupCompatibilityCheckChecksSupportedStoresInMixedConfiguration(t *testing.T) {
+	dataSource := testPostgresDataSource("thunderid")
+	cfg := &config.Config{Database: config.DatabaseConfig{
+		Config: dataSource, Entity: dataSource,
+		RuntimeTransient:  config.DataSource{Type: "sqlite"},
+		RuntimePersistent: dataSource,
+	}}
+	dbProvider := providermock.NewDBProviderInterfaceMock(t)
+	dbClient := providermock.NewDBClientInterfaceMock(t)
+	dbProvider.On("GetConfigDBClient").Return(dbClient, nil).Once()
+	dbClient.On("QueryContext", mock.Anything, mock.Anything).
+		Return([]map[string]interface{}{
+			{"table_name": "MIGRATION_STATE"},
+			{"table_name": "MIGRATION_PROGRESS"},
+			{"table_name": "MIGRATION_DEPLOYMENT_STATE"},
+			{"table_name": "MIGRATION_RUN"},
+		}, nil).Times(3)
+	for _, storeID := range []engine.StoreID{
+		engine.StoreIDConfigDB,
+		engine.StoreIDEntityDB,
+		engine.StoreIDRuntimePersistent,
+	} {
+		dbClient.On("QueryContext", mock.Anything, mock.Anything, string(storeID)).
+			Return([]map[string]interface{}{testMigrationStateRow(storeID)}, nil).Once()
+	}
+
+	report, err := runStartupCompatibilityCheck(context.Background(), cfg, dbProvider)
+
+	require.NoError(t, err)
+	require.NotNil(t, report)
+	assert.True(t, report.Compatible())
+	require.Len(t, report.Stores, 4)
+	assert.False(t, report.Stores[0].Skipped)
+	assert.False(t, report.Stores[1].Skipped)
+	assert.True(t, report.Stores[2].Skipped)
+	assert.Equal(t, engine.CompatibilityReasonUnsupportedProvider, report.Stores[2].Reason)
+	assert.False(t, report.Stores[2].Compatible())
+	assert.False(t, report.Stores[3].Skipped)
+}
+
+func TestRunStartupCompatibilityCheckRejectsIncompatibleSupportedStoreInMixedConfiguration(t *testing.T) {
+	cfg := &config.Config{Database: config.DatabaseConfig{
+		Config:            testPostgresDataSource("configdb"),
+		Entity:            config.DataSource{Type: "sqlite"},
+		RuntimeTransient:  config.DataSource{Type: "sqlite"},
+		RuntimePersistent: config.DataSource{Type: "sqlite"},
+	}}
+	dbProvider := providermock.NewDBProviderInterfaceMock(t)
+	dbClient := providermock.NewDBClientInterfaceMock(t)
+	dbProvider.On("GetConfigDBClient").Return(dbClient, nil).Once()
+	dbClient.On("QueryContext", mock.Anything, mock.Anything).
+		Return([]map[string]interface{}{}, nil).Once()
+
+	report, err := runStartupCompatibilityCheck(context.Background(), cfg, dbProvider)
+
+	require.NoError(t, err)
+	require.NotNil(t, report)
+	assert.False(t, report.Compatible())
+	assert.Equal(t, engine.CompatibilityReasonMetadataMissing, report.Stores[0].Reason)
+	for _, store := range report.Stores[1:] {
+		assert.True(t, store.Skipped)
+		assert.Equal(t, engine.CompatibilityReasonUnsupportedProvider, store.Reason)
+	}
+}
+
 func TestRunMigrationCheckForSharedNamespace(t *testing.T) {
 	dataSource := testPostgresDataSource("thunderid")
 	cfg := &config.Config{Database: config.DatabaseConfig{
@@ -324,7 +389,7 @@ func TestRunMigrationCheckForSharedNamespace(t *testing.T) {
 			{"table_name": "MIGRATION_STATE"},
 			{"table_name": "MIGRATION_PROGRESS"},
 			{"table_name": "MIGRATION_DEPLOYMENT_STATE"},
-			{"table_name": "MIGRATION_RUN_TARGET"},
+			{"table_name": "MIGRATION_RUN"},
 		}, nil).Times(4)
 	for _, storeID := range []engine.StoreID{
 		engine.StoreIDConfigDB,
@@ -388,7 +453,7 @@ func TestRunMigrationApplyReturnsNoOpWhenStoresAreAtTarget(t *testing.T) {
 			{"table_name": "MIGRATION_STATE"},
 			{"table_name": "MIGRATION_PROGRESS"},
 			{"table_name": "MIGRATION_DEPLOYMENT_STATE"},
-			{"table_name": "MIGRATION_RUN_TARGET"},
+			{"table_name": "MIGRATION_RUN"},
 		}, nil).Times(8)
 	for _, storeID := range []engine.StoreID{
 		engine.StoreIDConfigDB,
@@ -515,6 +580,7 @@ func TestRunMigrationCommandValidatesInvocation(t *testing.T) {
 		{name: "unknown action", args: []string{migrationSubcommand, "unknown"}, cfg: &config.Config{}},
 		{name: "unsupported phase", args: []string{migrationSubcommand, migrationApplyAction, "invalid"}, cfg: &config.Config{}},
 		{name: "phase on unsupported action", args: []string{migrationSubcommand, migrationStatusAction, "expand"}, cfg: &config.Config{}},
+		{name: "phase on rollback", args: []string{migrationSubcommand, migrationRollbackAction, "migrate"}, cfg: &config.Config{}},
 		{name: "too many arguments", args: []string{migrationSubcommand, migrationApplyAction, "expand", "extra"}, cfg: &config.Config{}},
 		{name: "missing configuration", args: []string{migrationSubcommand, migrationInitializeAction}},
 	}
@@ -536,6 +602,7 @@ func TestMigrationCommandPhase(t *testing.T) {
 		expected engine.OperationPhase
 	}{
 		{name: "not specified", args: []string{migrationSubcommand, migrationApplyAction}},
+		{name: "rollback", args: []string{migrationSubcommand, migrationRollbackAction}},
 		{name: "expand", args: []string{migrationSubcommand, migrationApplyAction, "expand"}, expected: engine.OperationPhaseExpand},
 		{name: "migrate", args: []string{migrationSubcommand, migrationApplyAction, "migrate"}, expected: engine.OperationPhaseMigrate},
 		{name: "contract check", args: []string{migrationSubcommand, migrationCheckAction, "contract"}, expected: engine.OperationPhaseContract},
@@ -570,6 +637,31 @@ func TestParseMigrationCommandOptionsRestrictsDeploymentSelectionToMigrateApply(
 
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "supported only by migration apply migrate")
+}
+
+func TestParseMigrationCommandOptionsAcceptsRollbackScopes(t *testing.T) {
+	phaseOptions, err := parseMigrationCommandOptions([]string{
+		migrationSubcommand, migrationRollbackAction, "--phase", "migrate",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, engine.OperationPhaseMigrate, phaseOptions.phase)
+	assert.False(t, phaseOptions.revertAll)
+
+	allOptions, err := parseMigrationCommandOptions([]string{
+		migrationSubcommand, migrationRollbackAction, "--revert-all",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, allOptions.phase)
+	assert.True(t, allOptions.revertAll)
+}
+
+func TestParseMigrationCommandOptionsRejectsConflictingRollbackScopes(t *testing.T) {
+	_, err := parseMigrationCommandOptions([]string{
+		migrationSubcommand, migrationRollbackAction, "--phase=migrate", "--revert-all",
+	})
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "cannot combine")
 }
 
 func testMigrationStateRow(storeID engine.StoreID) map[string]interface{} {

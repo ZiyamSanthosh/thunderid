@@ -30,10 +30,11 @@ func (resumableTestOperation) ExecuteBatch(
 
 type rollbackTestOperation struct {
 	resumableTestOperation
+	forwardID OperationID
 }
 
-func (rollbackTestOperation) Rollback(context.Context, OperationExecution, error) error {
-	return nil
+func (o rollbackTestOperation) ForwardOperationID() OperationID {
+	return o.forwardID
 }
 
 func (o testOperation) Definition() OperationDefinition {
@@ -116,22 +117,25 @@ func TestMigrationPlanReturnsOperationsForPhase(t *testing.T) {
 	assert.Nil(t, operations)
 }
 
-func TestPlanRegistryAcceptsOptionalRollbackForResumableOperation(t *testing.T) {
+func TestPlanRegistryAcceptsOptionalRollbackOperation(t *testing.T) {
 	manifest := changedStoreManifest(StoreIDEntityDB)
-	operation := validPlanOperation(StoreIDEntityDB)
-	operation.definition.InterruptionMode = InterruptionModeResumable
+	forward := validPlanOperation(StoreIDEntityDB)
+	rollback := validPlanOperation(StoreIDEntityDB)
+	rollback.definition.ID = "1.1.0/entitydb/rollback-example"
+	rollback.definition.InterruptionMode = InterruptionModeResumable
 
 	registry, err := NewPlanRegistry(manifest, MigrationPlan{
 		TargetVersion: manifest.ReleaseVersion,
-		Expand: []Operation{rollbackTestOperation{
-			resumableTestOperation: resumableTestOperation{testOperation: operation},
+		Expand:        []Operation{forward},
+		Rollback: []RollbackOperation{rollbackTestOperation{
+			resumableTestOperation: resumableTestOperation{testOperation: rollback},
+			forwardID:              forward.Definition().ID,
 		}},
 	})
 
 	require.NoError(t, err)
-	require.Len(t, registry.Plan().Expand, 1)
-	_, supportsRollback := registry.Plan().Expand[0].(RollbackCapableOperation)
-	assert.True(t, supportsRollback)
+	require.Len(t, registry.Plan().Rollback, 1)
+	assert.Equal(t, forward.Definition().ID, registry.Plan().Rollback[0].ForwardOperationID())
 }
 
 func TestPlanRegistryRejectsInvalidPlan(t *testing.T) {
@@ -191,14 +195,17 @@ func TestPlanRegistryRejectsInvalidPlan(t *testing.T) {
 			errorMatch: "unchanged store",
 		},
 		{
-			name: "rollback on atomic operation",
+			name: "rollback references unknown operation",
 			mutate: func(_ *ReleaseManifest, plan *MigrationPlan) {
-				operation := plan.Expand[0].(testOperation)
-				plan.Expand[0] = rollbackTestOperation{
+				operation := validPlanOperation(StoreIDConfigDB)
+				operation.definition.ID = "1.1.0/configdb/rollback-example"
+				operation.definition.InterruptionMode = InterruptionModeResumable
+				plan.Rollback = []RollbackOperation{rollbackTestOperation{
 					resumableTestOperation: resumableTestOperation{testOperation: operation},
-				}
+					forwardID:              "1.1.0/configdb/missing",
+				}}
 			},
-			errorMatch: "atomic operations cannot define rollback behavior",
+			errorMatch: "references unknown forward operation",
 		},
 		{
 			name: "resumable declaration without implementation",

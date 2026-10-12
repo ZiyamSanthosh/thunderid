@@ -206,10 +206,40 @@ func logMigrationCommandResult(
 	if result.workflow != nil {
 		logMigrationWorkflow(ctx, logger, *result.workflow, successful)
 	}
-	if result.compatibility == nil && result.preflight == nil && result.workflowCheck == nil {
+	if result.rollback != nil {
+		logMigrationRollback(ctx, logger, *result.rollback, successful)
+	}
+	if result.compatibility == nil && result.preflight == nil && result.workflowCheck == nil &&
+		result.application == nil && result.workflow == nil && result.rollback == nil {
 		logger.Info(ctx, "Migration command result",
 			log.String("action", result.action), log.Bool("successful", successful))
 	}
+}
+
+func logMigrationRollback(
+	ctx context.Context,
+	logger *log.Logger,
+	result engine.MigrationRollbackResult,
+	successful bool,
+) {
+	for _, execution := range result.Operations {
+		logger.Info(ctx, "Migration rollback operation completed",
+			log.String("operation", execution.Progress.OperationID),
+			log.String("executionTarget", execution.Progress.ExecutionTargetID),
+			log.String("runID", execution.Progress.RunID),
+			log.Bool("executionSkipped", execution.ExecutionSkipped),
+			log.Int("committedBatches", execution.CommittedBatches))
+	}
+	message := "Migration rollback completed"
+	if !successful {
+		message = "Migration rollback incomplete"
+	}
+	logger.Info(ctx, message,
+		log.String("runID", result.RunID),
+		log.String("phase", string(result.Phase)),
+		log.String("scope", string(result.Scope)),
+		log.Int("operations", len(result.Operations)),
+		log.Int("restoredStores", len(result.Finalizations)))
 }
 
 func logMigrationWorkflow(
@@ -254,6 +284,7 @@ func logMigrationCompatibility(
 		fields := []log.Field{
 			log.String("store", string(store.StoreID)),
 			log.Bool("compatible", store.Compatible()),
+			log.Bool("skipped", store.Skipped),
 			log.String("completedLevel", store.CompletedLevel),
 			log.String("stage", string(store.Stage)),
 			log.String("requiredLevel", store.RequiredLevel),
@@ -263,7 +294,11 @@ func logMigrationCompatibility(
 		if store.Err != nil {
 			fields = append(fields, log.Error(store.Err))
 		}
-		logger.Info(ctx, "Migration compatibility checked", fields...)
+		message := "Migration compatibility checked"
+		if store.Skipped {
+			message = "Migration compatibility skipped"
+		}
+		logger.Info(ctx, message, fields...)
 	}
 	logger.Info(ctx, "Migration compatibility status", log.Bool("compatible", report.Compatible()))
 	if report.NextMigrationRelease != "" {

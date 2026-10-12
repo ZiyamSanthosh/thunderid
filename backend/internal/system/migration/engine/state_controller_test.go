@@ -32,7 +32,8 @@ func TestMigrationStateControllerReservesAcceptedSource(t *testing.T) {
 	require.NoError(t, err)
 	controller.now = func() time.Time { return reservedAt }
 
-	results, err := controller.Reserve(context.Background(), []StoreID{StoreIDConfigDB}, testRunID)
+	results, err := controller.ReservePhase(
+		context.Background(), []StoreID{StoreIDConfigDB}, OperationPhaseExpand, testRunID)
 
 	require.NoError(t, err)
 	require.Len(t, results, 1)
@@ -55,7 +56,8 @@ func TestMigrationStateControllerPreservesStoreAlreadyAtTarget(t *testing.T) {
 		stateControllerTestRelease(manifest), newTestMetadataStore(t, dbClient), &testTransactioner{})
 	require.NoError(t, err)
 
-	results, err := controller.Reserve(context.Background(), []StoreID{StoreIDConfigDB}, testRunID)
+	results, err := controller.ReservePhase(
+		context.Background(), []StoreID{StoreIDConfigDB}, OperationPhaseExpand, testRunID)
 
 	require.NoError(t, err)
 	require.Len(t, results, 1)
@@ -77,7 +79,8 @@ func TestMigrationStateControllerReportsReservationConflict(t *testing.T) {
 		stateControllerTestRelease(manifest), newTestMetadataStore(t, dbClient), &testTransactioner{})
 	require.NoError(t, err)
 
-	results, err := controller.Reserve(context.Background(), []StoreID{StoreIDConfigDB}, testRunID)
+	results, err := controller.ReservePhase(
+		context.Background(), []StoreID{StoreIDConfigDB}, OperationPhaseExpand, testRunID)
 
 	require.Error(t, err)
 	assert.Nil(t, results)
@@ -105,7 +108,8 @@ func TestMigrationStateControllerRejectsInvalidReservationRequests(t *testing.T)
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			results, err := controller.Reserve(context.Background(), test.storeIDs, test.runID)
+			results, err := controller.ReservePhase(
+				context.Background(), test.storeIDs, OperationPhaseExpand, test.runID)
 
 			require.Error(t, err)
 			assert.Nil(t, results)
@@ -205,6 +209,12 @@ func TestMigrationStateControllerReportsCancellationConflict(t *testing.T) {
 func TestMigrationStateControllerMarksReservedStoreFailed(t *testing.T) {
 	dbClient := providermock.NewDBClientInterfaceMock(t)
 	failedAt := time.Date(2026, time.October, 1, 13, 0, 0, 0, time.UTC)
+	run := MigrationRun{
+		ID: testRunID, Mode: MigrationRunModeForward, Phase: OperationPhaseExpand,
+		Selection: MigrationSelection{}, UpdatedAt: failedAt.Add(-time.Minute),
+	}
+	dbClient.On("QueryContext", mock.Anything, queryGetMigrationRun, testRunID).
+		Return([]map[string]interface{}{migrationRunRow(run)}, nil).Once()
 	expectReservedState(dbClient, StoreIDConfigDB, "1.1.0", testRunID, failedAt.Add(-time.Minute))
 	dbClient.On("ExecuteContext", mock.Anything, queryFailMigrationState,
 		string(StatusFailed), "migration operation failed", failedAt,
@@ -232,6 +242,12 @@ func TestMigrationStateControllerResumesFailedStore(t *testing.T) {
 	failed.Status = StatusFailed
 	failed.FailureSummary = "temporary database failure"
 	resumedAt := time.Date(2026, time.October, 2, 9, 0, 0, 0, time.UTC)
+	run := MigrationRun{
+		ID: testRunID, Mode: MigrationRunModeForward, Phase: OperationPhaseExpand,
+		Selection: MigrationSelection{}, UpdatedAt: failed.UpdatedAt,
+	}
+	dbClient.On("QueryContext", mock.Anything, queryGetMigrationRun, testRunID).
+		Return([]map[string]interface{}{migrationRunRow(run)}, nil).Once()
 	row := validStateRow(failed.UpdatedAt)
 	row["status"] = string(StatusFailed)
 	row["stage"] = string(MigrationStageExpanding)
@@ -244,6 +260,10 @@ func TestMigrationStateControllerResumesFailedStore(t *testing.T) {
 		string(StatusInProgress), resumedAt, failed.ID, string(failed.StoreID), failed.MetadataVersion,
 		failed.CompletedLevel, failed.TargetLevel, string(failed.Stage), string(StatusFailed), failed.ActiveRunID,
 		failed.FailureSummary, failed.UpdatedAt).
+		Return(int64(1), nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryUpdateMigrationRun,
+		string(MigrationRunModeForward), string(OperationPhaseExpand), nil, "[]",
+		nil, nil, nil, nil, nil, false, nil, resumedAt, testRunID, failed.UpdatedAt).
 		Return(int64(1), nil).Once()
 	controller, err := NewMigrationStateController(
 		stateControllerTestRelease(changedStoreManifest(StoreIDConfigDB)),
@@ -317,22 +337,26 @@ func TestMigrationStateControllerFinalizesReservedStore(t *testing.T) {
 		Return([]map[string]interface{}{completedProgressRow(
 			operation.ID, 0, release.Manifest.ReleaseVersion, startedAt,
 		)}, nil).Once()
-	dbClient.On("ExecuteContext", mock.Anything, queryFinalizeMigrationState,
-		release.Manifest.ReleaseVersion, string(MigrationStageComplete), string(StatusClean), finalizedAt,
-		testStateID, string(StoreIDConfigDB), 1, "1.0.0", string(MigrationStageExpanding),
-		string(StatusInProgress), testRunID).
+	dbClient.On("ExecuteContext", mock.Anything, queryTransitionMigrationState,
+		"1.0.0", release.Manifest.ReleaseVersion, string(MigrationStageContractReady), string(StatusCompleted),
+		nil, nil, finalizedAt, testStateID, string(StoreIDConfigDB), 1, "1.0.0",
+		release.Manifest.ReleaseVersion, string(MigrationStageExpanding), string(StatusInProgress),
+		testRunID, nil, startedAt).
 		Return(int64(1), nil).Once()
 	transactioner := &testTransactioner{}
 	controller := newTestFinalizationController(t, release, dbClient, transactioner)
 	controller.now = func() time.Time { return finalizedAt }
 
-	result, err := controller.Finalize(context.Background(), StoreIDConfigDB, testRunID)
+	result, err := controller.CompletePhase(
+		context.Background(), StoreIDConfigDB, OperationPhaseExpand, testRunID)
 
 	require.NoError(t, err)
 	assert.True(t, result.Finalized)
 	assert.False(t, result.AlreadyAtTarget)
-	assert.Equal(t, StatusClean, result.State.Status)
-	assert.Equal(t, release.Manifest.ReleaseVersion, result.State.CompletedLevel)
+	assert.Equal(t, StatusCompleted, result.State.Status)
+	assert.Equal(t, MigrationStageContractReady, result.State.Stage)
+	assert.Equal(t, "1.0.0", result.State.CompletedLevel)
+	assert.Equal(t, release.Manifest.ReleaseVersion, result.State.TargetLevel)
 	assert.Empty(t, result.State.ActiveRunID)
 	assert.Equal(t, finalizedAt, result.State.UpdatedAt)
 	assert.Equal(t, 1, transactioner.calls)
@@ -347,7 +371,8 @@ func TestMigrationStateControllerFinalizationPreservesStoreAlreadyAtTarget(t *te
 		Return([]map[string]interface{}{row}, nil).Once()
 	controller := newTestFinalizationController(t, release, dbClient, &testTransactioner{})
 
-	result, err := controller.Finalize(context.Background(), StoreIDConfigDB, testRunID)
+	result, err := controller.CompletePhase(
+		context.Background(), StoreIDConfigDB, OperationPhaseExpand, testRunID)
 
 	require.NoError(t, err)
 	assert.False(t, result.Finalized)
@@ -363,7 +388,8 @@ func TestMigrationStateControllerFinalizationRequiresCompleteProgress(t *testing
 		Return([]map[string]interface{}{}, nil).Once()
 	controller := newTestFinalizationController(t, release, dbClient, &testTransactioner{})
 
-	result, err := controller.Finalize(context.Background(), StoreIDConfigDB, testRunID)
+	result, err := controller.CompletePhase(
+		context.Background(), StoreIDConfigDB, OperationPhaseExpand, testRunID)
 
 	require.Error(t, err)
 	assert.False(t, result.Finalized)
@@ -380,13 +406,15 @@ func TestMigrationStateControllerFinalizationReportsConditionalUpdateConflict(t 
 		Return([]map[string]interface{}{completedProgressRow(
 			operation.ID, 0, release.Manifest.ReleaseVersion, updatedAt,
 		)}, nil).Once()
-	dbClient.On("ExecuteContext", mock.Anything, queryFinalizeMigrationState, mock.Anything, mock.Anything,
+	dbClient.On("ExecuteContext", mock.Anything, queryTransitionMigrationState,
 		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
-		mock.Anything, mock.Anything, mock.Anything).
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(int64(0), nil).Once()
 	controller := newTestFinalizationController(t, release, dbClient, &testTransactioner{})
 
-	_, err := controller.Finalize(context.Background(), StoreIDConfigDB, testRunID)
+	_, err := controller.CompletePhase(
+		context.Background(), StoreIDConfigDB, OperationPhaseExpand, testRunID)
 
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrFinalizationConflict))
@@ -397,9 +425,12 @@ func TestMigrationStateControllerFinalizationRejectsInvalidRequests(t *testing.T
 	dbClient := providermock.NewDBClientInterfaceMock(t)
 	controller := newTestFinalizationController(t, release, dbClient, &testTransactioner{})
 
-	_, runIDErr := controller.Finalize(context.Background(), StoreIDConfigDB, "invalid")
-	_, unchangedStoreErr := controller.Finalize(context.Background(), StoreIDEntityDB, testRunID)
-	_, unknownStoreErr := controller.Finalize(context.Background(), "unknown", testRunID)
+	_, runIDErr := controller.CompletePhase(
+		context.Background(), StoreIDConfigDB, OperationPhaseExpand, "invalid")
+	_, unchangedStoreErr := controller.CompletePhase(
+		context.Background(), StoreIDEntityDB, OperationPhaseExpand, testRunID)
+	_, unknownStoreErr := controller.CompletePhase(
+		context.Background(), "unknown", OperationPhaseExpand, testRunID)
 
 	require.Error(t, runIDErr)
 	assert.ErrorContains(t, unchangedStoreErr, "does not require migration")
@@ -493,6 +524,63 @@ func TestMigrationStateControllerReservesContractWhenMigrateIsUnused(t *testing.
 	require.Len(t, results, 1)
 	assert.True(t, results[0].Reserved)
 	assert.Equal(t, MigrationStageContracting, results[0].State.Stage)
+}
+
+func TestMigrationStateControllerReservesMetadataOnlyContract(t *testing.T) {
+	release := stateControllerTestRelease(changedStoreManifest(StoreIDConfigDB))
+	contractReadyAt := time.Date(2026, time.October, 3, 8, 15, 0, 0, time.UTC)
+	reservedAt := contractReadyAt.Add(time.Minute)
+	dbClient := providermock.NewDBClientInterfaceMock(t)
+	dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(StoreIDConfigDB)).
+		Return([]map[string]interface{}{phaseStateRow(
+			MigrationStageContractReady, StatusCompleted, release.Manifest.ReleaseVersion, "", contractReadyAt,
+		)}, nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryTransitionMigrationState,
+		"1.0.0", release.Manifest.ReleaseVersion, string(MigrationStageContracting), string(StatusInProgress),
+		testRunID, nil, reservedAt, testStateID, string(StoreIDConfigDB), 1, "1.0.0",
+		release.Manifest.ReleaseVersion, string(MigrationStageContractReady), string(StatusCompleted),
+		nil, nil, contractReadyAt).
+		Return(int64(1), nil).Once()
+	controller := newTestFinalizationController(t, release, dbClient, &testTransactioner{})
+	controller.now = func() time.Time { return reservedAt }
+
+	results, err := controller.ReservePhase(
+		context.Background(), []StoreID{StoreIDConfigDB}, OperationPhaseContract, testRunID)
+
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.True(t, results[0].Reserved)
+	assert.Equal(t, MigrationStageContracting, results[0].State.Stage)
+}
+
+func TestMigrationStateControllerCompletesMetadataOnlyContract(t *testing.T) {
+	release := stateControllerTestRelease(changedStoreManifest(StoreIDConfigDB))
+	startedAt := time.Date(2026, time.October, 3, 8, 30, 0, 0, time.UTC)
+	completedAt := startedAt.Add(time.Minute)
+	dbClient := providermock.NewDBClientInterfaceMock(t)
+	dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(StoreIDConfigDB)).
+		Return([]map[string]interface{}{phaseStateRow(
+			MigrationStageContracting, StatusInProgress, release.Manifest.ReleaseVersion, testRunID, startedAt,
+		)}, nil).Once()
+	dbClient.On("QueryContext", mock.Anything, queryListMigrationProgress, testStateID, testRunID).
+		Return([]map[string]interface{}{}, nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryFinalizeMigrationState,
+		release.Manifest.ReleaseVersion, string(MigrationStageComplete), string(StatusClean), completedAt,
+		testStateID, string(StoreIDConfigDB), 1, "1.0.0", string(MigrationStageContracting),
+		string(StatusInProgress), testRunID).
+		Return(int64(1), nil).Once()
+	controller := newTestFinalizationController(t, release, dbClient, &testTransactioner{})
+	controller.now = func() time.Time { return completedAt }
+
+	result, err := controller.CompletePhase(
+		context.Background(), StoreIDConfigDB, OperationPhaseContract, testRunID)
+
+	require.NoError(t, err)
+	assert.True(t, result.Finalized)
+	assert.Equal(t, MigrationStageComplete, result.State.Stage)
+	assert.Equal(t, StatusClean, result.State.Status)
+	assert.Equal(t, release.Manifest.ReleaseVersion, result.State.CompletedLevel)
+	assert.Empty(t, result.State.TargetLevel)
 }
 
 func TestMigrationStateControllerCompletesMigrateAtContractReadyBoundary(t *testing.T) {
@@ -632,6 +720,185 @@ func TestMigrationStateControllerCompletesContractAtTarget(t *testing.T) {
 	assert.Equal(t, StatusClean, result.State.Status)
 	assert.Equal(t, release.Manifest.ReleaseVersion, result.State.CompletedLevel)
 	assert.Empty(t, result.State.TargetLevel)
+}
+
+func TestMigrationStateControllerCompletesMigrateRollback(t *testing.T) {
+	release := phaseAwareStateControllerTestRelease()
+	startedAt := time.Date(2026, time.October, 12, 8, 0, 0, 0, time.UTC)
+	completedAt := startedAt.Add(time.Minute)
+	dbClient := providermock.NewDBClientInterfaceMock(t)
+	dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(StoreIDConfigDB)).
+		Return([]map[string]interface{}{phaseStateRow(
+			MigrationStageMigrating, StatusInProgress, release.Manifest.ReleaseVersion, testRunID, startedAt,
+		)}, nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryDeleteMigrationProgressForRun,
+		testStateID, testRunID).Return(int64(2), nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryDeleteDeploymentStatesForLevel,
+		testStateID, release.Manifest.ReleaseVersion).Return(int64(2), nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryDeleteInactiveMigrationRun,
+		testRunID).Return(int64(1), nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryTransitionMigrationState,
+		"1.0.0", release.Manifest.ReleaseVersion, string(MigrationStageExpanded), string(StatusCompleted),
+		nil, nil, completedAt, testStateID, string(StoreIDConfigDB), 1, "1.0.0",
+		release.Manifest.ReleaseVersion, string(MigrationStageMigrating), string(StatusInProgress),
+		testRunID, nil, startedAt).
+		Return(int64(1), nil).Once()
+	controller := newTestFinalizationController(t, release, dbClient, &testTransactioner{})
+	controller.now = func() time.Time { return completedAt }
+
+	result, err := controller.CompleteRollback(
+		context.Background(), StoreIDConfigDB, OperationPhaseMigrate, testRunID, MigrationSelection{})
+
+	require.NoError(t, err)
+	assert.True(t, result.Finalized)
+	assert.Equal(t, MigrationStageExpanded, result.State.Stage)
+	assert.Equal(t, StatusCompleted, result.State.Status)
+	assert.Empty(t, result.State.ActiveRunID)
+}
+
+func TestMigrationStateControllerCompletesDeploymentRollbackAtomically(t *testing.T) {
+	release := phaseAwareStateControllerTestRelease()
+	startedAt := time.Date(2026, time.October, 12, 8, 30, 0, 0, time.UTC)
+	completedAt := startedAt.Add(time.Minute)
+	dbClient := providermock.NewDBClientInterfaceMock(t)
+	dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(StoreIDConfigDB)).
+		Return([]map[string]interface{}{phaseStateRow(
+			MigrationStageMigrating, StatusInProgress, release.Manifest.ReleaseVersion, testRunID, startedAt,
+		)}, nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryDeleteMigrationProgressForRun,
+		testStateID, testRunID).Return(int64(2), nil).Once()
+	for _, deploymentID := range []string{"deployment-a", "deployment-b"} {
+		dbClient.On("ExecuteContext", mock.Anything, queryDeleteDeploymentState,
+			testStateID, deploymentID, release.Manifest.ReleaseVersion).Return(int64(1), nil).Once()
+	}
+	dbClient.On("ExecuteContext", mock.Anything, queryDeleteInactiveMigrationRun,
+		testRunID).Return(int64(1), nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryTransitionMigrationState,
+		"1.0.0", release.Manifest.ReleaseVersion, string(MigrationStageExpanded), string(StatusCompleted),
+		nil, nil, completedAt, testStateID, string(StoreIDConfigDB), 1, "1.0.0",
+		release.Manifest.ReleaseVersion, string(MigrationStageMigrating), string(StatusInProgress),
+		testRunID, nil, startedAt).
+		Return(int64(1), nil).Once()
+	controller := newTestFinalizationController(t, release, dbClient, &testTransactioner{})
+	controller.now = func() time.Time { return completedAt }
+
+	result, err := controller.CompleteRollback(context.Background(), StoreIDConfigDB,
+		OperationPhaseMigrate, testRunID,
+		MigrationSelection{DeploymentIDs: []string{"deployment-a", "deployment-b"}})
+
+	require.NoError(t, err)
+	assert.True(t, result.Finalized)
+	assert.Equal(t, MigrationStageExpanded, result.State.Stage)
+	assert.Equal(t, StatusCompleted, result.State.Status)
+}
+
+func TestMigrationStateControllerCompletesFailedOperationRollback(t *testing.T) {
+	release := phaseAwareStateControllerTestRelease()
+	startedAt := time.Date(2026, time.October, 12, 9, 0, 0, 0, time.UTC)
+	completedAt := startedAt.Add(time.Minute)
+	forwardOperationID := release.Plan.Migrate[0].Definition().ID
+	rollbackOperationID := OperationID("2.0.0/configdb/rollback-migrate")
+	failure := MigrationFailure{
+		RunID: testRunID, StoreID: StoreIDConfigDB,
+		ForwardOperationID: forwardOperationID, CurrentOperationID: rollbackOperationID,
+		ExecutionTargetID: "deployment-a", ExecutionDirection: ExecutionDirectionRollback,
+		FailureSummary: "rollback interrupted", UpdatedAt: startedAt,
+	}
+	run := MigrationRun{
+		ID: testRunID, Mode: MigrationRunModeRollback, Phase: OperationPhaseMigrate,
+		RollbackScope: RollbackScopeFailedOperation, Selection: MigrationSelection{},
+		Failure: &failure, UpdatedAt: startedAt,
+	}
+	dbClient := providermock.NewDBClientInterfaceMock(t)
+	dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(StoreIDConfigDB)).
+		Return([]map[string]interface{}{phaseStateRow(
+			MigrationStageMigrating, StatusInProgress, release.Manifest.ReleaseVersion, testRunID, startedAt,
+		)}, nil).Once()
+	dbClient.On("QueryContext", mock.Anything, queryGetMigrationRun, testRunID).
+		Return([]map[string]interface{}{migrationRunRow(run)}, nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryDeleteMigrationProgressForOperation,
+		testStateID, release.Manifest.ReleaseVersion, string(forwardOperationID), "deployment-a").
+		Return(int64(1), nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryDeleteMigrationProgressForOperation,
+		testStateID, release.Manifest.ReleaseVersion, string(rollbackOperationID), "deployment-a").
+		Return(int64(1), nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryUpdateMigrationRun,
+		string(MigrationRunModeForward), string(OperationPhaseMigrate), nil, "[]", string(StoreIDConfigDB),
+		string(forwardOperationID), string(forwardOperationID), "deployment-a",
+		string(ExecutionDirectionForward), true, failedOperationRollbackSummary, completedAt,
+		testRunID, startedAt).
+		Return(int64(1), nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryTransitionMigrationState,
+		"1.0.0", release.Manifest.ReleaseVersion, string(MigrationStageMigrating), string(StatusFailed),
+		testRunID, failedOperationRollbackSummary, completedAt, testStateID, string(StoreIDConfigDB), 1, "1.0.0",
+		release.Manifest.ReleaseVersion, string(MigrationStageMigrating), string(StatusInProgress),
+		testRunID, nil, startedAt).
+		Return(int64(1), nil).Once()
+	controller := newTestFinalizationController(t, release, dbClient, &testTransactioner{})
+	controller.now = func() time.Time { return completedAt }
+
+	result, err := controller.CompleteOperationRollback(context.Background(), StoreIDConfigDB, testRunID,
+		Progress{
+			MigrationStateID: testStateID, RunID: testRunID, TargetLevel: release.Manifest.ReleaseVersion,
+			OperationID: string(forwardOperationID), ExecutionTargetID: "deployment-a",
+		}, rollbackOperationID, &failure)
+
+	require.NoError(t, err)
+	assert.True(t, result.Finalized)
+	assert.Equal(t, StatusFailed, result.State.Status)
+	assert.Equal(t, testRunID, result.State.ActiveRunID)
+	assert.Equal(t, failedOperationRollbackSummary, result.State.FailureSummary)
+}
+
+func TestMigrationStateControllerRevertsReleaseToAcceptedSource(t *testing.T) {
+	release := phaseAwareStateControllerTestRelease()
+	startedAt := time.Date(2026, time.October, 12, 10, 0, 0, 0, time.UTC)
+	completedAt := startedAt.Add(time.Minute)
+	cleanTarget := phaseStateRow(MigrationStageComplete, StatusClean, "", "", startedAt)
+	cleanTarget["completed_level"] = release.Manifest.ReleaseVersion
+	inProgress := phaseStateRow(
+		MigrationStageRollingBack, StatusInProgress, release.Manifest.ReleaseVersion, testRunID, completedAt)
+	dbClient := providermock.NewDBClientInterfaceMock(t)
+	dbClient.On("QueryContext", mock.Anything, queryGetMigrationRun, testRunID).
+		Return([]map[string]interface{}{}, nil).Once()
+	dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(StoreIDConfigDB)).
+		Return([]map[string]interface{}{cleanTarget}, nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryTransitionMigrationState,
+		"1.0.0", release.Manifest.ReleaseVersion, string(MigrationStageRollingBack), string(StatusInProgress),
+		testRunID, nil, completedAt, testStateID, string(StoreIDConfigDB), 1, release.Manifest.ReleaseVersion,
+		nil, string(MigrationStageComplete), string(StatusClean), nil, nil, startedAt).
+		Return(int64(1), nil).Once()
+	dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(StoreIDConfigDB)).
+		Return([]map[string]interface{}{inProgress}, nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryDeleteMigrationProgressForTarget,
+		testStateID, release.Manifest.ReleaseVersion).Return(int64(3), nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryDeleteDeploymentStatesForLevel,
+		testStateID, release.Manifest.ReleaseVersion).Return(int64(2), nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryDeleteInactiveMigrationRun,
+		testRunID).Return(int64(1), nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryTransitionMigrationState,
+		"1.0.0", nil, string(MigrationStageComplete), string(StatusClean), nil, nil, completedAt,
+		testStateID, string(StoreIDConfigDB), 1, "1.0.0", release.Manifest.ReleaseVersion,
+		string(MigrationStageRollingBack), string(StatusInProgress), testRunID, nil, completedAt).
+		Return(int64(1), nil).Once()
+	controller := newTestFinalizationController(t, release, dbClient, &testTransactioner{})
+	controller.now = func() time.Time { return completedAt }
+	initialState, err := stateFromRow(cleanTarget)
+	require.NoError(t, err)
+
+	reserved, err := controller.BeginRevertAll(context.Background(), []State{initialState}, testRunID)
+	require.NoError(t, err)
+	require.Len(t, reserved, 1)
+	assert.Equal(t, MigrationStageRollingBack, reserved[0].State.Stage)
+
+	result, err := controller.CompleteRevertAll(context.Background(), StoreIDConfigDB, testRunID)
+
+	require.NoError(t, err)
+	assert.True(t, result.Finalized)
+	assert.Equal(t, "1.0.0", result.State.CompletedLevel)
+	assert.Empty(t, result.State.TargetLevel)
+	assert.Equal(t, MigrationStageComplete, result.State.Stage)
+	assert.Equal(t, StatusClean, result.State.Status)
 }
 
 func phaseAwareStateControllerTestRelease() ReleaseDefinition {

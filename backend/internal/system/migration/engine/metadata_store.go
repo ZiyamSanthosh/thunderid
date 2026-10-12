@@ -28,12 +28,6 @@ var (
             TARGET_LEVEL, STAGE, STATUS, ACTIVE_RUN_ID, FAILURE_SUMMARY, UPDATED_AT)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 	}
-	queryUpdateMigrationState = dbmodel.DBQuery{
-		ID: "MIG-METADATA_MGT-03",
-		PostgresQuery: `UPDATE "MIGRATION_STATE" SET METADATA_VERSION = $1, COMPLETED_LEVEL = $2,
-            TARGET_LEVEL = $3, STAGE = $4, STATUS = $5, ACTIVE_RUN_ID = $6, FAILURE_SUMMARY = $7,
-            UPDATED_AT = $8 WHERE ID = $9 AND STORE_ID = $10`,
-	}
 	queryListMigrationProgress = dbmodel.DBQuery{
 		ID: "MIG-METADATA_MGT-04",
 		PostgresQuery: `SELECT ID, MIGRATION_STATE_ID, RUN_ID, TARGET_LEVEL, OPERATION_ID, OPERATION_ORDER,
@@ -136,15 +130,64 @@ var (
 			FROM "MIGRATION_DEPLOYMENT_STATE"
 			WHERE DEPLOYMENT_ID = $1 AND MIGRATION_STATE_ID = $2`,
 	}
-	queryInsertMigrationRunTarget = dbmodel.DBQuery{
+	queryInsertMigrationRun = dbmodel.DBQuery{
 		ID: "MIG-METADATA_MGT-18",
-		PostgresQuery: `INSERT INTO "MIGRATION_RUN_TARGET" (RUN_ID, DEPLOYMENT_ID, UPDATED_AT)
-			VALUES ($1, $2, $3) ON CONFLICT (DEPLOYMENT_ID, RUN_ID) DO NOTHING`,
+		PostgresQuery: `INSERT INTO "MIGRATION_RUN" (ID, MODE, PHASE, ROLLBACK_SCOPE, SELECTION_DATA,
+			FAILED_STORE_ID, FORWARD_OPERATION_ID, CURRENT_OPERATION_ID, EXECUTION_TARGET_ID,
+			EXECUTION_DIRECTION, ROLLED_BACK, FAILURE_SUMMARY, UPDATED_AT)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
 	}
-	queryListMigrationRunTargets = dbmodel.DBQuery{
+	queryGetMigrationRun = dbmodel.DBQuery{
 		ID: "MIG-METADATA_MGT-19",
-		PostgresQuery: `SELECT DEPLOYMENT_ID FROM "MIGRATION_RUN_TARGET"
-			WHERE RUN_ID = $1 ORDER BY DEPLOYMENT_ID`,
+		PostgresQuery: `SELECT ID, MODE, PHASE, ROLLBACK_SCOPE, SELECTION_DATA, FAILED_STORE_ID,
+			FORWARD_OPERATION_ID, CURRENT_OPERATION_ID, EXECUTION_TARGET_ID, EXECUTION_DIRECTION,
+			ROLLED_BACK, FAILURE_SUMMARY, UPDATED_AT FROM "MIGRATION_RUN" WHERE ID = $1`,
+	}
+	queryDeleteMigrationProgressForRun = dbmodel.DBQuery{
+		ID: "MIG-METADATA_MGT-21",
+		PostgresQuery: `DELETE FROM "MIGRATION_PROGRESS"
+			WHERE MIGRATION_STATE_ID = $1 AND RUN_ID = $2`,
+	}
+	queryListMigrationProgressForTarget = dbmodel.DBQuery{
+		ID: "MIG-METADATA_MGT-22",
+		PostgresQuery: `SELECT ID, MIGRATION_STATE_ID, RUN_ID, TARGET_LEVEL, OPERATION_ID, OPERATION_ORDER,
+			EXECUTION_TARGET_ID, STATUS, CHECKPOINT_DATA, UPDATED_AT FROM "MIGRATION_PROGRESS"
+			WHERE MIGRATION_STATE_ID = $1 AND TARGET_LEVEL = $2
+			ORDER BY OPERATION_ORDER, OPERATION_ID, EXECUTION_TARGET_ID`,
+	}
+	queryDeleteMigrationProgressForOperation = dbmodel.DBQuery{
+		ID: "MIG-METADATA_MGT-23",
+		PostgresQuery: `DELETE FROM "MIGRATION_PROGRESS"
+			WHERE MIGRATION_STATE_ID = $1 AND TARGET_LEVEL = $2 AND OPERATION_ID = $3
+				AND EXECUTION_TARGET_ID = $4`,
+	}
+	queryDeleteMigrationProgressForTarget = dbmodel.DBQuery{
+		ID: "MIG-METADATA_MGT-24",
+		PostgresQuery: `DELETE FROM "MIGRATION_PROGRESS"
+			WHERE MIGRATION_STATE_ID = $1 AND TARGET_LEVEL = $2`,
+	}
+	queryUpdateMigrationRun = dbmodel.DBQuery{
+		ID: "MIG-METADATA_MGT-25",
+		PostgresQuery: `UPDATE "MIGRATION_RUN" SET MODE = $1, PHASE = $2, ROLLBACK_SCOPE = $3,
+			SELECTION_DATA = $4, FAILED_STORE_ID = $5, FORWARD_OPERATION_ID = $6,
+			CURRENT_OPERATION_ID = $7, EXECUTION_TARGET_ID = $8, EXECUTION_DIRECTION = $9,
+			ROLLED_BACK = $10, FAILURE_SUMMARY = $11, UPDATED_AT = $12
+			WHERE ID = $13 AND UPDATED_AT = $14`,
+	}
+	queryDeleteInactiveMigrationRun = dbmodel.DBQuery{
+		ID: "MIG-METADATA_MGT-27",
+		PostgresQuery: `DELETE FROM "MIGRATION_RUN" WHERE ID = $1 AND NOT EXISTS
+			(SELECT 1 FROM "MIGRATION_STATE" WHERE ACTIVE_RUN_ID = $1)`,
+	}
+	queryDeleteDeploymentStatesForLevel = dbmodel.DBQuery{
+		ID: "MIG-METADATA_MGT-29",
+		PostgresQuery: `DELETE FROM "MIGRATION_DEPLOYMENT_STATE"
+			WHERE MIGRATION_STATE_ID = $1 AND COMPLETED_LEVEL = $2`,
+	}
+	queryDeleteDeploymentState = dbmodel.DBQuery{
+		ID: "MIG-METADATA_MGT-30",
+		PostgresQuery: `DELETE FROM "MIGRATION_DEPLOYMENT_STATE"
+			WHERE MIGRATION_STATE_ID = $1 AND DEPLOYMENT_ID = $2 AND COMPLETED_LEVEL = $3`,
 	}
 )
 
@@ -157,43 +200,56 @@ const (
 )
 
 type metadataQuerySet struct {
-	getState              dbmodel.DBQuery
-	insertState           dbmodel.DBQuery
-	updateState           dbmodel.DBQuery
-	listProgress          dbmodel.DBQuery
-	getProgress           dbmodel.DBQuery
-	insertProgress        dbmodel.DBQuery
-	updateProgress        dbmodel.DBQuery
-	reserveState          dbmodel.DBQuery
-	finalizeState         dbmodel.DBQuery
-	cancelState           dbmodel.DBQuery
-	failState             dbmodel.DBQuery
-	resumeState           dbmodel.DBQuery
-	transitionState       dbmodel.DBQuery
-	cancelPhase           dbmodel.DBQuery
-	upsertDeploymentState dbmodel.DBQuery
-	getDeploymentState    dbmodel.DBQuery
-	insertRunTarget       dbmodel.DBQuery
-	listRunTargets        dbmodel.DBQuery
-	inspectSchema         dbmodel.DBQuery
-	createSchema          dbmodel.DBQuery
+	getState                       dbmodel.DBQuery
+	insertState                    dbmodel.DBQuery
+	listProgress                   dbmodel.DBQuery
+	getProgress                    dbmodel.DBQuery
+	insertProgress                 dbmodel.DBQuery
+	updateProgress                 dbmodel.DBQuery
+	reserveState                   dbmodel.DBQuery
+	finalizeState                  dbmodel.DBQuery
+	cancelState                    dbmodel.DBQuery
+	failState                      dbmodel.DBQuery
+	resumeState                    dbmodel.DBQuery
+	transitionState                dbmodel.DBQuery
+	cancelPhase                    dbmodel.DBQuery
+	upsertDeploymentState          dbmodel.DBQuery
+	getDeploymentState             dbmodel.DBQuery
+	insertRun                      dbmodel.DBQuery
+	getRun                         dbmodel.DBQuery
+	updateRun                      dbmodel.DBQuery
+	deleteInactiveRun              dbmodel.DBQuery
+	listProgressForTarget          dbmodel.DBQuery
+	deleteProgressForOperation     dbmodel.DBQuery
+	deleteProgressForTarget        dbmodel.DBQuery
+	deleteDeploymentStatesForLevel dbmodel.DBQuery
+	deleteDeploymentState          dbmodel.DBQuery
+	inspectSchema                  dbmodel.DBQuery
+	createSchema                   dbmodel.DBQuery
 }
 
 var migrationMetadataQueries = metadataQuerySet{
 	getState: queryGetMigrationState, insertState: queryInsertMigrationState,
-	updateState: queryUpdateMigrationState, listProgress: queryListMigrationProgress,
+	listProgress:   queryListMigrationProgress,
 	getProgress:    queryGetMigrationProgress,
 	insertProgress: queryInsertMigrationProgress, updateProgress: queryUpdateMigrationProgress,
 	reserveState: queryReserveMigrationState, finalizeState: queryFinalizeMigrationState,
 	cancelState: queryCancelMigrationState, failState: queryFailMigrationState,
-	resumeState:           queryResumeMigrationState,
-	transitionState:       queryTransitionMigrationState,
-	cancelPhase:           queryCancelMigrationPhase,
-	upsertDeploymentState: queryUpsertDeploymentMigrationState,
-	getDeploymentState:    queryGetDeploymentMigrationState,
-	insertRunTarget:       queryInsertMigrationRunTarget,
-	listRunTargets:        queryListMigrationRunTargets,
-	inspectSchema:         queryInspectMetadataSchema, createSchema: queryCreateMetadataSchema,
+	resumeState:                    queryResumeMigrationState,
+	transitionState:                queryTransitionMigrationState,
+	cancelPhase:                    queryCancelMigrationPhase,
+	upsertDeploymentState:          queryUpsertDeploymentMigrationState,
+	getDeploymentState:             queryGetDeploymentMigrationState,
+	insertRun:                      queryInsertMigrationRun,
+	getRun:                         queryGetMigrationRun,
+	updateRun:                      queryUpdateMigrationRun,
+	deleteInactiveRun:              queryDeleteInactiveMigrationRun,
+	listProgressForTarget:          queryListMigrationProgressForTarget,
+	deleteProgressForOperation:     queryDeleteMigrationProgressForOperation,
+	deleteProgressForTarget:        queryDeleteMigrationProgressForTarget,
+	deleteDeploymentStatesForLevel: queryDeleteDeploymentStatesForLevel,
+	deleteDeploymentState:          queryDeleteDeploymentState,
+	inspectSchema:                  queryInspectMetadataSchema, createSchema: queryCreateMetadataSchema,
 }
 
 // GetProgress returns the durable execution record for one operation target, if present.
@@ -233,57 +289,83 @@ func (r *MetadataStore) GetProgress(
 	return &progress, nil
 }
 
-// RecordRunTargets durably records the complete deployment selection for one migration run.
-func (r *MetadataStore) RecordRunTargets(
-	ctx context.Context,
-	runID string,
-	deploymentIDs []string,
-	updatedAt time.Time,
-) error {
-	if !isUUIDv7(runID) {
-		return errors.New("record migration run targets: run ID must be a canonical UUIDv7")
+// InsertRun creates the durable context for one active migration run.
+func (r *MetadataStore) InsertRun(ctx context.Context, run MigrationRun) error {
+	if err := run.Validate(); err != nil {
+		return fmt.Errorf("insert migration run: %w", err)
 	}
-	if updatedAt.IsZero() {
-		return errors.New("record migration run targets: update time is required")
+	selectionData, err := json.Marshal(append([]string{}, run.Selection.DeploymentIDs...))
+	if err != nil {
+		return fmt.Errorf("insert migration run: encode selection: %w", err)
 	}
-	if err := validateMigrationSelection(MigrationSelection{DeploymentIDs: deploymentIDs}); err != nil {
-		return fmt.Errorf("record migration run targets: %w", err)
+	args := migrationRunMutableArgs(run, selectionData)
+	rowsAffected, err := r.dbClient.ExecuteContext(ctx, r.queries.insertRun,
+		append([]interface{}{run.ID}, args...)...)
+	if err != nil {
+		return fmt.Errorf("insert migration run %q: %w", run.ID, err)
 	}
-	for _, deploymentID := range deploymentIDs {
-		rowsAffected, err := r.dbClient.ExecuteContext(
-			ctx, r.queries.insertRunTarget, runID, deploymentID, updatedAt)
-		if err != nil {
-			return fmt.Errorf("record migration run target %q: %w", deploymentID, err)
-		}
-		if rowsAffected < 0 || rowsAffected > 1 {
-			return fmt.Errorf("record migration run target %q: expected at most one affected row, got %d",
-				deploymentID, rowsAffected)
-		}
-	}
-	return nil
+	return requireOneRow("insert migration run", rowsAffected)
 }
 
-// ListRunTargets returns the deployment selection retained for one migration run.
-func (r *MetadataStore) ListRunTargets(ctx context.Context, runID string) ([]string, error) {
+// GetRun returns the active migration run context, if present.
+func (r *MetadataStore) GetRun(ctx context.Context, runID string) (*MigrationRun, error) {
 	if !isUUIDv7(runID) {
-		return nil, errors.New("list migration run targets: run ID must be a canonical UUIDv7")
+		return nil, errors.New("get migration run: run ID must be a canonical UUIDv7")
 	}
-	rows, err := r.dbClient.QueryContext(ctx, r.queries.listRunTargets, runID)
+	rows, err := r.dbClient.QueryContext(ctx, r.queries.getRun, runID)
 	if err != nil {
-		return nil, fmt.Errorf("list migration run targets: %w", err)
+		return nil, fmt.Errorf("get migration run %q: %w", runID, err)
 	}
-	targets := make([]string, 0, len(rows))
-	for index, row := range rows {
-		deploymentID, err := requiredString(row, "deployment_id")
-		if err != nil {
-			return nil, fmt.Errorf("list migration run targets row %d: %w", index, err)
-		}
-		targets = append(targets, deploymentID)
+	if len(rows) == 0 {
+		return nil, nil
 	}
-	if err := validateMigrationSelection(MigrationSelection{DeploymentIDs: targets}); err != nil {
-		return nil, fmt.Errorf("list migration run targets: %w", err)
+	if len(rows) != 1 {
+		return nil, fmt.Errorf("get migration run %q: expected at most one row, got %d", runID, len(rows))
 	}
-	return targets, nil
+	run, err := migrationRunFromRow(rows[0])
+	if err != nil {
+		return nil, fmt.Errorf("get migration run %q: %w", runID, err)
+	}
+	return &run, nil
+}
+
+// UpdateRun conditionally replaces mutable active-run context.
+func (r *MetadataStore) UpdateRun(ctx context.Context, current MigrationRun, next MigrationRun) error {
+	if err := current.Validate(); err != nil {
+		return fmt.Errorf("update migration run: invalid current run: %w", err)
+	}
+	if err := next.Validate(); err != nil {
+		return fmt.Errorf("update migration run: invalid next run: %w", err)
+	}
+	if current.ID != next.ID {
+		return errors.New("update migration run: run ID cannot change")
+	}
+	selectionData, err := json.Marshal(append([]string{}, next.Selection.DeploymentIDs...))
+	if err != nil {
+		return fmt.Errorf("update migration run: encode selection: %w", err)
+	}
+	args := migrationRunMutableArgs(next, selectionData)
+	args = append(args, next.ID, current.UpdatedAt)
+	rowsAffected, err := r.dbClient.ExecuteContext(ctx, r.queries.updateRun, args...)
+	if err != nil {
+		return fmt.Errorf("update migration run %q: %w", next.ID, err)
+	}
+	return requireOneRow("update migration run", rowsAffected)
+}
+
+// DeleteRunIfInactive removes a run only after every store has released it.
+func (r *MetadataStore) DeleteRunIfInactive(ctx context.Context, runID string) error {
+	if !isUUIDv7(runID) {
+		return errors.New("delete inactive migration run: run ID must be a canonical UUIDv7")
+	}
+	rowsAffected, err := r.dbClient.ExecuteContext(ctx, r.queries.deleteInactiveRun, runID)
+	if err != nil {
+		return fmt.Errorf("delete inactive migration run %q: %w", runID, err)
+	}
+	if rowsAffected < 0 || rowsAffected > 1 {
+		return fmt.Errorf("delete inactive migration run %q: expected at most one row, got %d", runID, rowsAffected)
+	}
+	return nil
 }
 
 // UpsertDeploymentState records the release level completed by one deployment in a logical store.
@@ -647,22 +729,6 @@ func (r *MetadataStore) InsertState(ctx context.Context, state State) error {
 	return requireOneRow("insert migration state", rowsAffected)
 }
 
-// UpdateState replaces the mutable state fields for an existing logical store.
-func (r *MetadataStore) UpdateState(ctx context.Context, state State) error {
-	if err := state.Validate(); err != nil {
-		return fmt.Errorf("update migration state: %w", err)
-	}
-
-	rowsAffected, err := r.dbClient.ExecuteContext(ctx, r.queries.updateState,
-		state.MetadataVersion, state.CompletedLevel, nullableString(state.TargetLevel), string(state.Stage),
-		string(state.Status), nullableString(state.ActiveRunID), nullableString(state.FailureSummary),
-		state.UpdatedAt, state.ID, string(state.StoreID))
-	if err != nil {
-		return fmt.Errorf("update migration state for store %q: %w", state.StoreID, err)
-	}
-	return requireOneRow("update migration state", rowsAffected)
-}
-
 // ListProgress returns ordered operation progress for one migration run.
 func (r *MetadataStore) ListProgress(
 	ctx context.Context,
@@ -686,6 +752,33 @@ func (r *MetadataStore) ListProgress(
 		item, err := progressFromRow(row)
 		if err != nil {
 			return nil, fmt.Errorf("list migration progress row %d: %w", index, err)
+		}
+		progress = append(progress, item)
+	}
+	return progress, nil
+}
+
+// ListProgressForTarget returns operation progress across all runs for one release target.
+func (r *MetadataStore) ListProgressForTarget(
+	ctx context.Context,
+	migrationStateID string,
+	targetLevel string,
+) ([]Progress, error) {
+	if !isUUIDv7(migrationStateID) {
+		return nil, errors.New("list migration target progress: state ID must be a canonical UUIDv7")
+	}
+	if !isCanonicalVersion(targetLevel) {
+		return nil, errors.New("list migration target progress: target level must be a canonical semantic version")
+	}
+	rows, err := r.dbClient.QueryContext(ctx, r.queries.listProgressForTarget, migrationStateID, targetLevel)
+	if err != nil {
+		return nil, fmt.Errorf("list migration target progress: %w", err)
+	}
+	progress := make([]Progress, 0, len(rows))
+	for index, row := range rows {
+		item, err := progressFromRow(row)
+		if err != nil {
+			return nil, fmt.Errorf("list migration target progress row %d: %w", index, err)
 		}
 		progress = append(progress, item)
 	}
@@ -721,6 +814,107 @@ func (r *MetadataStore) UpdateProgress(ctx context.Context, progress Progress) e
 		return fmt.Errorf("update migration progress for operation %q: %w", progress.OperationID, err)
 	}
 	return requireOneRow("update migration progress", rowsAffected)
+}
+
+// DeleteProgressForRun removes operation progress after a run has been completely rolled back.
+func (r *MetadataStore) DeleteProgressForRun(
+	ctx context.Context,
+	migrationStateID string,
+	runID string,
+) error {
+	if !isUUIDv7(migrationStateID) {
+		return errors.New("delete migration progress: state ID must be a canonical UUIDv7")
+	}
+	if !isUUIDv7(runID) {
+		return errors.New("delete migration progress: run ID must be a canonical UUIDv7")
+	}
+	if _, err := r.dbClient.ExecuteContext(
+		ctx, queryDeleteMigrationProgressForRun, migrationStateID, runID); err != nil {
+		return fmt.Errorf("delete migration progress for run %q: %w", runID, err)
+	}
+	return nil
+}
+
+// DeleteProgressForOperation removes one forward or rollback operation target after rollback.
+func (r *MetadataStore) DeleteProgressForOperation(
+	ctx context.Context,
+	migrationStateID string,
+	targetLevel string,
+	operationID OperationID,
+	executionTargetID string,
+) error {
+	if !isUUIDv7(migrationStateID) {
+		return errors.New("delete migration operation progress: state ID must be a canonical UUIDv7")
+	}
+	if !isCanonicalVersion(targetLevel) {
+		return errors.New("delete migration operation progress: target level must be a canonical semantic version")
+	}
+	if strings.TrimSpace(string(operationID)) == "" {
+		return errors.New("delete migration operation progress: operation ID is required")
+	}
+	rowsAffected, err := r.dbClient.ExecuteContext(ctx, r.queries.deleteProgressForOperation,
+		migrationStateID, targetLevel, string(operationID), executionTargetID)
+	if err != nil {
+		return fmt.Errorf("delete migration operation progress %q: %w", operationID, err)
+	}
+	if rowsAffected < 0 || rowsAffected > 1 {
+		return fmt.Errorf("delete migration operation progress %q: expected at most one row, got %d",
+			operationID, rowsAffected)
+	}
+	return nil
+}
+
+// DeleteProgressForTarget removes all progress for one release target after a complete revert.
+func (r *MetadataStore) DeleteProgressForTarget(
+	ctx context.Context,
+	migrationStateID string,
+	targetLevel string,
+) error {
+	if !isUUIDv7(migrationStateID) {
+		return errors.New("delete migration target progress: state ID must be a canonical UUIDv7")
+	}
+	if !isCanonicalVersion(targetLevel) {
+		return errors.New("delete migration target progress: target level must be a canonical semantic version")
+	}
+	if _, err := r.dbClient.ExecuteContext(ctx, r.queries.deleteProgressForTarget,
+		migrationStateID, targetLevel); err != nil {
+		return fmt.Errorf("delete migration target progress: %w", err)
+	}
+	return nil
+}
+
+// DeleteDeploymentStatesForLevel removes deployment completion markers after rollback.
+func (r *MetadataStore) DeleteDeploymentStatesForLevel(
+	ctx context.Context,
+	migrationStateID string,
+	completedLevel string,
+) error {
+	if !isUUIDv7(migrationStateID) || !isCanonicalVersion(completedLevel) {
+		return errors.New("delete deployment migration states: invalid state ID or completed level")
+	}
+	if _, err := r.dbClient.ExecuteContext(ctx, r.queries.deleteDeploymentStatesForLevel,
+		migrationStateID, completedLevel); err != nil {
+		return fmt.Errorf("delete deployment migration states: %w", err)
+	}
+	return nil
+}
+
+// DeleteDeploymentState removes one deployment completion marker after phase rollback.
+func (r *MetadataStore) DeleteDeploymentState(
+	ctx context.Context,
+	migrationStateID string,
+	deploymentID string,
+	completedLevel string,
+) error {
+	if !isUUIDv7(migrationStateID) || strings.TrimSpace(deploymentID) == "" ||
+		!isCanonicalVersion(completedLevel) {
+		return errors.New("delete deployment migration state: invalid identity")
+	}
+	if _, err := r.dbClient.ExecuteContext(ctx, r.queries.deleteDeploymentState,
+		migrationStateID, deploymentID, completedLevel); err != nil {
+		return fmt.Errorf("delete deployment migration state: %w", err)
+	}
+	return nil
 }
 
 func stateFromRow(row map[string]interface{}) (State, error) {
@@ -874,6 +1068,110 @@ func progressFromRow(row map[string]interface{}) (Progress, error) {
 	return progress, nil
 }
 
+func migrationRunMutableArgs(run MigrationRun, selectionData []byte) []interface{} {
+	var failedStoreID interface{}
+	var forwardOperationID interface{}
+	var currentOperationID interface{}
+	var executionTargetID interface{}
+	var executionDirection interface{}
+	var failureSummary interface{}
+	rolledBack := false
+	if run.Failure != nil {
+		failedStoreID = string(run.Failure.StoreID)
+		forwardOperationID = string(run.Failure.ForwardOperationID)
+		currentOperationID = string(run.Failure.CurrentOperationID)
+		executionTargetID = run.Failure.ExecutionTargetID
+		executionDirection = string(run.Failure.ExecutionDirection)
+		rolledBack = run.Failure.RolledBack
+		failureSummary = run.Failure.FailureSummary
+	}
+	return []interface{}{
+		string(run.Mode), string(run.Phase), nullableString(string(run.RollbackScope)), string(selectionData),
+		failedStoreID, forwardOperationID, currentOperationID, executionTargetID, executionDirection,
+		rolledBack, failureSummary, run.UpdatedAt,
+	}
+}
+
+func migrationRunFromRow(row map[string]interface{}) (MigrationRun, error) {
+	id, err := requiredString(row, "id")
+	if err != nil {
+		return MigrationRun{}, err
+	}
+	mode, err := requiredString(row, "mode")
+	if err != nil {
+		return MigrationRun{}, err
+	}
+	phase, err := requiredString(row, "phase")
+	if err != nil {
+		return MigrationRun{}, err
+	}
+	rollbackScope, err := optionalString(row, "rollback_scope")
+	if err != nil {
+		return MigrationRun{}, err
+	}
+	selectionData, err := requiredString(row, "selection_data")
+	if err != nil {
+		return MigrationRun{}, err
+	}
+	selection := MigrationSelection{}
+	if err := json.Unmarshal([]byte(selectionData), &selection.DeploymentIDs); err != nil {
+		return MigrationRun{}, fmt.Errorf("decode migration run selection: %w", err)
+	}
+	failedStoreID, err := optionalString(row, "failed_store_id")
+	if err != nil {
+		return MigrationRun{}, err
+	}
+	forwardOperationID, err := optionalString(row, "forward_operation_id")
+	if err != nil {
+		return MigrationRun{}, err
+	}
+	currentOperationID, err := optionalString(row, "current_operation_id")
+	if err != nil {
+		return MigrationRun{}, err
+	}
+	executionTargetID, err := optionalString(row, "execution_target_id")
+	if err != nil {
+		return MigrationRun{}, err
+	}
+	executionDirection, err := optionalString(row, "execution_direction")
+	if err != nil {
+		return MigrationRun{}, err
+	}
+	rolledBack, err := requiredBool(row, "rolled_back")
+	if err != nil {
+		return MigrationRun{}, err
+	}
+	failureSummary, err := optionalString(row, "failure_summary")
+	if err != nil {
+		return MigrationRun{}, err
+	}
+	updatedAt, err := requiredTime(row, "updated_at")
+	if err != nil {
+		return MigrationRun{}, err
+	}
+
+	run := MigrationRun{
+		ID: id, Mode: MigrationRunMode(mode), Phase: OperationPhase(phase),
+		RollbackScope: RollbackScope(rollbackScope), Selection: selection, UpdatedAt: updatedAt,
+	}
+	if failedStoreID != "" {
+		run.Failure = &MigrationFailure{
+			RunID: id, StoreID: StoreID(failedStoreID),
+			ForwardOperationID: OperationID(forwardOperationID),
+			CurrentOperationID: OperationID(currentOperationID),
+			ExecutionTargetID:  executionTargetID, ExecutionDirection: ExecutionDirection(executionDirection),
+			RolledBack: rolledBack, FailureSummary: failureSummary, UpdatedAt: updatedAt,
+		}
+	} else if forwardOperationID != "" || currentOperationID != "" || executionTargetID != "" ||
+		executionDirection != "" || rolledBack || failureSummary != "" {
+		return MigrationRun{}, errors.New("stored migration run contains failure data without a failed store")
+	}
+	if err := run.Validate(); err != nil {
+		return MigrationRun{}, fmt.Errorf("invalid stored migration run: %w", err)
+	}
+	return run, nil
+}
+
 func requiredString(row map[string]interface{}, column string) (string, error) {
 	value, exists := row[column]
 	if !exists || value == nil {
@@ -891,6 +1189,18 @@ func optionalString(row map[string]interface{}, column string) (string, error) {
 		return "", nil
 	}
 	return databaseString(value, column)
+}
+
+func requiredBool(row map[string]interface{}, column string) (bool, error) {
+	value, exists := row[column]
+	if !exists || value == nil {
+		return false, fmt.Errorf("required migration metadata column %q is missing", column)
+	}
+	boolValue, ok := value.(bool)
+	if !ok {
+		return false, fmt.Errorf("migration metadata column %q has unexpected type %T", column, value)
+	}
+	return boolValue, nil
 }
 
 func databaseString(value interface{}, column string) (string, error) {

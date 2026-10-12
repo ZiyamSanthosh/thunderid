@@ -36,7 +36,7 @@ func TestPostgresMetadataSchemaIsConsistentAcrossStores(t *testing.T) {
 			assert.Contains(t, schema, `CREATE TABLE IF NOT EXISTS "MIGRATION_STATE"`)
 			assert.Contains(t, schema, `CREATE TABLE IF NOT EXISTS "MIGRATION_PROGRESS"`)
 			assert.Contains(t, schema, `CREATE TABLE IF NOT EXISTS "MIGRATION_DEPLOYMENT_STATE"`)
-			assert.Contains(t, schema, `CREATE TABLE IF NOT EXISTS "MIGRATION_RUN_TARGET"`)
+			assert.Contains(t, schema, `CREATE TABLE IF NOT EXISTS "MIGRATION_RUN"`)
 
 			assert.Equal(t, expectedSchema, strings.TrimSpace(schema))
 		})
@@ -57,7 +57,7 @@ func TestMetadataStoreInspectSchema(t *testing.T) {
 				{"table_name": metadataStateTable},
 				{"table_name": []byte(metadataProgressTable)},
 				{"table_name": metadataDeploymentStateTable},
-				{"table_name": metadataRunTargetTable},
+				{"table_name": metadataRunTable},
 			},
 			expected: SchemaReady,
 		},
@@ -132,9 +132,10 @@ func extractMetadataSchema(t *testing.T, script string) string {
 	start := strings.Index(script, `CREATE TABLE IF NOT EXISTS "MIGRATION_STATE"`)
 	require.NotEqual(t, -1, start)
 
-	endMarker := "    PRIMARY KEY (DEPLOYMENT_ID, RUN_ID)\n);"
-	end := strings.Index(script[start:], endMarker)
+	runStart := strings.Index(script[start:], `CREATE TABLE IF NOT EXISTS "MIGRATION_RUN"`)
+	require.NotEqual(t, -1, runStart)
+	end := strings.Index(script[start+runStart:], "\n);")
 	require.NotEqual(t, -1, end)
 
-	return script[start : start+end+len(endMarker)]
+	return script[start : start+runStart+end+len("\n);")]
 }

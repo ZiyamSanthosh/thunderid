@@ -148,6 +148,90 @@ func TestStateValidate(t *testing.T) {
 	}
 }
 
+func TestMigrationRunValidate(t *testing.T) {
+	updatedAt := time.Now().UTC()
+	validRun := func() MigrationRun {
+		return MigrationRun{
+			ID: testRunID, Mode: MigrationRunModeForward, Phase: OperationPhaseMigrate,
+			Selection: MigrationSelection{DeploymentIDs: []string{"deployment-a"}}, UpdatedAt: updatedAt,
+		}
+	}
+	tests := []struct {
+		name       string
+		mutate     func(*MigrationRun)
+		errorMatch string
+	}{
+		{name: "valid forward run"},
+		{
+			name: "valid phase rollback run",
+			mutate: func(run *MigrationRun) {
+				run.Mode = MigrationRunModeRollback
+				run.RollbackScope = RollbackScopePhase
+			},
+		},
+		{
+			name: "valid complete rollback run",
+			mutate: func(run *MigrationRun) {
+				run.Mode = MigrationRunModeRevertAll
+				run.Phase = ""
+				run.RollbackScope = RollbackScopeAll
+			},
+		},
+		{name: "invalid ID", mutate: func(run *MigrationRun) { run.ID = "invalid" }, errorMatch: "run ID"},
+		{name: "unsupported mode", mutate: func(run *MigrationRun) { run.Mode = "unknown" }, errorMatch: "mode"},
+		{
+			name:       "forward run with rollback scope",
+			mutate:     func(run *MigrationRun) { run.RollbackScope = RollbackScopePhase },
+			errorMatch: "forward migration run",
+		},
+		{
+			name:       "rollback run without scope",
+			mutate:     func(run *MigrationRun) { run.Mode = MigrationRunModeRollback },
+			errorMatch: "rollback scope",
+		},
+		{
+			name: "complete rollback run with phase",
+			mutate: func(run *MigrationRun) {
+				run.Mode = MigrationRunModeRevertAll
+				run.RollbackScope = RollbackScopeAll
+			},
+			errorMatch: "single operation phase",
+		},
+		{
+			name: "failure for another run",
+			mutate: func(run *MigrationRun) {
+				run.Failure = &MigrationFailure{RunID: testStateID}
+			},
+			errorMatch: "belongs to another run",
+		},
+		{
+			name: "invalid selection",
+			mutate: func(run *MigrationRun) {
+				run.Selection.DeploymentIDs = []string{"deployment-a", "deployment-a"}
+			},
+			errorMatch: "repeats deployment ID",
+		},
+		{name: "missing update time", mutate: func(run *MigrationRun) { run.UpdatedAt = time.Time{} }, errorMatch: "update time"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			run := validRun()
+			if test.mutate != nil {
+				test.mutate(&run)
+			}
+
+			err := run.Validate()
+			if test.errorMatch == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.ErrorContains(t, err, test.errorMatch)
+		})
+	}
+}
+
 func TestProgressValidate(t *testing.T) {
 	tests := []struct {
 		name       string

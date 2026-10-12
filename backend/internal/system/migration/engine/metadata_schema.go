@@ -15,7 +15,7 @@ const (
 	metadataStateTable           = "MIGRATION_STATE"
 	metadataProgressTable        = "MIGRATION_PROGRESS"
 	metadataDeploymentStateTable = "MIGRATION_DEPLOYMENT_STATE"
-	metadataRunTargetTable       = "MIGRATION_RUN_TARGET"
+	metadataRunTable             = "MIGRATION_RUN"
 )
 
 // SchemaStatus describes whether the metadata tables exist in a database namespace.
@@ -39,7 +39,7 @@ var (
 		PostgresQuery: `SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
             WHERE TABLE_SCHEMA = CURRENT_SCHEMA()
 			AND TABLE_NAME IN ('MIGRATION_STATE', 'MIGRATION_PROGRESS',
-				'MIGRATION_DEPLOYMENT_STATE', 'MIGRATION_RUN_TARGET')`,
+				'MIGRATION_DEPLOYMENT_STATE', 'MIGRATION_RUN')`,
 	}
 	queryCreateMetadataSchema = dbmodel.DBQuery{
 		ID:            "MIG-METADATA_MGT-08",
@@ -66,11 +66,11 @@ func (r *MetadataStore) InspectSchema(ctx context.Context) (SchemaStatus, error)
 	_, hasState := found[metadataStateTable]
 	_, hasProgress := found[metadataProgressTable]
 	_, hasDeploymentState := found[metadataDeploymentStateTable]
-	_, hasRunTarget := found[metadataRunTargetTable]
+	_, hasRun := found[metadataRunTable]
 	switch {
-	case !hasState && !hasProgress && !hasDeploymentState && !hasRunTarget:
+	case !hasState && !hasProgress && !hasDeploymentState && !hasRun:
 		return SchemaAbsent, nil
-	case hasState && hasProgress && hasDeploymentState && hasRunTarget:
+	case hasState && hasProgress && hasDeploymentState && hasRun:
 		return SchemaReady, nil
 	default:
 		return SchemaPartial, nil

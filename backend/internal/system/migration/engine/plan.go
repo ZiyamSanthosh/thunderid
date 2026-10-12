@@ -93,11 +93,10 @@ type ReadinessChecker interface {
 	CheckReadiness(context.Context, ReadAccess, PlanContext) (ReadinessResult, error)
 }
 
-// RollbackCapableOperation optionally restores changes made by a non-atomic operation target after execution fails.
-// The original execution error is provided so the implementation can select the appropriate recovery behavior.
-type RollbackCapableOperation interface {
+// RollbackOperation restores changes made by one explicitly associated forward operation.
+type RollbackOperation interface {
 	Operation
-	Rollback(context.Context, OperationExecution, error) error
+	ForwardOperationID() OperationID
 }
 
 // MigrationPlan declares the ordered operations compiled into one target release.
@@ -106,6 +105,7 @@ type MigrationPlan struct {
 	Expand        []Operation
 	Migrate       []Operation
 	Contract      []Operation
+	Rollback      []RollbackOperation
 }
 
 // OperationsForPhase returns an independent slice containing the operations assigned to one phase.
@@ -201,6 +201,7 @@ func cloneMigrationPlan(plan MigrationPlan) MigrationPlan {
 	plan.Expand = append([]Operation(nil), plan.Expand...)
 	plan.Migrate = append([]Operation(nil), plan.Migrate...)
 	plan.Contract = append([]Operation(nil), plan.Contract...)
+	plan.Rollback = append([]RollbackOperation(nil), plan.Rollback...)
 	return plan
 }
 
@@ -223,7 +224,8 @@ func validateMigrationPlan(manifest ReleaseManifest, plan MigrationPlan) error {
 	}
 
 	plannedOperations := plan.plannedOperations()
-	operationIDs := make(map[OperationID]struct{}, len(plannedOperations))
+	operationIDs := make(map[OperationID]struct{}, len(plannedOperations)+len(plan.Rollback))
+	forwardOperations := make(map[OperationID]Operation, len(plannedOperations))
 	for _, planned := range plannedOperations {
 		operation := planned.operation
 		if operation == nil {
@@ -234,27 +236,52 @@ func validateMigrationPlan(manifest ReleaseManifest, plan MigrationPlan) error {
 			return fmt.Errorf("%s operation at index %d: %w",
 				planned.phase, planned.index, err)
 		}
-		switch definition.InterruptionMode {
-		case InterruptionModeAtomic:
-			if _, ok := operation.(AtomicOperation); !ok {
-				return fmt.Errorf("operation %q declares atomic execution but does not implement AtomicOperation",
-					definition.ID)
-			}
-		case InterruptionModeResumable:
-			if _, ok := operation.(ResumableOperation); !ok {
-				return fmt.Errorf("operation %q declares resumable execution but does not implement ResumableOperation",
-					definition.ID)
-			}
-		}
-		if _, supportsRollback := operation.(RollbackCapableOperation); supportsRollback &&
-			definition.InterruptionMode == InterruptionModeAtomic {
-			return fmt.Errorf("operation %q: atomic operations cannot define rollback behavior", definition.ID)
+		if err := validateOperationImplementation(operation); err != nil {
+			return err
 		}
 		if _, exists := operationIDs[definition.ID]; exists {
 			return fmt.Errorf("duplicate operation ID %q", definition.ID)
 		}
 		operationIDs[definition.ID] = struct{}{}
+		forwardOperations[definition.ID] = operation
 		operationCountByStore[definition.StoreID]++
+	}
+
+	rollbackByForward := make(map[OperationID]struct{}, len(plan.Rollback))
+	for index, rollback := range plan.Rollback {
+		if rollback == nil {
+			return fmt.Errorf("rollback operation at index %d is nil", index)
+		}
+		definition := rollback.Definition()
+		if err := validateOperationDefinition(definition, manifestStores); err != nil {
+			return fmt.Errorf("rollback operation at index %d: %w", index, err)
+		}
+		if err := validateOperationImplementation(rollback); err != nil {
+			return err
+		}
+		if _, exists := operationIDs[definition.ID]; exists {
+			return fmt.Errorf("duplicate operation ID %q", definition.ID)
+		}
+		forwardID := rollback.ForwardOperationID()
+		forward, exists := forwardOperations[forwardID]
+		if !exists {
+			return fmt.Errorf("rollback operation %q references unknown forward operation %q",
+				definition.ID, forwardID)
+		}
+		if _, duplicate := rollbackByForward[forwardID]; duplicate {
+			return fmt.Errorf("forward operation %q has multiple rollback operations", forwardID)
+		}
+		forwardDefinition := forward.Definition()
+		if definition.StoreID != forwardDefinition.StoreID {
+			return fmt.Errorf("rollback operation %q targets store %q instead of forward operation store %q",
+				definition.ID, definition.StoreID, forwardDefinition.StoreID)
+		}
+		if definition.Kind != forwardDefinition.Kind {
+			return fmt.Errorf("rollback operation %q kind %q does not match forward operation kind %q",
+				definition.ID, definition.Kind, forwardDefinition.Kind)
+		}
+		operationIDs[definition.ID] = struct{}{}
+		rollbackByForward[forwardID] = struct{}{}
 	}
 
 	for _, requirement := range manifest.Stores {
@@ -264,6 +291,23 @@ func validateMigrationPlan(manifest ReleaseManifest, plan MigrationPlan) error {
 		}
 		if !requirement.Changed && operationCount > 0 {
 			return fmt.Errorf("unchanged store %q cannot have migration operations", requirement.ID)
+		}
+	}
+	return nil
+}
+
+func validateOperationImplementation(operation Operation) error {
+	definition := operation.Definition()
+	switch definition.InterruptionMode {
+	case InterruptionModeAtomic:
+		if _, ok := operation.(AtomicOperation); !ok {
+			return fmt.Errorf("operation %q declares atomic execution but does not implement AtomicOperation",
+				definition.ID)
+		}
+	case InterruptionModeResumable:
+		if _, ok := operation.(ResumableOperation); !ok {
+			return fmt.Errorf("operation %q declares resumable execution but does not implement ResumableOperation",
+				definition.ID)
 		}
 	}
 	return nil

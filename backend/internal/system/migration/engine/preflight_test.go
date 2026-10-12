@@ -272,7 +272,7 @@ func TestPreflightCheckerAggregatesReadinessAndDependencyFailures(t *testing.T) 
 	})
 	require.NoError(t, err)
 
-	report := checker.check(context.Background())
+	report := checker.checkPhaseStores(context.Background(), OperationPhaseMigrate, nil, nil)
 
 	assert.False(t, report.Ready())
 	assert.Equal(t, manifest.ReleaseVersion, report.TargetVersion)
@@ -311,7 +311,7 @@ func TestPreflightCheckerConvertsCheckErrorsAndInvalidResultsToBlockers(t *testi
 	})
 	require.NoError(t, err)
 
-	report := checker.check(context.Background())
+	report := checker.checkPhaseStores(context.Background(), OperationPhaseMigrate, nil, nil)
 
 	assert.False(t, report.Ready())
 	require.Len(t, report.Operations, 2)
@@ -329,7 +329,7 @@ func TestPreflightCheckerAcceptsEmptyPlan(t *testing.T) {
 	}, nil)
 	require.NoError(t, err)
 
-	report := checker.check(context.Background())
+	report := checker.checkPhaseStores(context.Background(), OperationPhaseMigrate, nil, nil)
 
 	assert.True(t, report.Ready())
 	assert.Empty(t, report.Operations)
@@ -344,7 +344,7 @@ func TestReadinessEvaluatorDefaultsOperationWithoutCheckerToReady(t *testing.T) 
 	evaluator, err := newReadinessEvaluator(release, nil)
 	require.NoError(t, err)
 
-	report := evaluator.check(context.Background())
+	report := evaluator.checkPhaseStores(context.Background(), OperationPhaseMigrate, nil, nil)
 
 	assert.True(t, report.Ready())
 	require.Len(t, report.Operations, 1)
@@ -371,8 +371,9 @@ func TestMigrationPreflightCheckerAcceptsSourceAndRunsAffectedOperations(t *test
 	checker, err := NewPreflightChecker(release, stores)
 	require.NoError(t, err)
 
-	report := checker.Check(context.Background(), metadataStores)
+	report, err := checker.CheckPhase(context.Background(), metadataStores, OperationPhaseMigrate)
 
+	require.NoError(t, err)
 	assert.True(t, report.Ready())
 	assert.True(t, operationCalled)
 	require.Len(t, report.Stores, 4)
@@ -476,8 +477,9 @@ func TestMigrationPreflightCheckerSkipsOperationsWhenStoreIsBlocked(t *testing.T
 	checker, err := NewPreflightChecker(release, stores)
 	require.NoError(t, err)
 
-	report := checker.Check(context.Background(), metadataStores)
+	report, err := checker.CheckPhase(context.Background(), metadataStores, OperationPhaseMigrate)
 
+	require.NoError(t, err)
 	assert.False(t, report.Ready())
 	assert.False(t, operationCalled)
 	assert.Equal(t, StoreAssessmentBlocked, report.Stores[1].State)
@@ -522,8 +524,9 @@ func TestMigrationPreflightCheckerContinuesIndependentOperations(t *testing.T) {
 	checker, err := NewPreflightChecker(release, stores)
 	require.NoError(t, err)
 
-	report := checker.Check(context.Background(), metadataStores)
+	report, err := checker.CheckPhase(context.Background(), metadataStores, OperationPhaseMigrate)
 
+	require.NoError(t, err)
 	assert.False(t, report.Ready())
 	assert.True(t, entityOperationCalled)
 	require.Len(t, report.Operations, 1)

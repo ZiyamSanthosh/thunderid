@@ -227,6 +227,18 @@ func TestServingCompatibilityAcrossMigrationStages(t *testing.T) {
 				"1.0.0", "2.0.0", MigrationStageContracting, StatusFailed),
 			expected: CompatibilityReasonNone,
 		},
+		{
+			name: "source serves during rollback", requirement: sourceRequirement,
+			state: migrationCompatibilityState(
+				"1.0.0", "2.0.0", MigrationStageRollingBack, StatusInProgress),
+			expected: CompatibilityReasonNone,
+		},
+		{
+			name: "target stops during rollback", requirement: targetRequirement,
+			state: migrationCompatibilityState(
+				"1.0.0", "2.0.0", MigrationStageRollingBack, StatusInProgress),
+			expected: CompatibilityReasonRollbackInProgress,
+		},
 	}
 
 	for _, test := range tests {
@@ -334,6 +346,22 @@ func TestNewCompatibilityGateRejectsInvalidManifest(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Nil(t, gate)
+}
+
+func TestCompatibilityReportRequiresOneCheckedCompatibleStore(t *testing.T) {
+	skipped := StoreCompatibility{
+		StoreID: StoreIDEntityDB, Reason: CompatibilityReasonUnsupportedProvider, Skipped: true,
+	}
+	compatible := StoreCompatibility{StoreID: StoreIDConfigDB}
+	incompatible := StoreCompatibility{
+		StoreID: StoreIDRuntimePersistent, Reason: CompatibilityReasonLevelMismatch,
+	}
+
+	assert.False(t, (CompatibilityReport{Stores: []StoreCompatibility{skipped}}).Compatible())
+	assert.True(t, (CompatibilityReport{Stores: []StoreCompatibility{compatible, skipped}}).Compatible())
+	assert.False(t, (CompatibilityReport{Stores: []StoreCompatibility{
+		compatible, skipped, incompatible,
+	}}).Compatible())
 }
 
 func compatibilityStateRow(storeID StoreID, completedLevel string) map[string]interface{} {

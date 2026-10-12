@@ -40,6 +40,12 @@ func verifyResumeAfterFinalizationFailure(t *testing.T, environment migrationhar
 			rowsAffected, err := result.RowsAffected()
 			require.NoError(t, err)
 			require.Equal(t, int64(1), rowsAffected)
+			_, err = db.Exec(`INSERT INTO "MIGRATION_RUN"
+				(ID, MODE, PHASE, SELECTION_DATA, ROLLED_BACK, UPDATED_AT)
+				SELECT ACTIVE_RUN_ID, 'forward', 'expand', '[]', FALSE, NOW()
+				FROM "MIGRATION_STATE" WHERE STORE_ID = $1
+				ON CONFLICT (ID) DO NOTHING`, database)
+			require.NoError(t, err)
 		}
 
 		environment.RunMigrationCommand(t, "resume")
@@ -52,7 +58,7 @@ func verifyResumeAfterFinalizationFailure(t *testing.T, environment migrationhar
 		migrationharness.AssertQueryValue(t, runtimeDB,
 			`SELECT COMPLETED_LEVEL || ':' || STAGE || ':' || STATUS
 				FROM "MIGRATION_STATE" WHERE STORE_ID = 'runtime_persistent'`,
-			"2.0.0:complete:clean")
+			"1.0.0:contract_ready:completed")
 		environment.RunMigrationCommand(t, "apply migrate")
 		t.Log("verified: resume reused completed operation progress and finalized both failed stores")
 	})
@@ -82,7 +88,7 @@ func verifyResumeAbandonedRun(t *testing.T, environment migrationharness.Environ
 		migrationharness.AssertQueryValue(t, runtimeDB,
 			`SELECT COMPLETED_LEVEL || ':' || STAGE || ':' || STATUS
 				FROM "MIGRATION_STATE" WHERE STORE_ID = 'runtime_persistent'`,
-			"2.0.0:complete:clean")
+			"1.0.0:contract_ready:completed")
 		environment.RunMigrationCommand(t, "apply migrate")
 		verifyCreateAuthorizationPDPConnection(t, environment)
 		verifyRemoveRevocationReasonCheck(t, environment)

@@ -38,10 +38,19 @@ CREATE TABLE IF NOT EXISTS "MIGRATION_DEPLOYMENT_STATE" (
     UNIQUE (DEPLOYMENT_ID, MIGRATION_STATE_ID)
 );
 
--- Deployment selection retained for interrupted migration runs.
-CREATE TABLE IF NOT EXISTS "MIGRATION_RUN_TARGET" (
-    RUN_ID                VARCHAR(36)  NOT NULL,
-    DEPLOYMENT_ID         VARCHAR(255) NOT NULL,
-    UPDATED_AT            TIMESTAMPTZ  NOT NULL,
-    PRIMARY KEY (DEPLOYMENT_ID, RUN_ID)
+-- Active migration run context, selection and failure identity.
+CREATE TABLE IF NOT EXISTS "MIGRATION_RUN" (
+    ID                       VARCHAR(36)   PRIMARY KEY,
+    MODE                     VARCHAR(20)   NOT NULL,
+    PHASE                    VARCHAR(20)   NOT NULL,
+    ROLLBACK_SCOPE           VARCHAR(20),
+    SELECTION_DATA           TEXT          NOT NULL,
+    FAILED_STORE_ID          VARCHAR(64),
+    FORWARD_OPERATION_ID     VARCHAR(255),
+    CURRENT_OPERATION_ID     VARCHAR(255),
+    EXECUTION_TARGET_ID      VARCHAR(255),
+    EXECUTION_DIRECTION      VARCHAR(20),
+    ROLLED_BACK              BOOLEAN       NOT NULL DEFAULT FALSE,
+    FAILURE_SUMMARY          VARCHAR(1024),
+    UPDATED_AT               TIMESTAMPTZ   NOT NULL
 );

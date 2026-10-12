@@ -70,7 +70,8 @@ func TestMigrationCoordinatorRequiresExecutionLockBeforeDatabaseInspection(t *te
 	}})
 	require.NoError(t, err)
 
-	applyResult, applyErr := coordinator.Apply(context.Background(), MigrationSelection{})
+	applyResult, applyErr := coordinator.ApplyPhase(
+		context.Background(), OperationPhaseExpand, MigrationSelection{})
 	resumeResult, resumeErr := coordinator.Resume(context.Background())
 
 	require.ErrorIs(t, applyErr, ErrMigrationExecutionLocked)
@@ -85,7 +86,7 @@ func TestMigrationCoordinatorRejectsInvalidMigrationSelection(t *testing.T) {
 	dbClient := providermock.NewDBClientInterfaceMock(t)
 	coordinator := newTestMigrationCoordinator(t, release, dbClient, &testTransactioner{})
 
-	result, err := coordinator.Apply(context.Background(), MigrationSelection{
+	result, err := coordinator.ApplyPhase(context.Background(), OperationPhaseExpand, MigrationSelection{
 		DeploymentIDs: []string{"deployment-a", "deployment-a"},
 	})
 
@@ -117,6 +118,36 @@ func TestMigrationCoordinatorTreatsCompletedPhaseAsAlreadyAtTarget(t *testing.T)
 	assert.True(t, result.AlreadyAtTarget)
 	assert.Empty(t, result.RunID)
 	assert.Empty(t, result.Operations)
+}
+
+func TestMigrationCoordinatorStoreCompletedPhaseAllowsUndeclaredStorePhase(t *testing.T) {
+	release := coordinatorTestRelease()
+	coordinator := &MigrationCoordinator{plan: release.Plan}
+	requirement := release.Manifest.Stores[1]
+
+	completed, err := coordinator.storeCompletedPhase(
+		requirement,
+		State{Status: StatusClean},
+		OperationPhaseMigrate,
+	)
+
+	require.NoError(t, err)
+	assert.True(t, completed)
+}
+
+func TestMigrationCoordinatorStoreCompletedPhaseRejectsUnsupportedPhase(t *testing.T) {
+	release := coordinatorTestRelease()
+	coordinator := &MigrationCoordinator{plan: release.Plan}
+
+	completed, err := coordinator.storeCompletedPhase(
+		release.Manifest.Stores[0],
+		State{Status: StatusClean},
+		OperationPhase("unsupported"),
+	)
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "unsupported operation phase")
+	assert.False(t, completed)
 }
 
 func TestMigrationCoordinatorSafeWorkflowRunsExpandAndMigrateUnderOneLock(t *testing.T) {
@@ -203,6 +234,63 @@ func TestMigrationCoordinatorAppliesContractThroughDedicatedPath(t *testing.T) {
 	assert.Equal(t, 1, locker.calls)
 }
 
+func TestMigrationCoordinatorFinalizesMetadataOnlyContract(t *testing.T) {
+	release := coordinatorTestRelease()
+	dbClient := providermock.NewDBClientInterfaceMock(t)
+	contractReadyAt := time.Date(2026, time.October, 3, 10, 0, 0, 0, time.UTC)
+	contractedAt := contractReadyAt.Add(time.Minute)
+	for _, requirement := range release.Manifest.Stores {
+		expectReadySchema(dbClient)
+		row := coordinatorStateRow(
+			requirement.ID, requirement.RequiredLevel, StatusClean, "", "", contractReadyAt)
+		if requirement.ID == StoreIDConfigDB {
+			row = phaseStateRow(MigrationStageContractReady, StatusCompleted,
+				release.Manifest.ReleaseVersion, "", contractReadyAt)
+		}
+		dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(requirement.ID)).
+			Return([]map[string]interface{}{row}, nil).Once()
+	}
+	dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(StoreIDConfigDB)).
+		Return([]map[string]interface{}{phaseStateRow(
+			MigrationStageContractReady, StatusCompleted,
+			release.Manifest.ReleaseVersion, "", contractReadyAt,
+		)}, nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryTransitionMigrationState,
+		"1.0.0", release.Manifest.ReleaseVersion, string(MigrationStageContracting), string(StatusInProgress),
+		testRunID, nil, contractedAt, testStateID, string(StoreIDConfigDB), 1, "1.0.0",
+		release.Manifest.ReleaseVersion, string(MigrationStageContractReady), string(StatusCompleted),
+		nil, nil, contractReadyAt).
+		Return(int64(1), nil).Once()
+	dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(StoreIDConfigDB)).
+		Return([]map[string]interface{}{phaseStateRow(
+			MigrationStageContracting, StatusInProgress,
+			release.Manifest.ReleaseVersion, testRunID, contractedAt,
+		)}, nil).Once()
+	dbClient.On("QueryContext", mock.Anything, queryListMigrationProgress, testStateID, testRunID).
+		Return([]map[string]interface{}{}, nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryFinalizeMigrationState,
+		release.Manifest.ReleaseVersion, string(MigrationStageComplete), string(StatusClean), contractedAt,
+		testStateID, string(StoreIDConfigDB), 1, "1.0.0", string(MigrationStageContracting),
+		string(StatusInProgress), testRunID).
+		Return(int64(1), nil).Once()
+
+	transactioner := &testTransactioner{}
+	coordinator := newTestMigrationCoordinator(t, release, dbClient, transactioner)
+	coordinator.newID = sequenceIDs(testRunID)
+	coordinator.namespaces[0].controller.now = func() time.Time { return contractedAt }
+
+	result, err := coordinator.ApplyContract(context.Background(), MigrationSelection{})
+
+	require.NoError(t, err)
+	assert.Equal(t, testRunID, result.RunID)
+	assert.Empty(t, result.Operations)
+	require.Len(t, result.Finalizations, 1)
+	assert.Equal(t, MigrationStageComplete, result.Finalizations[0].State.Stage)
+	assert.Equal(t, StatusClean, result.Finalizations[0].State.Status)
+	assert.Equal(t, release.Manifest.ReleaseVersion, result.Finalizations[0].State.CompletedLevel)
+	assert.Equal(t, 2, transactioner.calls)
+}
+
 func (o *coordinatorReadinessOperation) CheckReadiness(
 	context.Context,
 	ReadAccess,
@@ -245,17 +333,14 @@ func TestMigrationCoordinatorAppliesBasicMigration(t *testing.T) {
 		Return([]map[string]interface{}{completedProgressRow(
 			release.Plan.Expand[0].Definition().ID, 0, release.Manifest.ReleaseVersion, updatedAt,
 		)}, nil).Once()
-	dbClient.On("ExecuteContext", mock.Anything, queryFinalizeMigrationState,
-		release.Manifest.ReleaseVersion, string(MigrationStageComplete), string(StatusClean), mock.Anything,
-		testStateID, string(StoreIDConfigDB), 1, "1.0.0", string(MigrationStageExpanding),
-		string(StatusInProgress), testRunID).
-		Return(int64(1), nil).Once()
+	expectCoordinatorContractReadyTransition(
+		dbClient, StoreIDConfigDB, testStateID, release.Manifest.ReleaseVersion, testRunID, updatedAt)
 
 	transactioner := &testTransactioner{}
 	coordinator := newTestMigrationCoordinator(t, release, dbClient, transactioner)
 	coordinator.newID = sequenceIDs(testRunID)
 
-	result, err := coordinator.Apply(context.Background(), MigrationSelection{})
+	result, err := coordinator.ApplyPhase(context.Background(), OperationPhaseExpand, MigrationSelection{})
 
 	require.NoError(t, err)
 	assert.Equal(t, testRunID, result.RunID)
@@ -345,7 +430,7 @@ func TestMigrationCoordinatorReturnsWithoutRunWhenAlreadyAtTarget(t *testing.T) 
 		return "", nil
 	}
 
-	result, err := coordinator.Apply(context.Background(), MigrationSelection{})
+	result, err := coordinator.ApplyPhase(context.Background(), OperationPhaseExpand, MigrationSelection{})
 
 	require.NoError(t, err)
 	assert.True(t, result.AlreadyAtTarget)
@@ -371,7 +456,7 @@ func TestMigrationCoordinatorDoesNotReserveBlockedPreflight(t *testing.T) {
 	}
 	coordinator := newTestMigrationCoordinator(t, release, dbClient, &testTransactioner{})
 
-	result, err := coordinator.Apply(context.Background(), MigrationSelection{})
+	result, err := coordinator.ApplyPhase(context.Background(), OperationPhaseExpand, MigrationSelection{})
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrMigrationPreflightBlocked)
@@ -405,7 +490,7 @@ func TestMigrationCoordinatorCancelsReservationsWhenRevalidationBlocks(t *testin
 	coordinator := newTestMigrationCoordinator(t, release, dbClient, transactioner)
 	coordinator.newID = sequenceIDs(testRunID)
 
-	result, err := coordinator.Apply(context.Background(), MigrationSelection{})
+	result, err := coordinator.ApplyPhase(context.Background(), OperationPhaseExpand, MigrationSelection{})
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrMigrationPreflightBlocked)
@@ -438,17 +523,29 @@ func TestMigrationCoordinatorMarksStoreFailedAfterExecutionError(t *testing.T) {
 		string(baseOperation.Definition().ID), 0, "", string(StatusInProgress), nil, mock.Anything).
 		Return(int64(1), nil).Once()
 	expectReservedState(dbClient, StoreIDConfigDB, release.Manifest.ReleaseVersion, testRunID, updatedAt)
+	run := MigrationRun{
+		ID: testRunID, Mode: MigrationRunModeForward, Phase: OperationPhaseExpand,
+		Selection: MigrationSelection{}, UpdatedAt: updatedAt,
+	}
+	dbClient.On("QueryContext", mock.Anything, queryGetMigrationRun, testRunID).
+		Return([]map[string]interface{}{migrationRunRow(run)}, nil).Once()
 	dbClient.On("ExecuteContext", mock.Anything, queryFailMigrationState,
 		string(StatusFailed), mock.MatchedBy(func(summary string) bool {
 			return strings.Contains(summary, "operation failed")
 		}), mock.Anything, testStateID, string(StoreIDConfigDB), 1, "1.0.0",
 		release.Manifest.ReleaseVersion, string(MigrationStageExpanding), string(StatusInProgress), testRunID).
 		Return(int64(1), nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryUpdateMigrationRun,
+		string(MigrationRunModeForward), string(OperationPhaseExpand), nil, "[]", string(StoreIDConfigDB),
+		string(baseOperation.Definition().ID), string(baseOperation.Definition().ID), "",
+		string(ExecutionDirectionForward), false, mock.MatchedBy(func(summary string) bool {
+			return strings.Contains(summary, "operation failed")
+		}), mock.Anything, testRunID, updatedAt).Return(int64(1), nil).Once()
 	transactioner := &testTransactioner{}
 	coordinator := newTestMigrationCoordinator(t, release, dbClient, transactioner)
 	coordinator.newID = sequenceIDs(testRunID)
 
-	result, err := coordinator.Apply(context.Background(), MigrationSelection{})
+	result, err := coordinator.ApplyPhase(context.Background(), OperationPhaseExpand, MigrationSelection{})
 
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "operation failed")
@@ -456,6 +553,132 @@ func TestMigrationCoordinatorMarksStoreFailedAfterExecutionError(t *testing.T) {
 	assert.Empty(t, result.Operations)
 	assert.Empty(t, result.Finalizations)
 	assert.Equal(t, 3, transactioner.calls)
+}
+
+func TestMigrationCoordinatorDoesNotMarkFinalizedStoreFailedAfterLaterStoreFailure(t *testing.T) {
+	const entityStateID = "0199a123-4570-7abc-8def-0123456789ab"
+
+	manifest := changedStoreManifest(StoreIDConfigDB)
+	for index := range manifest.Stores {
+		if manifest.Stores[index].ID == StoreIDEntityDB {
+			manifest.Stores[index].Changed = true
+			manifest.Stores[index].RequiredLevel = manifest.ReleaseVersion
+		}
+	}
+	expandConfig := validPlanOperation(StoreIDConfigDB)
+	expandConfig.definition.ID = "1.1.0/configdb/expand"
+	expandEntity := validPlanOperation(StoreIDEntityDB)
+	expandEntity.definition.ID = "1.1.0/entitydb/expand"
+	migrateConfig := validPlanOperation(StoreIDConfigDB)
+	migrateConfig.definition.ID = "1.1.0/configdb/migrate"
+	migrateEntity := validPlanOperation(StoreIDEntityDB)
+	migrateEntity.definition.ID = "1.1.0/entitydb/migrate"
+	release := ReleaseDefinition{Manifest: manifest, Plan: MigrationPlan{
+		TargetVersion: manifest.ReleaseVersion,
+		Expand: []Operation{
+			expandConfig,
+			coordinatorFailingOperation{testOperation: expandEntity},
+		},
+		Migrate: []Operation{migrateConfig, migrateEntity},
+	}}
+
+	dbClient := providermock.NewDBClientInterfaceMock(t)
+	updatedAt := time.Now().UTC()
+	for _, requirement := range manifest.Stores {
+		expectReadySchema(dbClient)
+		completedLevel := requirement.RequiredLevel
+		if requirement.Changed {
+			completedLevel = requirement.AcceptedSourceLevel
+		}
+		row := coordinatorStateRow(requirement.ID, completedLevel, StatusClean, "", "", updatedAt)
+		if requirement.ID == StoreIDEntityDB {
+			row["id"] = entityStateID
+		}
+		dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(requirement.ID)).
+			Return([]map[string]interface{}{row}, nil).Once()
+	}
+
+	configSource := coordinatorStateRow(StoreIDConfigDB, "1.0.0", StatusClean, "", "", updatedAt)
+	dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(StoreIDConfigDB)).
+		Return([]map[string]interface{}{configSource}, nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryReserveMigrationState,
+		manifest.ReleaseVersion, string(MigrationStageExpanding), string(StatusInProgress), testRunID,
+		mock.Anything, testStateID, string(StoreIDConfigDB), 1, "1.0.0",
+		string(MigrationStageComplete), string(StatusClean)).
+		Return(int64(1), nil).Once()
+	entitySource := coordinatorStateRow(StoreIDEntityDB, "1.0.0", StatusClean, "", "", updatedAt)
+	entitySource["id"] = entityStateID
+	dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(StoreIDEntityDB)).
+		Return([]map[string]interface{}{entitySource}, nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryReserveMigrationState,
+		manifest.ReleaseVersion, string(MigrationStageExpanding), string(StatusInProgress), testRunID,
+		mock.Anything, entityStateID, string(StoreIDEntityDB), 1, "1.0.0",
+		string(MigrationStageComplete), string(StatusClean)).
+		Return(int64(1), nil).Once()
+
+	expectReservedState(dbClient, StoreIDConfigDB, manifest.ReleaseVersion, testRunID, updatedAt)
+	dbClient.On("ExecuteContext", mock.Anything, queryInsertMigrationProgress,
+		mock.Anything, testStateID, testRunID, manifest.ReleaseVersion,
+		string(expandConfig.Definition().ID), 0, "", string(StatusInProgress), nil, mock.Anything).
+		Return(int64(1), nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryUpdateMigrationProgress,
+		string(StatusCompleted), nil, mock.Anything, mock.Anything, testStateID, testRunID).
+		Return(int64(1), nil).Once()
+	expectReservedState(dbClient, StoreIDConfigDB, manifest.ReleaseVersion, testRunID, updatedAt)
+	dbClient.On("QueryContext", mock.Anything, queryListMigrationProgress, testStateID, testRunID).
+		Return([]map[string]interface{}{completedProgressRow(
+			expandConfig.Definition().ID, 0, manifest.ReleaseVersion, updatedAt,
+		)}, nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryTransitionMigrationState,
+		"1.0.0", manifest.ReleaseVersion, string(MigrationStageExpanded), string(StatusCompleted),
+		nil, nil, mock.Anything, testStateID, string(StoreIDConfigDB), 1, "1.0.0",
+		manifest.ReleaseVersion, string(MigrationStageExpanding), string(StatusInProgress),
+		testRunID, nil, updatedAt).
+		Return(int64(1), nil).Once()
+
+	entityActive := coordinatorStateRow(
+		StoreIDEntityDB, "1.0.0", StatusInProgress, manifest.ReleaseVersion, testRunID, updatedAt)
+	entityActive["id"] = entityStateID
+	dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(StoreIDEntityDB)).
+		Return([]map[string]interface{}{entityActive}, nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryInsertMigrationProgress,
+		mock.Anything, entityStateID, testRunID, manifest.ReleaseVersion,
+		string(expandEntity.Definition().ID), 1, "", string(StatusInProgress), nil, mock.Anything).
+		Return(int64(1), nil).Once()
+
+	run := MigrationRun{
+		ID: testRunID, Mode: MigrationRunModeForward, Phase: OperationPhaseExpand,
+		Selection: MigrationSelection{}, UpdatedAt: updatedAt,
+	}
+	dbClient.On("QueryContext", mock.Anything, queryGetMigrationRun, testRunID).
+		Return([]map[string]interface{}{migrationRunRow(run)}, nil).Once()
+	dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(StoreIDEntityDB)).
+		Return([]map[string]interface{}{entityActive}, nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryFailMigrationState,
+		string(StatusFailed), mock.MatchedBy(func(summary string) bool {
+			return strings.Contains(summary, "operation failed")
+		}), mock.Anything, entityStateID, string(StoreIDEntityDB), 1, "1.0.0",
+		manifest.ReleaseVersion, string(MigrationStageExpanding), string(StatusInProgress), testRunID).
+		Return(int64(1), nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryUpdateMigrationRun,
+		string(MigrationRunModeForward), string(OperationPhaseExpand), nil, "[]", string(StoreIDEntityDB),
+		string(expandEntity.Definition().ID), string(expandEntity.Definition().ID), "",
+		string(ExecutionDirectionForward), false, mock.MatchedBy(func(summary string) bool {
+			return strings.Contains(summary, "operation failed")
+		}), mock.Anything, testRunID, updatedAt).Return(int64(1), nil).Once()
+
+	transactioner := &testTransactioner{}
+	coordinator := newTestMigrationCoordinator(t, release, dbClient, transactioner)
+	coordinator.newID = sequenceIDs(testRunID)
+
+	result, err := coordinator.ApplyPhase(context.Background(), OperationPhaseExpand, MigrationSelection{})
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "operation failed")
+	assert.NotContains(t, err.Error(), "reserved by a different run")
+	require.Len(t, result.Finalizations, 1)
+	assert.Equal(t, StoreIDConfigDB, result.Finalizations[0].State.StoreID)
+	assert.Equal(t, 5, transactioner.calls)
 }
 
 func TestMigrationCoordinatorResumesFailedRunWithoutRepeatingCompletedOperation(t *testing.T) {
@@ -474,6 +697,7 @@ func TestMigrationCoordinatorResumesFailedRunWithoutRepeatingCompletedOperation(
 		dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(requirement.ID)).
 			Return([]map[string]interface{}{row}, nil).Once()
 	}
+	expectForwardMigrationRun(dbClient)
 	dbClient.On("QueryContext", mock.Anything, queryListMigrationProgress, testStateID, testRunID).
 		Return([]map[string]interface{}{completedProgressRow(
 			release.Plan.Expand[0].Definition().ID, 0, release.Manifest.ReleaseVersion, updatedAt,
@@ -490,11 +714,8 @@ func TestMigrationCoordinatorResumesFailedRunWithoutRepeatingCompletedOperation(
 		Return([]map[string]interface{}{completedProgressRow(
 			release.Plan.Expand[0].Definition().ID, 0, release.Manifest.ReleaseVersion, updatedAt,
 		)}, nil).Once()
-	dbClient.On("ExecuteContext", mock.Anything, queryFinalizeMigrationState,
-		release.Manifest.ReleaseVersion, string(MigrationStageComplete), string(StatusClean), mock.Anything,
-		testStateID, string(StoreIDConfigDB), 1, "1.0.0", string(MigrationStageExpanding),
-		string(StatusInProgress), testRunID).
-		Return(int64(1), nil).Once()
+	expectCoordinatorContractReadyTransition(
+		dbClient, StoreIDConfigDB, testStateID, release.Manifest.ReleaseVersion, testRunID, updatedAt)
 
 	transactioner := &testTransactioner{}
 	coordinator := newTestMigrationCoordinator(t, release, dbClient, transactioner)
@@ -528,6 +749,7 @@ func TestMigrationCoordinatorResumesPendingOperation(t *testing.T) {
 		dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(requirement.ID)).
 			Return([]map[string]interface{}{row}, nil).Once()
 	}
+	expectForwardMigrationRun(dbClient)
 	dbClient.On("QueryContext", mock.Anything, queryListMigrationProgress, testStateID, testRunID).
 		Return([]map[string]interface{}{}, nil).Once()
 	dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(StoreIDConfigDB)).
@@ -550,11 +772,8 @@ func TestMigrationCoordinatorResumesPendingOperation(t *testing.T) {
 		Return([]map[string]interface{}{completedProgressRow(
 			release.Plan.Expand[0].Definition().ID, 0, release.Manifest.ReleaseVersion, updatedAt,
 		)}, nil).Once()
-	dbClient.On("ExecuteContext", mock.Anything, queryFinalizeMigrationState,
-		release.Manifest.ReleaseVersion, string(MigrationStageComplete), string(StatusClean), mock.Anything,
-		testStateID, string(StoreIDConfigDB), 1, "1.0.0", string(MigrationStageExpanding),
-		string(StatusInProgress), testRunID).
-		Return(int64(1), nil).Once()
+	expectCoordinatorContractReadyTransition(
+		dbClient, StoreIDConfigDB, testStateID, release.Manifest.ReleaseVersion, testRunID, updatedAt)
 
 	transactioner := &testTransactioner{}
 	coordinator := newTestMigrationCoordinator(t, release, dbClient, transactioner)
@@ -600,11 +819,8 @@ func TestMigrationCoordinatorResumesAbandonedInProgressRun(t *testing.T) {
 		Return([]map[string]interface{}{completedProgressRow(
 			release.Plan.Expand[0].Definition().ID, 0, release.Manifest.ReleaseVersion, updatedAt,
 		)}, nil).Once()
-	dbClient.On("ExecuteContext", mock.Anything, queryFinalizeMigrationState,
-		release.Manifest.ReleaseVersion, string(MigrationStageComplete), string(StatusClean), mock.Anything,
-		testStateID, string(StoreIDConfigDB), 1, "1.0.0", string(MigrationStageExpanding),
-		string(StatusInProgress), testRunID).
-		Return(int64(1), nil).Once()
+	expectCoordinatorContractReadyTransition(
+		dbClient, StoreIDConfigDB, testStateID, release.Manifest.ReleaseVersion, testRunID, updatedAt)
 
 	transactioner := &testTransactioner{}
 	coordinator := newTestMigrationCoordinator(t, release, dbClient, transactioner)
@@ -646,6 +862,7 @@ func TestMigrationCoordinatorRecognizesResumableOperationCheckpoint(t *testing.T
 	progressRow := completedProgressRow(operation.Definition().ID, 0, manifest.ReleaseVersion, updatedAt)
 	progressRow["status"] = string(StatusInProgress)
 	progressRow["checkpoint_data"] = `{"lastID":"500"}`
+	expectForwardMigrationRun(dbClient)
 	dbClient.On("QueryContext", mock.Anything, queryListMigrationProgress, testStateID, testRunID).
 		Return([]map[string]interface{}{progressRow}, nil).Once()
 	coordinator := newTestMigrationCoordinator(t, release, dbClient, &testTransactioner{})
@@ -691,6 +908,7 @@ func TestMigrationCoordinatorResumesOperationFromCheckpoint(t *testing.T) {
 	inProgress := completedProgressRow(operation.Definition().ID, 0, manifest.ReleaseVersion, updatedAt)
 	inProgress["status"] = string(StatusInProgress)
 	inProgress["checkpoint_data"] = `{"lastID":"500"}`
+	expectForwardMigrationRun(dbClient)
 	dbClient.On("QueryContext", mock.Anything, queryListMigrationProgress, testStateID, testRunID).
 		Return([]map[string]interface{}{inProgress}, nil).Once()
 	dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(StoreIDConfigDB)).
@@ -708,10 +926,8 @@ func TestMigrationCoordinatorResumesOperationFromCheckpoint(t *testing.T) {
 	completed["checkpoint_data"] = `{"lastID":"750"}`
 	dbClient.On("QueryContext", mock.Anything, queryListMigrationProgress, testStateID, testRunID).
 		Return([]map[string]interface{}{completed}, nil).Once()
-	dbClient.On("ExecuteContext", mock.Anything, queryFinalizeMigrationState,
-		manifest.ReleaseVersion, string(MigrationStageComplete), string(StatusClean), mock.Anything,
-		testStateID, string(StoreIDConfigDB), 1, "1.0.0", string(MigrationStageExpanding),
-		string(StatusInProgress), testRunID).Return(int64(1), nil).Once()
+	expectCoordinatorContractReadyTransition(
+		dbClient, StoreIDConfigDB, testStateID, manifest.ReleaseVersion, testRunID, updatedAt)
 	transactioner := &testTransactioner{}
 	coordinator := newTestMigrationCoordinator(t, release, dbClient, transactioner)
 	coordinator.namespaces[0].resumableExecutor.now = func() time.Time { return updatedAt }
@@ -727,6 +943,67 @@ func TestMigrationCoordinatorResumesOperationFromCheckpoint(t *testing.T) {
 	require.Len(t, result.Finalizations, 1)
 	assert.True(t, result.Finalizations[0].Finalized)
 	assert.Equal(t, 3, transactioner.calls)
+}
+
+func TestMigrationCoordinatorResumesMetadataOnlyContract(t *testing.T) {
+	release := coordinatorTestRelease()
+	dbClient := providermock.NewDBClientInterfaceMock(t)
+	failedAt := time.Date(2026, time.October, 6, 14, 30, 0, 0, time.UTC)
+	resumedAt := failedAt.Add(time.Minute)
+	failedRow := phaseStateRow(
+		MigrationStageContracting, StatusFailed, release.Manifest.ReleaseVersion, testRunID, failedAt)
+	failedRow["failure_summary"] = "contract finalization failed"
+	for _, requirement := range release.Manifest.Stores {
+		row := coordinatorStateRow(
+			requirement.ID, requirement.RequiredLevel, StatusClean, "", "", failedAt)
+		if requirement.ID == StoreIDConfigDB {
+			row = failedRow
+		}
+		dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(requirement.ID)).
+			Return([]map[string]interface{}{row}, nil).Once()
+	}
+	run := MigrationRun{
+		ID: testRunID, Mode: MigrationRunModeForward, Phase: OperationPhaseContract,
+		Selection: MigrationSelection{}, UpdatedAt: failedAt,
+	}
+	dbClient.On("QueryContext", mock.Anything, queryGetMigrationRun, testRunID).
+		Return([]map[string]interface{}{migrationRunRow(run)}, nil).Times(2)
+	dbClient.On("QueryContext", mock.Anything, queryListMigrationProgress, testStateID, testRunID).
+		Return([]map[string]interface{}{}, nil).Once()
+	dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(StoreIDConfigDB)).
+		Return([]map[string]interface{}{failedRow}, nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryResumeMigrationState,
+		string(StatusInProgress), resumedAt, testStateID, string(StoreIDConfigDB), 1,
+		"1.0.0", release.Manifest.ReleaseVersion, string(MigrationStageContracting),
+		string(StatusFailed), testRunID, "contract finalization failed", failedAt).
+		Return(int64(1), nil).Once()
+	dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(StoreIDConfigDB)).
+		Return([]map[string]interface{}{phaseStateRow(
+			MigrationStageContracting, StatusInProgress,
+			release.Manifest.ReleaseVersion, testRunID, resumedAt,
+		)}, nil).Once()
+	dbClient.On("QueryContext", mock.Anything, queryListMigrationProgress, testStateID, testRunID).
+		Return([]map[string]interface{}{}, nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryFinalizeMigrationState,
+		release.Manifest.ReleaseVersion, string(MigrationStageComplete), string(StatusClean), resumedAt,
+		testStateID, string(StoreIDConfigDB), 1, "1.0.0", string(MigrationStageContracting),
+		string(StatusInProgress), testRunID).
+		Return(int64(1), nil).Once()
+
+	transactioner := &testTransactioner{}
+	coordinator := newTestMigrationCoordinator(t, release, dbClient, transactioner)
+	coordinator.namespaces[0].controller.now = func() time.Time { return resumedAt }
+
+	result, err := coordinator.Resume(context.Background())
+
+	require.NoError(t, err)
+	assert.True(t, result.Resumed)
+	assert.Equal(t, OperationPhaseContract, result.Phase)
+	assert.Empty(t, result.Operations)
+	require.Len(t, result.Finalizations, 1)
+	assert.Equal(t, MigrationStageComplete, result.Finalizations[0].State.Stage)
+	assert.Equal(t, StatusClean, result.Finalizations[0].State.Status)
+	assert.Equal(t, 2, transactioner.calls)
 }
 
 func TestMigrationCoordinatorResumeAcceptsStoreThatCompletedTheActivePhase(t *testing.T) {
@@ -773,8 +1050,12 @@ func TestMigrationCoordinatorResumeAcceptsStoreThatCompletedTheActivePhase(t *te
 		dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(requirement.ID)).
 			Return([]map[string]interface{}{row}, nil).Once()
 	}
-	dbClient.On("QueryContext", mock.Anything, queryListMigrationRunTargets, testRunID).
-		Return([]map[string]interface{}{}, nil).Once()
+	run := MigrationRun{
+		ID: testRunID, Mode: MigrationRunModeForward, Phase: OperationPhaseMigrate,
+		Selection: MigrationSelection{}, UpdatedAt: updatedAt,
+	}
+	dbClient.On("QueryContext", mock.Anything, queryGetMigrationRun, testRunID).
+		Return([]map[string]interface{}{migrationRunRow(run)}, nil)
 	dbClient.On("QueryContext", mock.Anything, queryListMigrationProgress, testStateID, testRunID).
 		Return([]map[string]interface{}{}, nil).Once()
 	coordinator := newTestMigrationCoordinator(t, release, dbClient, &testTransactioner{})
@@ -788,6 +1069,36 @@ func TestMigrationCoordinatorResumeAcceptsStoreThatCompletedTheActivePhase(t *te
 	configAssessment := resume.storeAssessments[0]
 	assert.Equal(t, StoreIDConfigDB, configAssessment.StoreID)
 	assert.Equal(t, StoreAssessmentAtTarget, configAssessment.State)
+}
+
+func TestMigrationCoordinatorRejectsForwardResumeDuringRollback(t *testing.T) {
+	release := coordinatorTestRelease()
+	dbClient := providermock.NewDBClientInterfaceMock(t)
+	updatedAt := time.Now().UTC()
+	failure := MigrationFailure{
+		RunID: testRunID, StoreID: StoreIDConfigDB,
+		ForwardOperationID: release.Plan.Expand[0].Definition().ID,
+		CurrentOperationID: "1.1.0/configdb/rollback-expand",
+		ExecutionDirection: ExecutionDirectionRollback,
+		FailureSummary:     "rollback interrupted", UpdatedAt: updatedAt,
+	}
+	run := MigrationRun{
+		ID: testRunID, Mode: MigrationRunModeRollback, Phase: OperationPhaseExpand,
+		RollbackScope: RollbackScopeFailedOperation, Selection: MigrationSelection{},
+		Failure: &failure, UpdatedAt: updatedAt,
+	}
+	dbClient.On("QueryContext", mock.Anything, queryGetMigrationRun, testRunID).
+		Return([]map[string]interface{}{migrationRunRow(run)}, nil).Once()
+	coordinator := newTestMigrationCoordinator(t, release, dbClient, &testTransactioner{})
+
+	err := coordinator.rejectForwardResumeDuringRollback(context.Background(), migrationResumeContext{
+		runID: testRunID,
+		failedByNamespace: map[int][]State{
+			0: {{StoreID: StoreIDConfigDB}},
+		},
+	})
+
+	require.ErrorIs(t, err, ErrMigrationRollbackInterrupted)
 }
 
 func TestMigrationCoordinatorRefusesResumeWithoutResumableRun(t *testing.T) {
@@ -808,6 +1119,15 @@ func TestMigrationCoordinatorRefusesResumeWithoutResumableRun(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNoMigrationToResume)
 	assert.True(t, result.Resumed)
 	assert.Empty(t, result.RunID)
+}
+
+func expectForwardMigrationRun(dbClient *providermock.DBClientInterfaceMock) {
+	run := MigrationRun{
+		ID: testRunID, Mode: MigrationRunModeForward, Phase: OperationPhaseExpand,
+		Selection: MigrationSelection{}, UpdatedAt: time.Date(2026, time.October, 2, 8, 0, 0, 0, time.UTC),
+	}
+	dbClient.On("QueryContext", mock.Anything, queryGetMigrationRun, testRunID).
+		Return([]map[string]interface{}{migrationRunRow(run)}, nil)
 }
 
 func TestNewMigrationCoordinatorValidatesNamespaceCoverageAndOperationExecutors(t *testing.T) {
@@ -878,6 +1198,16 @@ func newTestMigrationCoordinator(
 	transactioner *testTransactioner,
 ) *MigrationCoordinator {
 	t.Helper()
+	dbClient.On("ExecuteContext", mock.Anything, queryInsertMigrationRun,
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+		mock.Anything, mock.Anything, mock.Anything).Return(int64(1), nil).Maybe()
+	dbClient.On("ExecuteContext", mock.Anything, queryUpdateMigrationRun,
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(int64(1), nil).Maybe()
+	dbClient.On("ExecuteContext", mock.Anything, queryDeleteInactiveMigrationRun, mock.Anything).
+		Return(int64(1), nil).Maybe()
 	coordinator, err := NewMigrationCoordinator(release, []MigrationNamespace{{
 		StoreIDs: append([]StoreID(nil), supportedStoreIDs...), DatabaseType: DatabaseTypePostgres,
 		Client: dbClient, Transactioner: transactioner, Locker: testMigrationExecutionLocker{},
@@ -949,6 +1279,21 @@ func expectCoordinatorActiveState(
 		Return([]map[string]interface{}{row}, nil).Once()
 }
 
+func expectCoordinatorContractReadyTransition(
+	dbClient *providermock.DBClientInterfaceMock,
+	storeID StoreID,
+	stateID string,
+	targetLevel string,
+	runID string,
+	updatedAt time.Time,
+) {
+	dbClient.On("ExecuteContext", mock.Anything, queryTransitionMigrationState,
+		"1.0.0", targetLevel, string(MigrationStageContractReady), string(StatusCompleted),
+		nil, nil, mock.Anything, stateID, string(storeID), 1, "1.0.0", targetLevel,
+		string(MigrationStageExpanding), string(StatusInProgress), runID, nil, updatedAt).
+		Return(int64(1), nil).Once()
+}
+
 func TestMigrationCoordinatorReportsRunIDGenerationFailure(t *testing.T) {
 	release := coordinatorTestRelease()
 	dbClient := providermock.NewDBClientInterfaceMock(t)
@@ -956,7 +1301,7 @@ func TestMigrationCoordinatorReportsRunIDGenerationFailure(t *testing.T) {
 	coordinator := newTestMigrationCoordinator(t, release, dbClient, &testTransactioner{})
 	coordinator.newID = func() (string, error) { return "", errors.New("random source failed") }
 
-	result, err := coordinator.Apply(context.Background(), MigrationSelection{})
+	result, err := coordinator.ApplyPhase(context.Background(), OperationPhaseExpand, MigrationSelection{})
 
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "random source failed")

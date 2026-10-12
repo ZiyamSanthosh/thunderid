@@ -165,6 +165,48 @@ EOF
 echo "Initializing migration metadata at source level $source_version..."
 "$thunderid_binary" -serverHome "$distribution_home" migration initialize
 
+echo "Verifying the four-table migration metadata schema..."
+for database in configdb entitydb runtime_transient runtime_persistent; do
+	docker compose --project-directory "$migration_dir" exec -T postgres \
+		psql --set ON_ERROR_STOP=1 --username migration_user --dbname "$database" <<'SQL'
+DO $$
+DECLARE
+    metadata_table_count INTEGER;
+    legacy_table_count INTEGER;
+    state_count INTEGER;
+BEGIN
+    SELECT COUNT(*) INTO metadata_table_count
+    FROM INFORMATION_SCHEMA.TABLES
+    WHERE TABLE_SCHEMA = CURRENT_SCHEMA()
+      AND TABLE_NAME IN (
+          'MIGRATION_STATE',
+          'MIGRATION_PROGRESS',
+          'MIGRATION_DEPLOYMENT_STATE',
+          'MIGRATION_RUN'
+      );
+
+    SELECT COUNT(*) INTO legacy_table_count
+    FROM INFORMATION_SCHEMA.TABLES
+    WHERE TABLE_SCHEMA = CURRENT_SCHEMA()
+      AND TABLE_NAME IN ('MIGRATION_RUN_TARGET', 'MIGRATION_FAILURE');
+
+    SELECT COUNT(*) INTO state_count FROM "MIGRATION_STATE";
+
+    IF metadata_table_count <> 4 THEN
+        RAISE EXCEPTION 'expected four migration metadata tables, found %', metadata_table_count;
+    END IF;
+    IF legacy_table_count <> 0 THEN
+        RAISE EXCEPTION 'found % legacy migration metadata tables', legacy_table_count;
+    END IF;
+    IF state_count <> 1 THEN
+        RAISE EXCEPTION 'expected one initialized migration state, found %', state_count;
+    END IF;
+END
+$$;
+SQL
+done
+echo "Verified migration metadata in configdb, entitydb, runtime_transient, and runtime_persistent."
+
 echo "Populating representative ThunderID $source_version data..."
 docker compose --project-directory "$migration_dir" exec -T postgres \
 	psql --set ON_ERROR_STOP=1 --username migration_user --dbname configdb <<'SQL'
@@ -222,6 +264,7 @@ echo
 echo "Run migration commands with:"
 echo "  cd $distribution_home"
 echo "  ./thunderid migration status"
+echo "    (Expected to report incompatibility and exit non-zero before migration.)"
 echo "  ./thunderid migration check expand"
 echo "  ./thunderid migration apply expand"
 echo "  ./thunderid migration check migrate"

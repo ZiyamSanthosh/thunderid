@@ -219,18 +219,6 @@ func newReadinessEvaluator(
 	return &readinessEvaluator{plan: registry.Plan(), stores: storeCopy}, nil
 }
 
-func (c *readinessEvaluator) check(ctx context.Context) operationReadinessReport {
-	return c.checkStores(ctx, nil, nil)
-}
-
-func (c *readinessEvaluator) checkStores(
-	ctx context.Context,
-	includedStores map[StoreID]struct{},
-	blockedStores map[StoreID]struct{},
-) operationReadinessReport {
-	return c.checkPendingStores(ctx, includedStores, blockedStores, nil)
-}
-
 func (c *readinessEvaluator) checkPhaseStores(
 	ctx context.Context,
 	phase OperationPhase,
@@ -238,15 +226,6 @@ func (c *readinessEvaluator) checkPhaseStores(
 	blockedStores map[StoreID]struct{},
 ) operationReadinessReport {
 	return c.checkPendingPhaseStores(ctx, phase, includedStores, blockedStores, nil)
-}
-
-func (c *readinessEvaluator) checkPendingStores(
-	ctx context.Context,
-	includedStores map[StoreID]struct{},
-	blockedStores map[StoreID]struct{},
-	completedOperations map[OperationID]struct{},
-) operationReadinessReport {
-	return c.checkPendingStoresForPhase(ctx, nil, false, includedStores, blockedStores, completedOperations)
 }
 
 func (c *readinessEvaluator) checkPendingPhaseStores(
@@ -546,18 +525,6 @@ func NewPreflightChecker(
 		manifest: release.Manifest, plan: readinessEvaluator.plan,
 		compatibilityGate: compatibilityGate, readinessEvaluator: readinessEvaluator,
 	}, nil
-}
-
-// Check evaluates store applicability and then checks operations for stores requiring migration.
-func (c *PreflightChecker) Check(
-	ctx context.Context,
-	metadataStores map[StoreID]*MetadataStore,
-) PreflightReport {
-	stores, migrationStores, blockedStores := c.assessStores(ctx, metadataStores)
-	report := PreflightReport{TargetVersion: c.manifest.ReleaseVersion, Stores: stores}
-	operationReport := c.readinessEvaluator.checkStores(ctx, migrationStores, blockedStores)
-	report.Operations = operationReport.Operations
-	return report
 }
 
 // CheckSafeWorkflow evaluates expand and migrate together without including contract operations.

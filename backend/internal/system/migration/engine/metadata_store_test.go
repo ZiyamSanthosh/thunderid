@@ -5,6 +5,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -139,26 +140,78 @@ func TestMetadataStoreDeploymentState(t *testing.T) {
 	assert.Equal(t, state, *stored)
 }
 
-func TestMetadataStoreMigrationRunTargets(t *testing.T) {
+func TestMetadataStoreMigrationRun(t *testing.T) {
 	ctx := context.Background()
 	updatedAt := time.Now().UTC()
-	dbClient := providermock.NewDBClientInterfaceMock(t)
-	for _, deploymentID := range []string{"deployment-a", "deployment-b"} {
-		dbClient.On("ExecuteContext", mock.Anything, queryInsertMigrationRunTarget,
-			testRunID, deploymentID, updatedAt).Return(int64(1), nil).Once()
+	failure := MigrationFailure{
+		RunID: testRunID, StoreID: StoreIDConfigDB,
+		ForwardOperationID: "2.0.0/configdb/backfill", CurrentOperationID: "2.0.0/configdb/backfill",
+		ExecutionTargetID: "deployment-a", ExecutionDirection: ExecutionDirectionForward,
+		FailureSummary: "batch failed", UpdatedAt: updatedAt,
 	}
-	dbClient.On("QueryContext", mock.Anything, queryListMigrationRunTargets, testRunID).
-		Return([]map[string]interface{}{
-			{"deployment_id": "deployment-a"}, {"deployment_id": []byte("deployment-b")},
-		}, nil).Once()
+	run := MigrationRun{
+		ID: testRunID, Mode: MigrationRunModeForward, Phase: OperationPhaseMigrate,
+		Selection: MigrationSelection{DeploymentIDs: []string{"deployment-a", "deployment-b"}},
+		Failure:   &failure, UpdatedAt: updatedAt,
+	}
+	dbClient := providermock.NewDBClientInterfaceMock(t)
+	dbClient.On("ExecuteContext", mock.Anything, queryInsertMigrationRun,
+		run.ID, string(run.Mode), string(run.Phase), nil, `["deployment-a","deployment-b"]`,
+		string(failure.StoreID), string(failure.ForwardOperationID), string(failure.CurrentOperationID),
+		failure.ExecutionTargetID, string(failure.ExecutionDirection), false, failure.FailureSummary, updatedAt).
+		Return(int64(1), nil).Once()
+	dbClient.On("QueryContext", mock.Anything, queryGetMigrationRun, testRunID).
+		Return([]map[string]interface{}{migrationRunRow(run)}, nil).Once()
+	nextRun := run
+	nextRun.Mode = MigrationRunModeRollback
+	nextRun.RollbackScope = RollbackScopePhase
+	nextRun.UpdatedAt = updatedAt.Add(time.Minute)
+	dbClient.On("ExecuteContext", mock.Anything, queryUpdateMigrationRun,
+		string(nextRun.Mode), string(nextRun.Phase), string(nextRun.RollbackScope), `["deployment-a","deployment-b"]`,
+		string(failure.StoreID), string(failure.ForwardOperationID), string(failure.CurrentOperationID),
+		failure.ExecutionTargetID, string(failure.ExecutionDirection), false, failure.FailureSummary,
+		nextRun.UpdatedAt, nextRun.ID, run.UpdatedAt).Return(int64(1), nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryDeleteInactiveMigrationRun, testRunID).
+		Return(int64(1), nil).Once()
 	store := newTestMetadataStore(t, dbClient)
 
-	require.NoError(t, store.RecordRunTargets(
-		ctx, testRunID, []string{"deployment-a", "deployment-b"}, updatedAt))
-	targets, err := store.ListRunTargets(ctx, testRunID)
+	require.NoError(t, store.InsertRun(ctx, run))
+	stored, err := store.GetRun(ctx, testRunID)
 
 	require.NoError(t, err)
-	assert.Equal(t, []string{"deployment-a", "deployment-b"}, targets)
+	require.NotNil(t, stored)
+	assert.Equal(t, run, *stored)
+	require.NoError(t, store.UpdateRun(ctx, run, nextRun))
+	require.NoError(t, store.DeleteRunIfInactive(ctx, testRunID))
+}
+
+func migrationRunRow(run MigrationRun) map[string]interface{} {
+	row := map[string]interface{}{
+		"id": run.ID, "mode": string(run.Mode), "phase": string(run.Phase),
+		"rollback_scope":  nullableString(string(run.RollbackScope)),
+		"selection_data":  string(mustJSON(run.Selection.DeploymentIDs)),
+		"failed_store_id": nil, "forward_operation_id": nil, "current_operation_id": nil,
+		"execution_target_id": nil, "execution_direction": nil, "rolled_back": false,
+		"failure_summary": nil, "updated_at": run.UpdatedAt,
+	}
+	if run.Failure != nil {
+		row["failed_store_id"] = string(run.Failure.StoreID)
+		row["forward_operation_id"] = string(run.Failure.ForwardOperationID)
+		row["current_operation_id"] = string(run.Failure.CurrentOperationID)
+		row["execution_target_id"] = run.Failure.ExecutionTargetID
+		row["execution_direction"] = string(run.Failure.ExecutionDirection)
+		row["rolled_back"] = run.Failure.RolledBack
+		row["failure_summary"] = run.Failure.FailureSummary
+	}
+	return row
+}
+
+func mustJSON(value interface{}) []byte {
+	data, err := json.Marshal(value)
+	if err != nil {
+		panic(err)
+	}
+	return data
 }
 
 func newTestMetadataStore(
@@ -166,6 +219,16 @@ func newTestMetadataStore(
 	dbClient *providermock.DBClientInterfaceMock,
 ) *MetadataStore {
 	t.Helper()
+	dbClient.On("ExecuteContext", mock.Anything, queryInsertMigrationRun,
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+		mock.Anything, mock.Anything, mock.Anything).Return(int64(1), nil).Maybe()
+	dbClient.On("ExecuteContext", mock.Anything, queryDeleteInactiveMigrationRun, mock.Anything).
+		Return(int64(1), nil).Maybe()
+	dbClient.On("ExecuteContext", mock.Anything, queryUpdateMigrationRun,
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(int64(1), nil).Maybe()
 	metadataStore, err := NewMetadataStore(dbClient, DatabaseTypePostgres)
 	require.NoError(t, err)
 	return metadataStore
@@ -209,35 +272,6 @@ func TestMetadataStoreWritesState(t *testing.T) {
 		assert.Contains(t, err.Error(), "expected one affected row")
 	})
 
-	t.Run("updates mutable state", func(t *testing.T) {
-		dbClient := providermock.NewDBClientInterfaceMock(t)
-		state := validState()
-		state.Status = StatusInProgress
-		state.TargetLevel = "1.1.0"
-		state.Stage = MigrationStageExpanding
-		state.ActiveRunID = testRunID
-		dbClient.On("ExecuteContext", mock.Anything, queryUpdateMigrationState,
-			state.MetadataVersion, state.CompletedLevel, state.TargetLevel, string(state.Stage), string(state.Status),
-			state.ActiveRunID, nil, state.UpdatedAt, state.ID, string(state.StoreID)).Return(int64(1), nil).Once()
-
-		err := newTestMetadataStore(t, dbClient).UpdateState(ctx, state)
-
-		require.NoError(t, err)
-	})
-
-	t.Run("wraps update failure", func(t *testing.T) {
-		dbClient := providermock.NewDBClientInterfaceMock(t)
-		state := validState()
-		dbClient.On("ExecuteContext", mock.Anything, queryUpdateMigrationState,
-			mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
-			mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-			Return(int64(0), errors.New("write failed")).Once()
-
-		err := newTestMetadataStore(t, dbClient).UpdateState(ctx, state)
-
-		require.Error(t, err)
-		assert.ErrorContains(t, err, "write failed")
-	})
 }
 
 func TestMetadataStoreListProgress(t *testing.T) {
@@ -389,6 +423,17 @@ func TestMetadataStoreWritesProgress(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "expected one affected row")
 	})
+}
+
+func TestMetadataStoreDeletesProgressForRolledBackRun(t *testing.T) {
+	dbClient := providermock.NewDBClientInterfaceMock(t)
+	dbClient.On("ExecuteContext", mock.Anything, queryDeleteMigrationProgressForRun,
+		testStateID, testRunID).Return(int64(2), nil).Once()
+
+	err := newTestMetadataStore(t, dbClient).DeleteProgressForRun(
+		context.Background(), testStateID, testRunID)
+
+	require.NoError(t, err)
 }
 
 func validStateRow(updatedAt time.Time) map[string]interface{} {

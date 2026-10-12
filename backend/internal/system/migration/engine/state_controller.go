@@ -13,6 +13,8 @@ import (
 	"github.com/thunder-id/thunderid/pkg/thunderidengine/providers"
 )
 
+const failedOperationRollbackSummary = "failed operation rollback completed; repair the cause and resume the migration"
+
 // ErrReservationConflict means that migration state changed before ownership could be reserved.
 var ErrReservationConflict = errors.New("migration store reservation conflict")
 
@@ -75,15 +77,6 @@ func NewMigrationStateController(
 	}, nil
 }
 
-// Reserve assigns the requested changed stores to one run within a namespace transaction.
-func (r *MigrationStateController) Reserve(
-	ctx context.Context,
-	storeIDs []StoreID,
-	runID string,
-) ([]ReservationResult, error) {
-	return r.ReservePhase(ctx, storeIDs, OperationPhaseExpand, runID)
-}
-
 // ReservePhase assigns the requested stores to one phase run within a namespace transaction.
 func (r *MigrationStateController) ReservePhase(
 	ctx context.Context,
@@ -91,8 +84,22 @@ func (r *MigrationStateController) ReservePhase(
 	phase OperationPhase,
 	runID string,
 ) ([]ReservationResult, error) {
+	return r.ReservePhaseSelection(ctx, storeIDs, phase, runID, MigrationSelection{})
+}
+
+// ReservePhaseSelection assigns stores and creates their active run context in one transaction.
+func (r *MigrationStateController) ReservePhaseSelection(
+	ctx context.Context,
+	storeIDs []StoreID,
+	phase OperationPhase,
+	runID string,
+	selection MigrationSelection,
+) ([]ReservationResult, error) {
 	if !isUUIDv7(runID) {
 		return nil, errors.New("reserve migration stores: run ID must be a canonical UUIDv7")
+	}
+	if err := validateMigrationSelection(selection); err != nil {
+		return nil, fmt.Errorf("reserve migration stores: %w", err)
 	}
 	executionStage, err := executionStageForPhase(phase)
 	if err != nil {
@@ -106,6 +113,7 @@ func (r *MigrationStateController) ReservePhase(
 	results := make([]ReservationResult, 0, len(requirements))
 	err = r.transactioner.Transact(ctx, func(txCtx context.Context) error {
 		reservedAt := r.now()
+		reservedAny := false
 		for _, requirement := range requirements {
 			phasePlan, err := phasePlanForStore(r.plan, requirement.ID, phase)
 			if err != nil {
@@ -162,6 +170,15 @@ func (r *MigrationStateController) ReservePhase(
 			state.FailureSummary = ""
 			state.UpdatedAt = reservedAt
 			results = append(results, ReservationResult{State: *state, Reserved: true})
+			reservedAny = true
+		}
+		if reservedAny {
+			if err := r.metadataStore.InsertRun(txCtx, MigrationRun{
+				ID: runID, Mode: MigrationRunModeForward, Phase: phase,
+				Selection: selection, UpdatedAt: reservedAt,
+			}); err != nil {
+				return err
+			}
 		}
 		return nil
 	})
@@ -262,6 +279,9 @@ func (r *MigrationStateController) CancelReservations(
 			cancelled = append(cancelled, cancelledState)
 			seen[state.StoreID] = struct{}{}
 		}
+		if err := r.metadataStore.DeleteRunIfInactive(txCtx, runID); err != nil {
+			return err
+		}
 		return nil
 	})
 	if err != nil {
@@ -277,6 +297,17 @@ func (r *MigrationStateController) MarkFailed(
 	runID string,
 	failureSummary string,
 ) ([]State, error) {
+	return r.MarkFailedWithFailure(ctx, storeIDs, runID, failureSummary, nil)
+}
+
+// MarkFailedWithFailure atomically records operation failure identity and marks the namespace stores failed.
+func (r *MigrationStateController) MarkFailedWithFailure(
+	ctx context.Context,
+	storeIDs []StoreID,
+	runID string,
+	failureSummary string,
+	failure *MigrationFailure,
+) ([]State, error) {
 	if !isUUIDv7(runID) {
 		return nil, errors.New("fail migration stores: run ID must be a canonical UUIDv7")
 	}
@@ -287,6 +318,13 @@ func (r *MigrationStateController) MarkFailed(
 	failed := make([]State, 0, len(storeIDs))
 	err := r.transactioner.Transact(ctx, func(txCtx context.Context) error {
 		updatedAt := r.now()
+		run, err := r.metadataStore.GetRun(txCtx, runID)
+		if err != nil {
+			return err
+		}
+		if run == nil {
+			return fmt.Errorf("fail migration stores: active run %q is missing", runID)
+		}
 		seen := make(map[StoreID]struct{}, len(storeIDs))
 		for _, storeID := range storeIDs {
 			if _, duplicate := seen[storeID]; duplicate {
@@ -327,6 +365,18 @@ func (r *MigrationStateController) MarkFailed(
 			failed = append(failed, *state)
 			seen[storeID] = struct{}{}
 		}
+		if failure != nil {
+			nextRun := *run
+			failureCopy := *failure
+			failureCopy.RunID = runID
+			failureCopy.FailureSummary = failureSummary
+			failureCopy.UpdatedAt = updatedAt
+			nextRun.Failure = &failureCopy
+			nextRun.UpdatedAt = updatedAt
+			if err := r.metadataStore.UpdateRun(txCtx, *run, nextRun); err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 	if err != nil {
@@ -351,6 +401,13 @@ func (r *MigrationStateController) Resume(
 	results := make([]ResumeResult, 0, len(states))
 	err := r.transactioner.Transact(ctx, func(txCtx context.Context) error {
 		updatedAt := r.now()
+		run, err := r.metadataStore.GetRun(txCtx, runID)
+		if err != nil {
+			return err
+		}
+		if run == nil {
+			return fmt.Errorf("resume migration stores: active run %q is missing", runID)
+		}
 		seen := make(map[StoreID]struct{}, len(states))
 		for _, expected := range states {
 			if _, duplicate := seen[expected.StoreID]; duplicate {
@@ -383,6 +440,14 @@ func (r *MigrationStateController) Resume(
 			results = append(results, ResumeResult{State: *state, Resumed: true})
 			seen[state.StoreID] = struct{}{}
 		}
+		nextRun := *run
+		nextRun.Mode = MigrationRunModeForward
+		nextRun.RollbackScope = ""
+		nextRun.Failure = nil
+		nextRun.UpdatedAt = updatedAt
+		if err := r.metadataStore.UpdateRun(txCtx, *run, nextRun); err != nil {
+			return err
+		}
 		return nil
 	})
 	if err != nil {
@@ -391,13 +456,438 @@ func (r *MigrationStateController) Resume(
 	return results, nil
 }
 
-// Finalize verifies all operation progress and conditionally completes one reserved store.
-func (r *MigrationStateController) Finalize(
+// BeginRollback reserves failed and already-finalized stores from one run for rollback execution.
+func (r *MigrationStateController) BeginRollback(
+	ctx context.Context,
+	states []State,
+	phase OperationPhase,
+	runID string,
+) ([]ResumeResult, error) {
+	return r.BeginRollbackScope(ctx, states, phase, runID, RollbackScopePhase)
+}
+
+// BeginRollbackScope records the selected rollback scope while reserving its stores.
+func (r *MigrationStateController) BeginRollbackScope(
+	ctx context.Context,
+	states []State,
+	phase OperationPhase,
+	runID string,
+	scope RollbackScope,
+) ([]ResumeResult, error) {
+	if !isUUIDv7(runID) {
+		return nil, errors.New("begin migration rollback: run ID must be a canonical UUIDv7")
+	}
+	if scope != RollbackScopeFailedOperation && scope != RollbackScopePhase {
+		return nil, fmt.Errorf("begin migration rollback: unsupported scope %q", scope)
+	}
+	if len(states) == 0 {
+		return nil, errors.New("begin migration rollback: at least one store state is required")
+	}
+	storeIDs := make([]StoreID, 0, len(states))
+	for _, state := range states {
+		storeIDs = append(storeIDs, state.StoreID)
+	}
+	requirements, err := r.requirementsFor(storeIDs)
+	if err != nil {
+		return nil, err
+	}
+	requirementsByStore := make(map[StoreID]StoreRequirement, len(requirements))
+	for _, requirement := range requirements {
+		requirementsByStore[requirement.ID] = requirement
+	}
+	executionStage, err := executionStageForPhase(phase)
+	if err != nil {
+		return nil, fmt.Errorf("begin migration rollback: %w", err)
+	}
+
+	results := make([]ResumeResult, 0, len(states))
+	err = r.transactioner.Transact(ctx, func(txCtx context.Context) error {
+		updatedAt := r.now()
+		run, err := r.metadataStore.GetRun(txCtx, runID)
+		if err != nil {
+			return err
+		}
+		if run == nil || run.Phase != phase {
+			return fmt.Errorf("begin migration rollback: active run %q does not match phase %q", runID, phase)
+		}
+		seen := make(map[StoreID]struct{}, len(states))
+		for _, expected := range states {
+			if _, duplicate := seen[expected.StoreID]; duplicate {
+				return fmt.Errorf("begin migration rollback: duplicate store %q", expected.StoreID)
+			}
+			state, err := r.metadataStore.GetState(txCtx, expected.StoreID)
+			if err != nil {
+				return err
+			}
+			if state == nil {
+				return fmt.Errorf("begin migration rollback for store %q: migration state is missing", expected.StoreID)
+			}
+			if *state != expected {
+				return fmt.Errorf("%w while beginning rollback for store %q", ErrRunStateConflict, expected.StoreID)
+			}
+
+			next := *state
+			requirement := requirementsByStore[state.StoreID]
+			switch {
+			case state.ActiveRunID == runID && state.Status == StatusFailed:
+				next.Status = StatusInProgress
+				next.FailureSummary = ""
+			case state.ActiveRunID == runID && state.Status == StatusInProgress:
+				// An interrupted rollback already owns this store.
+			case state.ActiveRunID == "" && state.Status == StatusCompleted:
+				next.Stage = executionStage
+				next.Status = StatusInProgress
+				next.ActiveRunID = runID
+				next.FailureSummary = ""
+			case state.ActiveRunID == "" && state.Status == StatusClean &&
+				state.CompletedLevel == requirement.RequiredLevel:
+				next.CompletedLevel = requirement.AcceptedSourceLevel
+				next.TargetLevel = requirement.RequiredLevel
+				next.Stage = executionStage
+				next.Status = StatusInProgress
+				next.ActiveRunID = runID
+				next.FailureSummary = ""
+			default:
+				return fmt.Errorf("begin migration rollback for store %q: state is not rollback eligible",
+					state.StoreID)
+			}
+			next.UpdatedAt = updatedAt
+			changed, err := r.metadataStore.TransitionState(txCtx, *state, next)
+			if err != nil {
+				return err
+			}
+			if !changed {
+				return fmt.Errorf("%w while beginning rollback for store %q", ErrRunStateConflict, state.StoreID)
+			}
+			results = append(results, ResumeResult{State: next, Resumed: true})
+			seen[state.StoreID] = struct{}{}
+		}
+		nextRun := *run
+		nextRun.Mode = MigrationRunModeRollback
+		nextRun.RollbackScope = scope
+		nextRun.UpdatedAt = updatedAt
+		if err := r.metadataStore.UpdateRun(txCtx, *run, nextRun); err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("begin migration rollback: %w", err)
+	}
+	return results, nil
+}
+
+// CompleteRollback restores one store to the stable boundary before the rolled-back phase.
+func (r *MigrationStateController) CompleteRollback(
+	ctx context.Context,
+	storeID StoreID,
+	phase OperationPhase,
+	runID string,
+	selection MigrationSelection,
+) (FinalizationResult, error) {
+	if !isUUIDv7(runID) {
+		return FinalizationResult{}, errors.New("complete migration rollback: run ID must be a canonical UUIDv7")
+	}
+	if err := validateMigrationSelection(selection); err != nil {
+		return FinalizationResult{}, fmt.Errorf("complete migration rollback: %w", err)
+	}
+	executionStage, err := executionStageForPhase(phase)
+	if err != nil {
+		return FinalizationResult{}, fmt.Errorf("complete migration rollback: %w", err)
+	}
+
+	result := FinalizationResult{}
+	err = r.transactioner.Transact(ctx, func(txCtx context.Context) error {
+		state, err := r.metadataStore.GetState(txCtx, storeID)
+		if err != nil {
+			return err
+		}
+		if state == nil {
+			return fmt.Errorf("complete migration rollback for store %q: migration state is missing", storeID)
+		}
+		if state.Status != StatusInProgress || state.ActiveRunID != runID || state.Stage != executionStage {
+			return fmt.Errorf("complete migration rollback for store %q: store is not owned by rollback run %q",
+				storeID, runID)
+		}
+
+		next := *state
+		next.ActiveRunID = ""
+		next.FailureSummary = ""
+		next.UpdatedAt = r.now()
+		switch phase {
+		case OperationPhaseExpand:
+			next.TargetLevel = ""
+			next.Stage = MigrationStageComplete
+			next.Status = StatusClean
+		case OperationPhaseMigrate:
+			next.Stage = MigrationStageExpanded
+			next.Status = StatusCompleted
+		case OperationPhaseContract:
+			next.Stage = MigrationStageContractReady
+			next.Status = StatusCompleted
+		default:
+			return fmt.Errorf("complete migration rollback: unsupported phase %q", phase)
+		}
+		if err := r.metadataStore.DeleteProgressForRun(txCtx, state.ID, runID); err != nil {
+			return err
+		}
+		if phase == OperationPhaseMigrate {
+			if len(selection.DeploymentIDs) == 0 {
+				if err := r.metadataStore.DeleteDeploymentStatesForLevel(
+					txCtx, state.ID, state.TargetLevel); err != nil {
+					return err
+				}
+			} else {
+				for _, deploymentID := range selection.DeploymentIDs {
+					if err := r.metadataStore.DeleteDeploymentState(
+						txCtx, state.ID, deploymentID, state.TargetLevel); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		changed, err := r.metadataStore.TransitionState(txCtx, *state, next)
+		if err != nil {
+			return err
+		}
+		if !changed {
+			return fmt.Errorf("%w while completing rollback for store %q", ErrFinalizationConflict, storeID)
+		}
+		if err := r.metadataStore.DeleteRunIfInactive(txCtx, runID); err != nil {
+			return err
+		}
+		result = FinalizationResult{State: next, Finalized: true}
+		return nil
+	})
+	if err != nil {
+		return FinalizationResult{}, fmt.Errorf("complete migration rollback: %w", err)
+	}
+	return result, nil
+}
+
+// CompleteOperationRollback preserves the run while resetting only the rolled-back failed operation.
+func (r *MigrationStateController) CompleteOperationRollback(
+	ctx context.Context,
+	storeID StoreID,
+	runID string,
+	forwardProgress Progress,
+	rollbackOperationID OperationID,
+	failure *MigrationFailure,
+) (FinalizationResult, error) {
+	if !isUUIDv7(runID) {
+		return FinalizationResult{}, errors.New("complete operation rollback: run ID must be a canonical UUIDv7")
+	}
+	result := FinalizationResult{}
+	err := r.transactioner.Transact(ctx, func(txCtx context.Context) error {
+		state, err := r.metadataStore.GetState(txCtx, storeID)
+		if err != nil {
+			return err
+		}
+		if state == nil || state.Status != StatusInProgress || state.ActiveRunID != runID {
+			return fmt.Errorf("complete operation rollback for store %q: store is not owned by run %q",
+				storeID, runID)
+		}
+		if forwardProgress.MigrationStateID != state.ID || forwardProgress.RunID != runID ||
+			forwardProgress.TargetLevel != state.TargetLevel {
+			return errors.New("complete operation rollback: forward progress does not match the active store")
+		}
+		if failure != nil && (failure.RunID != runID || failure.StoreID != state.StoreID ||
+			failure.ForwardOperationID != OperationID(forwardProgress.OperationID) ||
+			failure.ExecutionTargetID != forwardProgress.ExecutionTargetID) {
+			return errors.New("complete operation rollback: failure does not match the active operation")
+		}
+		run, err := r.metadataStore.GetRun(txCtx, runID)
+		if err != nil {
+			return err
+		}
+		if run == nil || run.Mode != MigrationRunModeRollback ||
+			run.RollbackScope != RollbackScopeFailedOperation {
+			return errors.New("complete operation rollback: active run is not a failed-operation rollback")
+		}
+		if err := r.metadataStore.DeleteProgressForOperation(txCtx, state.ID, state.TargetLevel,
+			OperationID(forwardProgress.OperationID), forwardProgress.ExecutionTargetID); err != nil {
+			return err
+		}
+		if err := r.metadataStore.DeleteProgressForOperation(txCtx, state.ID, state.TargetLevel,
+			rollbackOperationID, forwardProgress.ExecutionTargetID); err != nil {
+			return err
+		}
+		updatedAt := r.now()
+		nextRun := *run
+		nextRun.Mode = MigrationRunModeForward
+		nextRun.RollbackScope = ""
+		nextRun.UpdatedAt = updatedAt
+		if failure != nil {
+			completedFailure := *failure
+			completedFailure.CurrentOperationID = completedFailure.ForwardOperationID
+			completedFailure.ExecutionDirection = ExecutionDirectionForward
+			completedFailure.RolledBack = true
+			completedFailure.FailureSummary = failedOperationRollbackSummary
+			completedFailure.UpdatedAt = updatedAt
+			nextRun.Failure = &completedFailure
+		}
+		if err := r.metadataStore.UpdateRun(txCtx, *run, nextRun); err != nil {
+			return err
+		}
+		next := *state
+		next.Status = StatusFailed
+		next.FailureSummary = failedOperationRollbackSummary
+		next.UpdatedAt = updatedAt
+		changed, err := r.metadataStore.TransitionState(txCtx, *state, next)
+		if err != nil {
+			return err
+		}
+		if !changed {
+			return fmt.Errorf("%w while completing operation rollback for store %q",
+				ErrFinalizationConflict, storeID)
+		}
+		result = FinalizationResult{State: next, Finalized: true}
+		return nil
+	})
+	if err != nil {
+		return FinalizationResult{}, fmt.Errorf("complete operation rollback: %w", err)
+	}
+	return result, nil
+}
+
+// BeginRevertAll reserves stable or failed stores for a complete release rollback.
+func (r *MigrationStateController) BeginRevertAll(
+	ctx context.Context,
+	states []State,
+	runID string,
+) ([]ResumeResult, error) {
+	if !isUUIDv7(runID) || len(states) == 0 {
+		return nil, errors.New("begin complete migration rollback: valid run and states are required")
+	}
+	storeIDs := make([]StoreID, 0, len(states))
+	for _, state := range states {
+		storeIDs = append(storeIDs, state.StoreID)
+	}
+	requirements, err := r.requirementsFor(storeIDs)
+	if err != nil {
+		return nil, err
+	}
+	requirementsByStore := make(map[StoreID]StoreRequirement, len(requirements))
+	for _, requirement := range requirements {
+		requirementsByStore[requirement.ID] = requirement
+	}
+	results := make([]ResumeResult, 0, len(states))
+	err = r.transactioner.Transact(ctx, func(txCtx context.Context) error {
+		updatedAt := r.now()
+		run, err := r.metadataStore.GetRun(txCtx, runID)
+		if err != nil {
+			return err
+		}
+		if run != nil && run.Mode != MigrationRunModeRevertAll {
+			return fmt.Errorf("begin complete migration rollback: run %q has mode %q", runID, run.Mode)
+		}
+		for _, expected := range states {
+			state, err := r.metadataStore.GetState(txCtx, expected.StoreID)
+			if err != nil {
+				return err
+			}
+			if state == nil || *state != expected {
+				return fmt.Errorf("%w while beginning complete rollback for store %q",
+					ErrRunStateConflict, expected.StoreID)
+			}
+			requirement := requirementsByStore[state.StoreID]
+			next := *state
+			next.CompletedLevel = requirement.AcceptedSourceLevel
+			next.TargetLevel = requirement.RequiredLevel
+			next.Stage = MigrationStageRollingBack
+			next.Status = StatusInProgress
+			next.ActiveRunID = runID
+			next.FailureSummary = ""
+			next.UpdatedAt = updatedAt
+			changed, err := r.metadataStore.TransitionState(txCtx, *state, next)
+			if err != nil {
+				return err
+			}
+			if !changed {
+				return fmt.Errorf("%w while beginning complete rollback for store %q",
+					ErrRunStateConflict, state.StoreID)
+			}
+			results = append(results, ResumeResult{State: next, Resumed: true})
+		}
+		if run == nil {
+			if err := r.metadataStore.InsertRun(txCtx, MigrationRun{
+				ID: runID, Mode: MigrationRunModeRevertAll, RollbackScope: RollbackScopeAll,
+				Selection: MigrationSelection{}, UpdatedAt: updatedAt,
+			}); err != nil {
+				return err
+			}
+		} else {
+			nextRun := *run
+			nextRun.Failure = nil
+			nextRun.UpdatedAt = updatedAt
+			if err := r.metadataStore.UpdateRun(txCtx, *run, nextRun); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("begin complete migration rollback: %w", err)
+	}
+	return results, nil
+}
+
+// CompleteRevertAll restores one store to its accepted source boundary.
+func (r *MigrationStateController) CompleteRevertAll(
 	ctx context.Context,
 	storeID StoreID,
 	runID string,
 ) (FinalizationResult, error) {
-	return r.CompletePhase(ctx, storeID, OperationPhaseExpand, runID)
+	if !isUUIDv7(runID) {
+		return FinalizationResult{}, errors.New("complete release rollback: run ID must be a canonical UUIDv7")
+	}
+	requirements, err := r.requirementsFor([]StoreID{storeID})
+	if err != nil {
+		return FinalizationResult{}, err
+	}
+	requirement := requirements[0]
+	result := FinalizationResult{}
+	err = r.transactioner.Transact(ctx, func(txCtx context.Context) error {
+		state, err := r.metadataStore.GetState(txCtx, storeID)
+		if err != nil {
+			return err
+		}
+		if state == nil || state.Status != StatusInProgress || state.ActiveRunID != runID {
+			return fmt.Errorf("complete release rollback for store %q: store is not owned by run %q", storeID, runID)
+		}
+		if err := r.metadataStore.DeleteProgressForTarget(txCtx, state.ID, requirement.RequiredLevel); err != nil {
+			return err
+		}
+		if err := r.metadataStore.DeleteDeploymentStatesForLevel(
+			txCtx, state.ID, requirement.RequiredLevel); err != nil {
+			return err
+		}
+		next := *state
+		next.CompletedLevel = requirement.AcceptedSourceLevel
+		next.TargetLevel = ""
+		next.Stage = MigrationStageComplete
+		next.Status = StatusClean
+		next.ActiveRunID = ""
+		next.FailureSummary = ""
+		next.UpdatedAt = r.now()
+		changed, err := r.metadataStore.TransitionState(txCtx, *state, next)
+		if err != nil {
+			return err
+		}
+		if !changed {
+			return fmt.Errorf("%w while completing release rollback for store %q",
+				ErrFinalizationConflict, storeID)
+		}
+		if err := r.metadataStore.DeleteRunIfInactive(txCtx, runID); err != nil {
+			return err
+		}
+		result = FinalizationResult{State: next, Finalized: true}
+		return nil
+	})
+	if err != nil {
+		return FinalizationResult{}, fmt.Errorf("complete release rollback: %w", err)
+	}
+	return result, nil
 }
 
 // CompletePhase verifies phase-local operation progress and advances the store to its next boundary.
@@ -522,6 +1012,9 @@ func (r *MigrationStateController) CompletePhaseSelection(
 		if !finalized {
 			return fmt.Errorf("%w for store %q", ErrFinalizationConflict, storeID)
 		}
+		if err := r.metadataStore.DeleteRunIfInactive(txCtx, runID); err != nil {
+			return err
+		}
 		if selective {
 			state.Stage = MigrationStageExpanded
 			state.Status = StatusCompleted
@@ -590,6 +1083,8 @@ type storePhasePlan struct {
 	next     OperationPhase
 }
 
+var errStorePhaseNotDeclared = errors.New("migration store phase is not declared")
+
 func phasePlanForStore(
 	plan MigrationPlan,
 	storeID StoreID,
@@ -609,6 +1104,9 @@ func phasePlanForStore(
 			}
 		}
 	}
+	if len(declared) > 0 && declared[len(declared)-1] != OperationPhaseContract {
+		declared = append(declared, OperationPhaseContract)
+	}
 	for index, candidate := range declared {
 		if candidate != phase {
 			continue
@@ -623,7 +1121,7 @@ func phasePlanForStore(
 		return result, nil
 	}
 	return storePhasePlan{}, fmt.Errorf(
-		"migration store %q has no %q operations", storeID, phase)
+		"migration store %q has no %q operations: %w", storeID, phase, errStorePhaseNotDeclared)
 }
 
 func executionStageForPhase(phase OperationPhase) (MigrationStage, error) {
@@ -730,7 +1228,7 @@ func (r *MigrationStateController) finalizationRequirements(
 		}
 		expected[string(definition.ID)] = index
 	}
-	if len(expected) == 0 {
+	if len(expected) == 0 && phase != OperationPhaseContract {
 		return StoreRequirement{}, nil, fmt.Errorf("finalize migration store %q: no operations are declared", storeID)
 	}
 	return requirement, expected, nil

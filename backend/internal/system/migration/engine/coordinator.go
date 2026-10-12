@@ -23,6 +23,10 @@ var ErrMigrationPreflightBlocked = errors.New("migration preflight is blocked")
 // ErrNoMigrationToResume means that no failed or abandoned run owned by this release was found.
 var ErrNoMigrationToResume = errors.New("no migration run is available to resume")
 
+// ErrMigrationRollbackInterrupted means that rollback must be resumed with the rollback command.
+var ErrMigrationRollbackInterrupted = errors.New(
+	"migration run failed during rollback; rerun the applicable migration rollback command")
+
 // ErrSafeWorkflowUnsupported means that the release plan cannot reach a target-serving boundary
 // without executing contract operations.
 var ErrSafeWorkflowUnsupported = errors.New("migration plan is not supported by the safe workflow")
@@ -78,6 +82,14 @@ type migrationNamespaceRuntime struct {
 	controller        *MigrationStateController
 	atomicExecutor    *AtomicOperationExecutor
 	resumableExecutor *ResumableOperationExecutor
+}
+
+type operationFailure struct {
+	storeID            StoreID
+	forwardOperationID OperationID
+	currentOperationID OperationID
+	executionTargetID  string
+	executionDirection ExecutionDirection
 }
 
 // MigrationCoordinator owns the complete basic migration run across all database namespaces.
@@ -190,14 +202,6 @@ func NewMigrationCoordinator(
 		release: release, plan: plan, preflight: preflight, namespaces: runtimes,
 		newID: utils.GenerateUUIDv7,
 	}, nil
-}
-
-// Apply runs preflight, reserves affected stores, executes operations in plan order and finalizes each store.
-func (c *MigrationCoordinator) Apply(
-	ctx context.Context,
-	selection MigrationSelection,
-) (MigrationRunResult, error) {
-	return c.ApplyPhase(ctx, OperationPhaseExpand, selection)
 }
 
 // ApplyPhase executes one explicitly selected migration phase.
@@ -321,8 +325,8 @@ func (c *MigrationCoordinator) applyPhase(
 		if len(storeIDs) == 0 {
 			continue
 		}
-		reservations, reserveErr := c.namespaces[index].controller.ReservePhase(
-			ctx, storeIDs, phase, runID)
+		reservations, reserveErr := c.namespaces[index].controller.ReservePhaseSelection(
+			ctx, storeIDs, phase, runID, selection)
 		if reserveErr != nil {
 			return result, errors.Join(reserveErr, c.cancelReservations(ctx, reservedStates, runID))
 		}
@@ -338,15 +342,6 @@ func (c *MigrationCoordinator) applyPhase(
 		result.AlreadyAtTarget = true
 		return result, nil
 	}
-	if len(selection.DeploymentIDs) > 0 {
-		for namespaceIndex := range reservedStates {
-			if err := c.namespaces[namespaceIndex].metadataStore.RecordRunTargets(
-				ctx, runID, selection.DeploymentIDs, time.Now().UTC()); err != nil {
-				return result, errors.Join(err, c.cancelReservations(ctx, reservedStates, runID))
-			}
-		}
-	}
-
 	operationReport := c.preflight.readinessEvaluator.checkPhaseStores(
 		ctx, phase, reservedStores, nil)
 	result.Preflight.Operations = operationReport.Operations
@@ -378,7 +373,13 @@ func (c *MigrationCoordinator) applyPhase(
 			execution, executeErr := c.executeOperation(
 				ctx, namespaceIndex, operation, operationSelection, runID, operationOrder, nil)
 			if executeErr != nil {
-				return result, errors.Join(executeErr, c.markFailed(ctx, reservedStores, runID, executeErr))
+				failure := operationFailure{
+					storeID: definition.StoreID, forwardOperationID: definition.ID,
+					currentOperationID: definition.ID, executionTargetID: selectionTargetID(operationSelection),
+					executionDirection: ExecutionDirectionForward,
+				}
+				return result, errors.Join(executeErr,
+					c.failRun(ctx, reservedStores, runID, failure, executeErr))
 			}
 			result.Operations = append(result.Operations, execution)
 		}
@@ -391,6 +392,20 @@ func (c *MigrationCoordinator) applyPhase(
 			return result, errors.Join(finalizeErr, c.markFailed(ctx, reservedStores, runID, finalizeErr))
 		}
 		result.Finalizations = append(result.Finalizations, finalization)
+		delete(reservedStores, definition.StoreID)
+	}
+	for _, requirement := range c.release.Manifest.Stores {
+		if _, reserved := reservedStores[requirement.ID]; !reserved {
+			continue
+		}
+		namespaceIndex := namespaceByStore[requirement.ID]
+		finalization, finalizeErr := c.namespaces[namespaceIndex].controller.CompletePhaseSelection(
+			ctx, requirement.ID, phase, runID, selection)
+		if finalizeErr != nil {
+			return result, errors.Join(finalizeErr, c.markFailed(ctx, reservedStores, runID, finalizeErr))
+		}
+		result.Finalizations = append(result.Finalizations, finalization)
+		delete(reservedStores, requirement.ID)
 	}
 	return result, nil
 }
@@ -453,7 +468,6 @@ func (c *MigrationCoordinator) resume(ctx context.Context) (MigrationRunResult, 
 			resumedStores[resumed.State.StoreID] = struct{}{}
 		}
 	}
-
 	namespaceByStore := c.namespaceIndexes()
 	plannedOperations := c.plan.plannedOperations()
 	lastOperationByStore := make(map[StoreID]int, len(resume.activeStores))
@@ -491,8 +505,13 @@ func (c *MigrationCoordinator) resume(ctx context.Context) (MigrationRunResult, 
 				ctx, namespaceIndex, operation, operationSelection, resume.runID, operationOrder,
 				existingProgress)
 			if executeErr != nil {
+				failure := operationFailure{
+					storeID: definition.StoreID, forwardOperationID: definition.ID,
+					currentOperationID: definition.ID, executionTargetID: selectionTargetID(operationSelection),
+					executionDirection: ExecutionDirectionForward,
+				}
 				return result, errors.Join(executeErr,
-					c.markFailed(ctx, resume.activeStores, resume.runID, executeErr))
+					c.failRun(ctx, resume.activeStores, resume.runID, failure, executeErr))
 			}
 			result.Operations = append(result.Operations, execution)
 		}
@@ -506,6 +525,21 @@ func (c *MigrationCoordinator) resume(ctx context.Context) (MigrationRunResult, 
 				c.markFailed(ctx, resume.activeStores, resume.runID, finalizeErr))
 		}
 		result.Finalizations = append(result.Finalizations, finalization)
+		delete(resume.activeStores, definition.StoreID)
+	}
+	for _, requirement := range c.release.Manifest.Stores {
+		if _, active := resume.activeStores[requirement.ID]; !active {
+			continue
+		}
+		namespaceIndex := namespaceByStore[requirement.ID]
+		finalization, finalizeErr := c.namespaces[namespaceIndex].controller.CompletePhaseSelection(
+			ctx, requirement.ID, resume.phase, resume.runID, resume.selection)
+		if finalizeErr != nil {
+			return result, errors.Join(finalizeErr,
+				c.markFailed(ctx, resume.activeStores, resume.runID, finalizeErr))
+		}
+		result.Finalizations = append(result.Finalizations, finalization)
+		delete(resume.activeStores, requirement.ID)
 	}
 	return result, nil
 }
@@ -616,6 +650,10 @@ func (c *MigrationCoordinator) inspectResumableRun(ctx context.Context) (migrati
 				requirement.ID, state.CompletedLevel, state.TargetLevel,
 				requirement.AcceptedSourceLevel, requirement.RequiredLevel)
 		}
+		if state.Stage == MigrationStageRollingBack {
+			resume.runID = state.ActiveRunID
+			return resume, ErrMigrationRollbackInterrupted
+		}
 		phase, err := phaseForExecutionStage(state.Stage)
 		if err != nil {
 			return resume, fmt.Errorf("inspect migration resume state for store %q: %w", requirement.ID, err)
@@ -682,10 +720,33 @@ func (c *MigrationCoordinator) inspectResumableRun(ctx context.Context) (migrati
 		}
 		activeStates[requirement.ID] = state
 	}
+	if err := c.rejectForwardResumeDuringRollback(ctx, resume); err != nil {
+		return resume, err
+	}
 	if err := c.inspectCompletedProgress(ctx, resume, activeStates); err != nil {
 		return resume, err
 	}
 	return resume, nil
+}
+
+func (c *MigrationCoordinator) rejectForwardResumeDuringRollback(
+	ctx context.Context,
+	resume migrationResumeContext,
+) error {
+	for namespaceIndex, states := range resume.failedByNamespace {
+		if len(states) == 0 {
+			continue
+		}
+		run, err := c.namespaces[namespaceIndex].metadataStore.GetRun(ctx, resume.runID)
+		if err != nil {
+			return fmt.Errorf("inspect migration resume run: %w", err)
+		}
+		if run != nil && (run.Mode == MigrationRunModeRollback || run.Mode == MigrationRunModeRevertAll ||
+			run.Failure != nil && run.Failure.ExecutionDirection == ExecutionDirectionRollback) {
+			return ErrMigrationRollbackInterrupted
+		}
+	}
+	return nil
 }
 
 func (c *MigrationCoordinator) loadResumeSelection(
@@ -704,10 +765,14 @@ func (c *MigrationCoordinator) loadResumeSelection(
 		if _, done := visited[namespaceIndex]; done {
 			continue
 		}
-		targets, err := c.namespaces[namespaceIndex].metadataStore.ListRunTargets(ctx, runID)
+		run, err := c.namespaces[namespaceIndex].metadataStore.GetRun(ctx, runID)
 		if err != nil {
-			return MigrationSelection{}, fmt.Errorf("inspect migration resume targets: %w", err)
+			return MigrationSelection{}, fmt.Errorf("inspect migration resume run: %w", err)
 		}
+		if run == nil {
+			return MigrationSelection{}, fmt.Errorf("inspect migration resume: run %q is missing", runID)
+		}
+		targets := run.Selection.DeploymentIDs
 		if expected == nil {
 			expected = targets
 		} else if strings.Join(expected, "\x00") != strings.Join(targets, "\x00") {
@@ -726,6 +791,9 @@ func (c *MigrationCoordinator) storeCompletedPhase(
 ) (bool, error) {
 	phasePlan, err := phasePlanForStore(c.plan, requirement.ID, phase)
 	if err != nil {
+		if !errors.Is(err, errStorePhaseNotDeclared) {
+			return false, err
+		}
 		return state.Status == StatusClean || state.Status == StatusCompleted, nil
 	}
 	if phasePlan.next == "" {
@@ -916,6 +984,16 @@ func (c *MigrationCoordinator) markFailed(
 	runID string,
 	cause error,
 ) error {
+	return c.markFailedWithFailure(ctx, reservedStores, runID, nil, cause)
+}
+
+func (c *MigrationCoordinator) markFailedWithFailure(
+	ctx context.Context,
+	reservedStores map[StoreID]struct{},
+	runID string,
+	failure *MigrationFailure,
+	cause error,
+) error {
 	var errs []error
 	summary := boundedFailureSummary(cause.Error())
 	for index := range c.namespaces {
@@ -923,11 +1001,30 @@ func (c *MigrationCoordinator) markFailed(
 		if len(storeIDs) == 0 {
 			continue
 		}
-		if _, err := c.namespaces[index].controller.MarkFailed(ctx, storeIDs, runID, summary); err != nil {
+		if _, err := c.namespaces[index].controller.MarkFailedWithFailure(
+			ctx, storeIDs, runID, summary, failure); err != nil {
 			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)
+}
+
+func (c *MigrationCoordinator) failRun(
+	ctx context.Context,
+	reservedStores map[StoreID]struct{},
+	runID string,
+	failure operationFailure,
+	cause error,
+) error {
+	record := MigrationFailure{
+		RunID: runID, StoreID: failure.storeID,
+		ForwardOperationID: failure.forwardOperationID,
+		CurrentOperationID: failure.currentOperationID,
+		ExecutionTargetID:  failure.executionTargetID,
+		ExecutionDirection: failure.executionDirection,
+		FailureSummary:     boundedFailureSummary(cause.Error()), UpdatedAt: time.Now().UTC(),
+	}
+	return c.markFailedWithFailure(ctx, reservedStores, runID, &record, cause)
 }
 
 func migrationStoreSet(report PreflightReport) map[StoreID]struct{} {

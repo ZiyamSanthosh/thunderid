@@ -57,6 +57,7 @@ func migrationPlan(Dependencies) (engine.MigrationPlan, error) {
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
+	rollbackEntityTypeHandleBackfill := newRollbackEntityTypeHandleBackfillOperation()
 	return engine.MigrationPlan{
 		TargetVersion: "2.0.0",
 		Expand: []engine.Operation{
@@ -70,5 +71,8 @@ func migrationPlan(Dependencies) (engine.MigrationPlan, error) {
 			addEntityTypeHandleUniqueness,
 		},
 		Contract: []engine.Operation{finalizeEntityTypeHandle},
+		Rollback: []engine.RollbackOperation{
+			rollbackEntityTypeHandleBackfill,
+		},
 	}, nil
 }
