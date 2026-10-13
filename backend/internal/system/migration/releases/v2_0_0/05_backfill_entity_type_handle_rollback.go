@@ -38,7 +38,7 @@ func (*rollbackEntityTypeHandleBackfillOperation) ForwardOperationID() engine.Op
 
 func (*rollbackEntityTypeHandleBackfillOperation) Definition() engine.OperationDefinition {
 	return engine.OperationDefinition{
-		ID:               "2.0.0/configdb/08_rollback_entity_type_handle_backfill",
+		ID:               "2.0.0/configdb/05_backfill_entity_type_handle_rollback",
 		Description:      "Remove the entity-type handle representation before returning to the source version",
 		StoreID:          engine.StoreIDConfigDB,
 		Kind:             engine.OperationKindDataChange,

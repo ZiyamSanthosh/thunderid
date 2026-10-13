@@ -239,7 +239,7 @@ func TestPostgresMigrationCompleteRollbackResumesInterruptedRollback(t *testing.
 		(ID, MIGRATION_STATE_ID, RUN_ID, TARGET_LEVEL, OPERATION_ID, OPERATION_ORDER,
 		 EXECUTION_TARGET_ID, STATUS, CHECKPOINT_DATA, UPDATED_AT)
 		SELECT '0199a123-4951-7abc-8def-0123456789ab', ID, $1, '2.0.0',
-			'2.0.0/configdb/08_rollback_entity_type_handle_backfill', 4, '', 'in_progress',
+			'2.0.0/configdb/05_backfill_entity_type_handle_rollback', 4, '', 'in_progress',
 			jsonb_build_object('lastID', $2::TEXT)::TEXT, NOW()
 		FROM "MIGRATION_STATE" WHERE STORE_ID = 'configdb'`, interruptedRevertAllRunID, checkpointID)
 	require.NoError(t, err)
@@ -247,7 +247,7 @@ func TestPostgresMigrationCompleteRollbackResumesInterruptedRollback(t *testing.
 		db := environment.OpenDatabase(t, database)
 		insertMigrationRun(t, db, interruptedRevertAllRunID, "revert_all", "", "all", nil,
 			"configdb", "2.0.0/configdb/05_backfill_entity_type_handle",
-			"2.0.0/configdb/08_rollback_entity_type_handle_backfill", "", "rollback",
+			"2.0.0/configdb/05_backfill_entity_type_handle_rollback", "", "rollback",
 			"simulated interrupted complete rollback")
 		_, err = db.Exec(`UPDATE "MIGRATION_STATE"
 			SET COMPLETED_LEVEL = '1.0.0', TARGET_LEVEL = '2.0.0', STAGE = 'rolling_back',
@@ -358,13 +358,13 @@ func prepareInterruptedRollbackRun(t *testing.T, db *sql.DB) {
 		(ID, MIGRATION_STATE_ID, RUN_ID, TARGET_LEVEL, OPERATION_ID, OPERATION_ORDER,
 		 EXECUTION_TARGET_ID, STATUS, CHECKPOINT_DATA, UPDATED_AT)
 		SELECT '0199a123-4931-7abc-8def-0123456789ab', ID, $1, '2.0.0',
-			'2.0.0/configdb/08_rollback_entity_type_handle_backfill', 4, '', 'in_progress',
+			'2.0.0/configdb/05_backfill_entity_type_handle_rollback', 4, '', 'in_progress',
 			jsonb_build_object('lastID', $2::TEXT)::TEXT, NOW()
 		FROM "MIGRATION_STATE" WHERE STORE_ID = 'configdb'`, interruptedRollbackRunID, checkpointID)
 	require.NoError(t, err)
 	insertMigrationRun(t, db, interruptedRollbackRunID, "rollback", "migrate", "failed_operation", nil,
 		"configdb", "2.0.0/configdb/05_backfill_entity_type_handle",
-		"2.0.0/configdb/08_rollback_entity_type_handle_backfill", "", "rollback",
+		"2.0.0/configdb/05_backfill_entity_type_handle_rollback", "", "rollback",
 		"simulated interrupted rollback")
 	_, err = db.Exec(`UPDATE "MIGRATION_STATE"
 		SET STAGE = 'migrating', STATUS = 'failed', ACTIVE_RUN_ID = $1,

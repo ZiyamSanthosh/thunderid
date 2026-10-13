@@ -17,7 +17,7 @@ func TestRollbackEntityTypeHandleBackfillOperation(t *testing.T) {
 	operation := newRollbackEntityTypeHandleBackfillOperation()
 	definition := operation.Definition()
 
-	assert.Equal(t, engine.OperationID("2.0.0/configdb/08_rollback_entity_type_handle_backfill"),
+	assert.Equal(t, engine.OperationID("2.0.0/configdb/05_backfill_entity_type_handle_rollback"),
 		definition.ID)
 	assert.Equal(t, engine.OperationID("2.0.0/configdb/05_backfill_entity_type_handle"),
 		operation.ForwardOperationID())

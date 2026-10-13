@@ -43,7 +43,7 @@ func TestDefinitionMatchesProductVersion(t *testing.T) {
 		string(definition.Plan.Migrate[1].Definition().ID))
 	assert.Equal(t, "2.0.0/configdb/07_finalize_entity_type_handle",
 		string(definition.Plan.Contract[0].Definition().ID))
-	assert.Equal(t, "2.0.0/configdb/08_rollback_entity_type_handle_backfill",
+	assert.Equal(t, "2.0.0/configdb/05_backfill_entity_type_handle_rollback",
 		string(definition.Plan.Rollback[0].Definition().ID))
 	assert.Equal(t, definition.Plan.Migrate[0].Definition().ID,
 		definition.Plan.Rollback[0].ForwardOperationID())
