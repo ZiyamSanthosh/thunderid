@@ -48,6 +48,7 @@ func newRemoveRevocationReasonCheckOperation() (engine.Operation, error) {
 			Kind:             engine.OperationKindSchemaChange,
 			InterruptionMode: engine.InterruptionModeAtomic,
 		},
+		ReadinessChecker: checkRemoveRevocationReasonReadiness,
 		PreVerifier: func(
 			ctx context.Context,
 			access engine.ReadAccess,
@@ -71,6 +72,40 @@ func newRemoveRevocationReasonCheckOperation() (engine.Operation, error) {
 			return verifyRevokedTokenReason(ctx, access)
 		},
 	})
+}
+
+func checkRemoveRevocationReasonReadiness(
+	ctx context.Context,
+	access engine.ReadAccess,
+	_ engine.PlanContext,
+) (engine.ReadinessResult, error) {
+	inspection, err := inspectRevokedTokenReason(ctx, access)
+	if err != nil {
+		return engine.ReadinessResult{}, err
+	}
+
+	switch inspection.state {
+	case engine.VerificationSource:
+		return engine.ReadinessResult{
+			State:   engine.ReadinessReady,
+			Summary: "The legacy revoked-token reason check constraint is ready to be removed",
+		}, nil
+	case engine.VerificationTarget:
+		return engine.ReadinessResult{
+			State:   engine.ReadinessReady,
+			Summary: "The revoked-token reason check constraint has already been removed",
+		}, nil
+	default:
+		return engine.ReadinessResult{
+			State:   engine.ReadinessBlocked,
+			Summary: inspection.summary,
+			Findings: []engine.Finding{{
+				Code:        "unexpected_revoked_token_reason_schema",
+				Message:     inspection.summary,
+				Remediation: "Restore the expected source schema or reconcile the constraint manually before retrying",
+			}},
+		}, nil
+	}
 }
 
 func verifyRevokedTokenReason(

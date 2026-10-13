@@ -38,7 +38,8 @@ func newAddEntityTypeHandleUniquenessOperation() (engine.Operation, error) {
 			Kind:             engine.OperationKindSchemaChange,
 			InterruptionMode: engine.InterruptionModeAtomic,
 		},
-		PreVerifier: verifyEntityTypeHandleUniqueness,
+		ReadinessChecker: checkAddEntityTypeHandleUniquenessReadiness,
+		PreVerifier:      verifyEntityTypeHandleUniqueness,
 		Implementations: map[engine.DatabaseType]engine.SQLImplementation{
 			engine.DatabaseTypePostgres: {
 				Statements: []engine.SQLStatement{
@@ -51,6 +52,68 @@ func newAddEntityTypeHandleUniquenessOperation() (engine.Operation, error) {
 		},
 		PostVerifier: verifyEntityTypeHandleUniqueness,
 	})
+}
+
+func checkAddEntityTypeHandleUniquenessReadiness(
+	ctx context.Context,
+	access engine.ReadAccess,
+	_ engine.PlanContext,
+) (engine.ReadinessResult, error) {
+	columns, err := inspectEntityTypeMigrationColumns(ctx, access)
+	if err != nil {
+		return engine.ReadinessResult{}, err
+	}
+	constraintRows, err := access.Query(ctx, engine.StoreIDConfigDB, queryEntityTypeUniqueConstraints)
+	if err != nil {
+		return engine.ReadinessResult{}, fmt.Errorf("inspect entity-type unique constraints: %w", err)
+	}
+	legacyUnique, targetUnique, err := inspectEntityTypeUniqueConstraints(constraintRows)
+	if err != nil {
+		return engine.ReadinessResult{}, err
+	}
+
+	name, hasName := columns["NAME"]
+	if !hasName || !matchesEntityTypeColumn(name, "NO") || !legacyUnique {
+		return blockedEntityTypeHandleUniquenessReadiness(
+			"The entity-type name column or legacy uniqueness constraint does not match the expected schema"), nil
+	}
+	handle, hasHandle := columns["HANDLE"]
+	if !hasHandle {
+		return deferredEntityTypeHandleUniquenessReadiness(), nil
+	}
+	if !matchesEntityTypeColumn(handle, "YES") {
+		return blockedEntityTypeHandleUniquenessReadiness(
+			"The entity-type handle column does not match the expected nullable definition"), nil
+	}
+	if targetUnique {
+		return engine.ReadinessResult{
+			State:   engine.ReadinessReady,
+			Summary: "The entity-type name and handle uniqueness constraints already coexist",
+		}, nil
+	}
+	return deferredEntityTypeHandleUniquenessReadiness(), nil
+}
+
+func deferredEntityTypeHandleUniquenessReadiness() engine.ReadinessResult {
+	return engine.ReadinessResult{
+		State:   engine.ReadinessDeferred,
+		Summary: "Entity-type handle uniqueness depends on the preceding handle backfill",
+		DeferredUntil: []engine.OperationID{
+			backfillEntityTypeHandleOperationID,
+		},
+	}
+}
+
+func blockedEntityTypeHandleUniquenessReadiness(summary string) engine.ReadinessResult {
+	return engine.ReadinessResult{
+		State:   engine.ReadinessBlocked,
+		Summary: summary,
+		Findings: []engine.Finding{{
+			Code:        "unexpected_entity_type_uniqueness_schema",
+			Message:     summary,
+			Remediation: "Reconcile the ENTITY_TYPES columns and uniqueness constraints before retrying",
+		}},
+	}
 }
 
 func verifyEntityTypeHandleUniqueness(

@@ -5,6 +5,7 @@ package v2_0_0
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -54,6 +55,89 @@ func TestBackfillEntityTypeHandleOperation(t *testing.T) {
 	), engine.ExecutionTarget{})
 	require.NoError(t, err)
 	assert.Equal(t, engine.VerificationInvalid, invalid.State)
+}
+
+func TestBackfillEntityTypeHandleReadiness(t *testing.T) {
+	operation := newBackfillEntityTypeHandleOperation()
+	checker := operation.(engine.ReadinessChecker)
+
+	t.Run("defers until handle column exists", func(t *testing.T) {
+		result, err := checker.CheckReadiness(context.Background(), authorizationPDPReadAccess{
+			rows: map[string][]engine.QueryRow{
+				queryEntityTypeMigrationColumns.GetID(): entityTypeSourceColumnRows(),
+			},
+		}, engine.PlanContext{})
+
+		require.NoError(t, err)
+		assert.Equal(t, engine.ReadinessDeferred, result.State)
+		assert.Equal(t, []engine.OperationID{addEntityTypeHandleOperationID}, result.DeferredUntil)
+	})
+
+	tests := []struct {
+		name          string
+		records       []engine.QueryRow
+		expectedState engine.ReadinessState
+		expectedText  string
+		findingCount  int
+	}{
+		{
+			name: "unpopulated handles are ready",
+			records: []engine.QueryRow{
+				entityTypeHandleRow("id-1", "Legacy Person", nil),
+			},
+			expectedState: engine.ReadinessReady,
+			expectedText:  "ready to be backfilled",
+		},
+		{
+			name: "valid handles are already ready",
+			records: []engine.QueryRow{
+				entityTypeHandleRow("id-1", "Legacy Person", "legacy-person"),
+			},
+			expectedState: engine.ReadinessReady,
+			expectedText:  "already has a valid unique handle",
+		},
+		{
+			name: "invalid handle blocks migration",
+			records: []engine.QueryRow{
+				entityTypeHandleRow("id-1", "Legacy Person", "Invalid Handle"),
+			},
+			expectedState: engine.ReadinessBlocked,
+			expectedText:  "has invalid handle",
+			findingCount:  1,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := checker.CheckReadiness(context.Background(), authorizationPDPReadAccess{
+				rows: map[string][]engine.QueryRow{
+					queryEntityTypeMigrationColumns.GetID():   entityTypeExpandedColumnRows(),
+					queryEntityTypesForHandleBackfill.GetID(): test.records,
+				},
+			}, engine.PlanContext{})
+
+			require.NoError(t, err)
+			assert.Equal(t, test.expectedState, result.State)
+			assert.Contains(t, result.Summary, test.expectedText)
+			assert.Len(t, result.Findings, test.findingCount)
+			if test.findingCount > 0 {
+				assert.Equal(t, "unexpected_entity_type_handle_backfill", result.Findings[0].Code)
+				assert.NotEmpty(t, result.Findings[0].Remediation)
+			}
+		})
+	}
+}
+
+func TestBackfillEntityTypeHandleReadinessPropagatesInspectionFailure(t *testing.T) {
+	operation := newBackfillEntityTypeHandleOperation()
+
+	result, err := operation.(engine.ReadinessChecker).CheckReadiness(
+		context.Background(), authorizationPDPReadAccess{err: errors.New("database unavailable")},
+		engine.PlanContext{})
+
+	require.Error(t, err)
+	assert.Empty(t, result.State)
+	assert.ErrorContains(t, err, "database unavailable")
 }
 
 func TestConvertEntityTypeNameToHandle(t *testing.T) {

@@ -10,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/thunder-id/thunderid/internal/system/migration/engine"
 )
 
 func TestDefinitionMatchesProductVersion(t *testing.T) {
@@ -45,6 +47,9 @@ func TestDefinitionMatchesProductVersion(t *testing.T) {
 		string(definition.Plan.Rollback[0].Definition().ID))
 	assert.Equal(t, definition.Plan.Migrate[0].Definition().ID,
 		definition.Plan.Rollback[0].ForwardOperationID())
+	for _, operation := range definition.Plan.Operations() {
+		assert.Implements(t, (*engine.ReadinessChecker)(nil), operation)
+	}
 	for _, store := range definition.Manifest.Stores {
 		if store.ID == "runtime_persistent" || store.ID == "configdb" || store.ID == "entitydb" {
 			assert.True(t, store.Changed)

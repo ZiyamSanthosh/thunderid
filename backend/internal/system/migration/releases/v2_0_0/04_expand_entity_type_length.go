@@ -28,7 +28,8 @@ func newExpandEntityTypeLengthOperation() (engine.Operation, error) {
 			Kind:             engine.OperationKindSchemaChange,
 			InterruptionMode: engine.InterruptionModeAtomic,
 		},
-		PreVerifier: verifyEntityTypeLength,
+		ReadinessChecker: checkExpandEntityTypeLengthReadiness,
+		PreVerifier:      verifyEntityTypeLength,
 		Implementations: map[engine.DatabaseType]engine.SQLImplementation{
 			engine.DatabaseTypePostgres: {
 				Statements: []engine.SQLStatement{
@@ -39,6 +40,40 @@ func newExpandEntityTypeLengthOperation() (engine.Operation, error) {
 		},
 		PostVerifier: verifyEntityTypeLength,
 	})
+}
+
+func checkExpandEntityTypeLengthReadiness(
+	ctx context.Context,
+	access engine.ReadAccess,
+	_ engine.PlanContext,
+) (engine.ReadinessResult, error) {
+	verification, err := verifyEntityTypeLength(ctx, access, engine.ExecutionTarget{})
+	if err != nil {
+		return engine.ReadinessResult{}, err
+	}
+
+	switch verification.State {
+	case engine.VerificationSource:
+		return engine.ReadinessResult{
+			State:   engine.ReadinessReady,
+			Summary: "ENTITY.TYPE is ready to be expanded to 100 characters",
+		}, nil
+	case engine.VerificationTarget:
+		return engine.ReadinessResult{
+			State:   engine.ReadinessReady,
+			Summary: "ENTITY.TYPE already accepts up to 100 characters",
+		}, nil
+	default:
+		return engine.ReadinessResult{
+			State:   engine.ReadinessBlocked,
+			Summary: verification.Summary,
+			Findings: []engine.Finding{{
+				Code:        "unexpected_entity_type_length",
+				Message:     verification.Summary,
+				Remediation: "Restore ENTITY.TYPE to the expected source definition or reconcile the column before retrying",
+			}},
+		}, nil
+	}
 }
 
 func verifyEntityTypeLength(

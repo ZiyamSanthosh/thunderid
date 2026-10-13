@@ -5,6 +5,7 @@ package v2_0_0
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -44,6 +45,82 @@ func TestAddEntityTypeHandleUniquenessOperation(t *testing.T) {
 	assert.Equal(t, engine.VerificationInvalid, invalid.State)
 }
 
+func TestAddEntityTypeHandleUniquenessReadiness(t *testing.T) {
+	operation, err := newAddEntityTypeHandleUniquenessOperation()
+	require.NoError(t, err)
+	sqlOperation := operation.(*engine.SQLOperation)
+
+	tests := []struct {
+		name          string
+		access        authorizationPDPReadAccess
+		expectedState engine.ReadinessState
+		expectedText  string
+		findingCount  int
+	}{
+		{
+			name: "missing handle column is deferred",
+			access: entityTypeContractAccess(
+				entityTypeSourceColumnRows(), legacyEntityTypeUniqueColumns),
+			expectedState: engine.ReadinessDeferred,
+			expectedText:  "depends on the preceding handle backfill",
+		},
+		{
+			name: "source schema is deferred until backfill",
+			access: entityTypeContractAccess(
+				entityTypeExpandedColumnRows(), legacyEntityTypeUniqueColumns),
+			expectedState: engine.ReadinessDeferred,
+			expectedText:  "depends on the preceding handle backfill",
+		},
+		{
+			name: "target schema is ready",
+			access: entityTypeContractAccess(
+				entityTypeExpandedColumnRows(), legacyEntityTypeUniqueColumns, targetEntityTypeUniqueColumns),
+			expectedState: engine.ReadinessReady,
+			expectedText:  "already coexist",
+		},
+		{
+			name: "missing legacy uniqueness blocks migration",
+			access: entityTypeContractAccess(
+				entityTypeExpandedColumnRows(), targetEntityTypeUniqueColumns),
+			expectedState: engine.ReadinessBlocked,
+			expectedText:  "legacy uniqueness constraint does not match",
+			findingCount:  1,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := sqlOperation.CheckReadiness(
+				context.Background(), test.access, engine.PlanContext{})
+
+			require.NoError(t, err)
+			assert.Equal(t, test.expectedState, result.State)
+			assert.Contains(t, result.Summary, test.expectedText)
+			assert.Len(t, result.Findings, test.findingCount)
+			if test.expectedState == engine.ReadinessDeferred {
+				assert.Equal(t, []engine.OperationID{backfillEntityTypeHandleOperationID}, result.DeferredUntil)
+			}
+			if test.findingCount > 0 {
+				assert.Equal(t, "unexpected_entity_type_uniqueness_schema", result.Findings[0].Code)
+				assert.NotEmpty(t, result.Findings[0].Remediation)
+			}
+		})
+	}
+}
+
+func TestAddEntityTypeHandleUniquenessReadinessPropagatesInspectionFailure(t *testing.T) {
+	operation, err := newAddEntityTypeHandleUniquenessOperation()
+	require.NoError(t, err)
+
+	result, err := operation.(*engine.SQLOperation).CheckReadiness(
+		context.Background(), authorizationPDPReadAccess{err: errors.New("database unavailable")},
+		engine.PlanContext{})
+
+	require.Error(t, err)
+	assert.Empty(t, result.State)
+	assert.ErrorContains(t, err, "database unavailable")
+}
+
 func entityTypeContractAccess(
 	columns []engine.QueryRow,
 	uniqueColumns ...string,
@@ -58,5 +135,6 @@ func entityTypeContractAccess(
 	return authorizationPDPReadAccess{rows: map[string][]engine.QueryRow{
 		queryEntityTypeMigrationColumns.GetID():  columns,
 		queryEntityTypeUniqueConstraints.GetID(): constraintRows,
+		queryEntityTypeNullHandles.GetID():       {{"has_null_handles": false}},
 	}}
 }

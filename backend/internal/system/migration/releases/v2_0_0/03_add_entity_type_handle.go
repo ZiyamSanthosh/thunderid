@@ -35,7 +35,8 @@ func newAddEntityTypeHandleOperation() (engine.Operation, error) {
 			Kind:             engine.OperationKindSchemaChange,
 			InterruptionMode: engine.InterruptionModeAtomic,
 		},
-		PreVerifier: verifyEntityTypeColumnExpansion,
+		ReadinessChecker: checkAddEntityTypeHandleReadiness,
+		PreVerifier:      verifyEntityTypeColumnExpansion,
 		Implementations: map[engine.DatabaseType]engine.SQLImplementation{
 			engine.DatabaseTypePostgres: {
 				Statements: []engine.SQLStatement{
@@ -46,6 +47,41 @@ func newAddEntityTypeHandleOperation() (engine.Operation, error) {
 		},
 		PostVerifier: verifyEntityTypeColumnExpansion,
 	})
+}
+
+func checkAddEntityTypeHandleReadiness(
+	ctx context.Context,
+	access engine.ReadAccess,
+	_ engine.PlanContext,
+) (engine.ReadinessResult, error) {
+	columns, err := inspectEntityTypeMigrationColumns(ctx, access)
+	if err != nil {
+		return engine.ReadinessResult{}, err
+	}
+
+	state, summary := classifyEntityTypeColumnExpansion(columns)
+	switch state {
+	case engine.VerificationSource:
+		return engine.ReadinessResult{
+			State:   engine.ReadinessReady,
+			Summary: "The nullable entity-type handle column is ready to be added",
+		}, nil
+	case engine.VerificationTarget:
+		return engine.ReadinessResult{
+			State:   engine.ReadinessReady,
+			Summary: "The nullable entity-type handle column is already present",
+		}, nil
+	default:
+		return engine.ReadinessResult{
+			State:   engine.ReadinessBlocked,
+			Summary: summary,
+			Findings: []engine.Finding{{
+				Code:        "unexpected_entity_type_column_expansion",
+				Message:     summary,
+				Remediation: "Restore the expected ENTITY_TYPES source schema or reconcile the HANDLE column before retrying",
+			}},
+		}, nil
+	}
 }
 
 func verifyEntityTypeColumnExpansion(

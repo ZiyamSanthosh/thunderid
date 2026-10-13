@@ -100,6 +100,92 @@ func TestRemoveRevocationReasonCheckVerification(t *testing.T) {
 	assert.Equal(t, engine.VerificationInvalid, invalid.State)
 }
 
+func TestRemoveRevocationReasonCheckReadiness(t *testing.T) {
+	operation, err := newRemoveRevocationReasonCheckOperation()
+	require.NoError(t, err)
+	sqlOperation := operation.(*engine.SQLOperation)
+
+	tests := []struct {
+		name          string
+		access        operationReadAccess
+		expectedState engine.ReadinessState
+		expectedText  string
+		findingCount  int
+	}{
+		{
+			name: "source schema is ready",
+			access: operationReadAccess{
+				columnRows: revokedTokenReasonColumnRows(),
+				constraintRows: []engine.QueryRow{{
+					"constraint_name": legacyRevokedTokenReasonConstraint,
+				}},
+			},
+			expectedState: engine.ReadinessReady,
+			expectedText:  "ready to be removed",
+		},
+		{
+			name: "target schema is ready",
+			access: operationReadAccess{
+				columnRows: revokedTokenReasonColumnRows(),
+			},
+			expectedState: engine.ReadinessReady,
+			expectedText:  "already been removed",
+		},
+		{
+			name: "unexpected column blocks migration",
+			access: operationReadAccess{
+				columnRows: []engine.QueryRow{{
+					"is_nullable": "YES", "data_type": "character varying",
+					"character_maximum_length": int64(30),
+				}},
+			},
+			expectedState: engine.ReadinessBlocked,
+			expectedText:  "unexpected REVOKED_TOKEN.revocation_reason definition",
+			findingCount:  1,
+		},
+		{
+			name: "unexpected constraint blocks migration",
+			access: operationReadAccess{
+				columnRows: revokedTokenReasonColumnRows(),
+				constraintRows: []engine.QueryRow{{
+					"constraint_name": "custom_revocation_reason_check",
+				}},
+			},
+			expectedState: engine.ReadinessBlocked,
+			expectedText:  "unexpected revoked-token reason check constraint",
+			findingCount:  1,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := sqlOperation.CheckReadiness(
+				context.Background(), test.access, engine.PlanContext{})
+
+			require.NoError(t, err)
+			assert.Equal(t, test.expectedState, result.State)
+			assert.Contains(t, result.Summary, test.expectedText)
+			assert.Len(t, result.Findings, test.findingCount)
+			if test.findingCount > 0 {
+				assert.Equal(t, "unexpected_revoked_token_reason_schema", result.Findings[0].Code)
+				assert.NotEmpty(t, result.Findings[0].Remediation)
+			}
+		})
+	}
+}
+
+func TestRemoveRevocationReasonCheckReadinessPropagatesInspectionFailure(t *testing.T) {
+	operation, err := newRemoveRevocationReasonCheckOperation()
+	require.NoError(t, err)
+
+	result, err := operation.(*engine.SQLOperation).CheckReadiness(
+		context.Background(), operationReadAccess{err: errors.New("database unavailable")}, engine.PlanContext{})
+
+	require.Error(t, err)
+	assert.Empty(t, result.State)
+	assert.ErrorContains(t, err, "database unavailable")
+}
+
 func TestRemoveRevocationReasonCheckPropagatesInspectionFailure(t *testing.T) {
 	operation, err := newRemoveRevocationReasonCheckOperation()
 	require.NoError(t, err)

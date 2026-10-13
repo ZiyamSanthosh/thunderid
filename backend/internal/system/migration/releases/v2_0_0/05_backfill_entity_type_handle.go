@@ -15,8 +15,10 @@ import (
 )
 
 const (
-	entityTypeHandleBatchSize = 100
-	maxEntityTypeHandleLength = 100
+	entityTypeHandleBatchSize                              = 100
+	maxEntityTypeHandleLength                              = 100
+	addEntityTypeHandleOperationID      engine.OperationID = "2.0.0/configdb/03_add_entity_type_handle"
+	backfillEntityTypeHandleOperationID engine.OperationID = "2.0.0/configdb/05_backfill_entity_type_handle"
 )
 
 var (
@@ -64,7 +66,7 @@ func newBackfillEntityTypeHandleOperation() engine.Operation {
 
 func (*backfillEntityTypeHandleOperation) Definition() engine.OperationDefinition {
 	return engine.OperationDefinition{
-		ID:               "2.0.0/configdb/05_backfill_entity_type_handle",
+		ID:               backfillEntityTypeHandleOperationID,
 		Description:      "Create valid entity-type handles from legacy names",
 		StoreID:          engine.StoreIDConfigDB,
 		Kind:             engine.OperationKindDataChange,
@@ -85,6 +87,52 @@ func (*backfillEntityTypeHandleOperation) ResolveTargets(
 		return targets, nil
 	}
 	return []engine.ExecutionTarget{{}}, nil
+}
+
+func (*backfillEntityTypeHandleOperation) CheckReadiness(
+	ctx context.Context,
+	access engine.ReadAccess,
+	_ engine.PlanContext,
+) (engine.ReadinessResult, error) {
+	columns, err := inspectEntityTypeMigrationColumns(ctx, access)
+	if err != nil {
+		return engine.ReadinessResult{}, err
+	}
+	name, hasName := columns["NAME"]
+	if !hasName || !matchesEntityTypeColumn(name, "NO") {
+		return blockedEntityTypeHandleBackfillReadiness(
+			"ENTITY_TYPES.NAME does not match the accepted source schema"), nil
+	}
+	handle, hasHandle := columns["HANDLE"]
+	if !hasHandle {
+		return engine.ReadinessResult{
+			State:         engine.ReadinessDeferred,
+			Summary:       "Entity-type handle readiness depends on the preceding column expansion",
+			DeferredUntil: []engine.OperationID{addEntityTypeHandleOperationID},
+		}, nil
+	}
+	if !matchesEntityTypeColumn(handle, "YES") {
+		return blockedEntityTypeHandleBackfillReadiness(
+			"The entity-type handle column has an unexpected definition"), nil
+	}
+
+	verification, err := verifyEntityTypeHandleBackfill(ctx, access, "")
+	if err != nil {
+		return engine.ReadinessResult{}, err
+	}
+	if verification.State == engine.VerificationInvalid {
+		return blockedEntityTypeHandleBackfillReadiness(verification.Summary), nil
+	}
+	if verification.State == engine.VerificationTarget {
+		return engine.ReadinessResult{
+			State:   engine.ReadinessReady,
+			Summary: "Every entity type already has a valid unique handle",
+		}, nil
+	}
+	return engine.ReadinessResult{
+		State:   engine.ReadinessReady,
+		Summary: "Entity-type handles are ready to be backfilled",
+	}, nil
 }
 
 func (*backfillEntityTypeHandleOperation) PreVerify(
@@ -358,5 +406,17 @@ func invalidEntityTypeHandleBackfill(summary string) engine.VerificationResult {
 	return engine.VerificationResult{
 		State: engine.VerificationInvalid, Summary: summary,
 		Findings: []engine.Finding{{Code: "unexpected_entity_type_handle_backfill", Message: summary}},
+	}
+}
+
+func blockedEntityTypeHandleBackfillReadiness(summary string) engine.ReadinessResult {
+	return engine.ReadinessResult{
+		State:   engine.ReadinessBlocked,
+		Summary: summary,
+		Findings: []engine.Finding{{
+			Code:        "unexpected_entity_type_handle_backfill",
+			Message:     summary,
+			Remediation: "Reconcile the ENTITY_TYPES schema and handle values before retrying",
+		}},
 	}
 }

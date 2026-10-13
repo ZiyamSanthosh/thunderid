@@ -17,6 +17,7 @@ import (
 
 type entityMigrationReadAccess struct {
 	rows []engine.QueryRow
+	err  error
 }
 
 func (a entityMigrationReadAccess) Query(
@@ -25,6 +26,9 @@ func (a entityMigrationReadAccess) Query(
 	query dbmodel.DBQuery,
 	_ ...interface{},
 ) ([]engine.QueryRow, error) {
+	if a.err != nil {
+		return nil, a.err
+	}
 	if storeID != engine.StoreIDEntityDB || query.GetID() != queryEntityTypeLength.GetID() {
 		return nil, errors.New("unexpected query")
 	}
@@ -56,6 +60,69 @@ func TestExpandEntityTypeLengthOperation(t *testing.T) {
 	invalid, err := operation.PreVerify(context.Background(), entityTypeLengthAccess(255), engine.ExecutionTarget{})
 	require.NoError(t, err)
 	assert.Equal(t, engine.VerificationInvalid, invalid.State)
+}
+
+func TestExpandEntityTypeLengthReadiness(t *testing.T) {
+	operation, err := newExpandEntityTypeLengthOperation()
+	require.NoError(t, err)
+	sqlOperation := operation.(*engine.SQLOperation)
+
+	tests := []struct {
+		name          string
+		access        entityMigrationReadAccess
+		expectedState engine.ReadinessState
+		expectedText  string
+		findingCount  int
+	}{
+		{
+			name:          "source column is ready",
+			access:        entityTypeLengthAccess(50),
+			expectedState: engine.ReadinessReady,
+			expectedText:  "ready to be expanded",
+		},
+		{
+			name:          "target column is ready",
+			access:        entityTypeLengthAccess(100),
+			expectedState: engine.ReadinessReady,
+			expectedText:  "already accepts",
+		},
+		{
+			name:          "unexpected column blocks migration",
+			access:        entityTypeLengthAccess(255),
+			expectedState: engine.ReadinessBlocked,
+			expectedText:  "Unexpected ENTITY.TYPE maximum length",
+			findingCount:  1,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := sqlOperation.CheckReadiness(
+				context.Background(), test.access, engine.PlanContext{})
+
+			require.NoError(t, err)
+			assert.Equal(t, test.expectedState, result.State)
+			assert.Contains(t, result.Summary, test.expectedText)
+			assert.Len(t, result.Findings, test.findingCount)
+			if test.findingCount > 0 {
+				assert.Equal(t, "unexpected_entity_type_length", result.Findings[0].Code)
+				assert.NotEmpty(t, result.Findings[0].Remediation)
+			}
+		})
+	}
+}
+
+func TestExpandEntityTypeLengthReadinessPropagatesInspectionFailure(t *testing.T) {
+	operation, err := newExpandEntityTypeLengthOperation()
+	require.NoError(t, err)
+
+	result, err := operation.(*engine.SQLOperation).CheckReadiness(
+		context.Background(), entityMigrationReadAccess{err: errors.New("database unavailable")},
+		engine.PlanContext{})
+
+	require.Error(t, err)
+	assert.Empty(t, result.State)
+	assert.ErrorContains(t, err, "database unavailable")
 }
 
 func entityTypeLengthAccess(length int64) entityMigrationReadAccess {

@@ -7,8 +7,16 @@ import (
 	"context"
 	"fmt"
 
+	dbmodel "github.com/thunder-id/thunderid/internal/system/database/model"
 	"github.com/thunder-id/thunderid/internal/system/migration/engine"
 )
+
+var queryEntityTypeNullHandles = dbmodel.DBQuery{
+	ID: "MIG-CFG_MGT-13",
+	PostgresQuery: `SELECT EXISTS (
+		SELECT 1 FROM "ENTITY_TYPES" WHERE HANDLE IS NULL
+	) AS has_null_handles`,
+}
 
 func newFinalizeEntityTypeHandleOperation() (engine.Operation, error) {
 	return engine.NewSQLOperation(engine.SQLOperationConfig{
@@ -19,7 +27,8 @@ func newFinalizeEntityTypeHandleOperation() (engine.Operation, error) {
 			Kind:             engine.OperationKindSchemaChange,
 			InterruptionMode: engine.InterruptionModeAtomic,
 		},
-		PreVerifier: verifyEntityTypeFinalization,
+		ReadinessChecker: checkFinalizeEntityTypeHandleReadiness,
+		PreVerifier:      verifyEntityTypeFinalization,
 		Implementations: map[engine.DatabaseType]engine.SQLImplementation{
 			engine.DatabaseTypePostgres: {
 				Statements: []engine.SQLStatement{
@@ -31,6 +40,40 @@ func newFinalizeEntityTypeHandleOperation() (engine.Operation, error) {
 		},
 		PostVerifier: verifyEntityTypeFinalization,
 	})
+}
+
+func checkFinalizeEntityTypeHandleReadiness(
+	ctx context.Context,
+	access engine.ReadAccess,
+	_ engine.PlanContext,
+) (engine.ReadinessResult, error) {
+	verification, err := verifyEntityTypeFinalization(ctx, access, engine.ExecutionTarget{})
+	if err != nil {
+		return engine.ReadinessResult{}, err
+	}
+
+	switch verification.State {
+	case engine.VerificationSource:
+		return engine.ReadinessResult{
+			State:   engine.ReadinessReady,
+			Summary: "The entity-type handle schema is ready to be finalized",
+		}, nil
+	case engine.VerificationTarget:
+		return engine.ReadinessResult{
+			State:   engine.ReadinessReady,
+			Summary: "The entity-type handle schema is already finalized",
+		}, nil
+	default:
+		return engine.ReadinessResult{
+			State:   engine.ReadinessBlocked,
+			Summary: verification.Summary,
+			Findings: []engine.Finding{{
+				Code:        "unexpected_entity_type_contract_schema",
+				Message:     verification.Summary,
+				Remediation: "Complete or reconcile the entity-type handle migration before retrying contract",
+			}},
+		}, nil
+	}
 }
 
 func verifyEntityTypeFinalization(
@@ -56,6 +99,25 @@ func verifyEntityTypeFinalization(
 	if hasName && matchesEntityTypeColumn(name, "NO") &&
 		hasHandle && matchesEntityTypeColumn(handle, "YES") &&
 		legacyUnique && targetUnique {
+		nullHandleRows, err := access.Query(ctx, engine.StoreIDConfigDB, queryEntityTypeNullHandles)
+		if err != nil {
+			return engine.VerificationResult{}, fmt.Errorf("inspect null entity-type handles: %w", err)
+		}
+		if len(nullHandleRows) != 1 {
+			return engine.VerificationResult{}, fmt.Errorf(
+				"inspect null entity-type handles: expected one result row, found %d", len(nullHandleRows))
+		}
+		hasNullHandles, err := nullHandleRows[0].Bool("has_null_handles")
+		if err != nil {
+			return engine.VerificationResult{}, fmt.Errorf("inspect null entity-type handles: %w", err)
+		}
+		if hasNullHandles {
+			summary := "Entity-type handles still contain null values"
+			return engine.VerificationResult{
+				State: engine.VerificationInvalid, Summary: summary,
+				Findings: []engine.Finding{{Code: "entity_type_handle_nulls_remain", Message: summary}},
+			}, nil
+		}
 		return engine.VerificationResult{
 			State:   engine.VerificationSource,
 			Summary: "The compatible entity-type schema is ready for contract",
