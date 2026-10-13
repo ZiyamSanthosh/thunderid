@@ -86,30 +86,34 @@ transactional change capture or another verified synchronization mechanism.
 
 ### Restricted ZDM
 
-Authentication and token traffic remain available, but explicitly declared operations are
-temporarily fenced because their writes cannot safely participate in the migration.
+Authentication, authorization and token traffic remain available, while operations whose writes
+cannot safely participate in the migration are fenced.
 
 The minimum Restricted ZDM service contract keeps these capabilities available:
 
-- all supported authentication and token flows;
+- supported authentication, authorization and token flows;
 - SSO, consent, logout and revocation behavior required by those flows;
-- login-critical entity mutations, including lifecycle and passkey state; and
-- JIT provisioning, including its configured entity, group and role-assignment effects.
+- login-critical mutations that do not invoke a fenced feature; and
+- health, protocol discovery and frontend support endpoints required by those flows.
 
 The following operations are fenced by default when their affected data is under migration:
 
 - configuration changes;
 - user registration;
-- account recovery; and
-- administrative entity creation, update and deletion.
+- account recovery;
+- JIT user provisioning;
+- organization-unit creation; and
+- administrative operations.
 
-Restrictions must be derived from the active migration's write dependencies. ThunderID must not
-apply one hard-coded login-only policy to every migration.
+The foundation implementation exposes `operating_mode: full | restricted`. An administrator enables
+restricted mode on every serving source instance and restarts those instances before migration work
+that requires fencing. The migration engine does not activate or deactivate the mode automatically.
+All source instances must use the same configured mode so that one instance cannot continue accepting
+fenced writes.
 
-Registration, recovery and administrative entity management can remain available when their
-mutations are migration-compatible, but preserving them is not part of the minimum Restricted ZDM
-contract. JIT provisioning and login-critical entity mutations are part of that contract and must not
-be disabled as the normal migration strategy.
+The initial restricted mode is deliberately a stable baseline rather than a per-release migration
+policy. A developer introducing another write-capable flow, executor or non-HTTP entry point is
+responsible for defining and enforcing its feature gate before the first mutation.
 
 ### Writer handoff
 
@@ -171,6 +175,83 @@ using the target release image. Request-serving replicas do not each start their
 Normal startup never applies migration. It performs a read-only compatibility gate and terminates
 with a precise diagnostic when any configured store is incompatible, incomplete, failed or ahead of
 the binary.
+
+### Default ZDM execution topology
+
+The default ZDM topology uses a standalone migration process created from the target ThunderID
+artifact. Target-version request-serving instances are not required to serve while migration is in
+progress.
+
+```text
+Source-version instances continue serving
+                 |
+                 v
+Target artifact runs as a standalone migration job
+                 |
+                 | expand, migrate, catch up and validate
+                 v
+Target stores become serving-compatible
+                 |
+                 v
+Start target-version serving instances
+                 |
+                 v
+Shift traffic and drain source-version instances
+                 |
+                 v
+Authorize contract after the rollback boundary
+```
+
+This remains a zero-downtime upgrade because the source-version instances preserve request
+availability until the target version is ready. The migration job does not open an HTTP listener and
+exits after completing its requested work. The later target-serving process uses the same artifact
+but initializes its own service objects.
+
+A hosted mode in which a long-lived target-serving instance also owns a background migration
+coordinator is not required for the base ZDM guarantee. It is a future optimization and must not be
+a prerequisite for release migrations.
+
+### Business services in standalone migration mode
+
+An operation can implement its work with SQL, ThunderID business-service calls or both. SQL versus
+programmatic implementation is independent of atomic versus resumable execution.
+
+Standalone commands that execute service-dependent operations must initialize the required service
+graph before constructing the executable release plan. They must not start the HTTP server or
+unrelated background workers. Database-only commands and phases must not initialize normal business
+services unnecessarily.
+
+The required order is:
+
+```text
+Load static release manifest and operation declarations
+                 |
+                 v
+Verify that prior phases reached their required boundary
+                 |
+                 v
+Initialize services required by the selected phase
+                 |
+                 v
+Construct runtime-bound operation instances
+                 |
+                 v
+Execute or resume the selected phase
+                 |
+                 v
+Persist progress, verification and store state, then exit
+```
+
+Service-based operations receive dependencies through release-specific constructors. The generic
+migration engine does not import ThunderID business packages and does not require a separate
+programmatic executor. A service-based operation still implements the normal `AtomicOperation` or
+`ResumableOperation` contract.
+
+For resumable work, the operation must pass the executor-provided context to every service call so
+that business mutations and checkpoint updates can share the owning database transaction. The
+operation developer owns batch selection, checkpoint representation, transformations, record-level
+deployment scoping and the safety of external side effects. Cross-database service mutations are not
+assumed to be atomic.
 
 ## Migration lifecycle
 
@@ -495,21 +576,22 @@ The foundation release must introduce the common capabilities required by future
 8. Bounded backfill orchestration with pause, resume and throttling.
 9. Validation, reporting and failure diagnostics.
 10. Explicit activation and finalization controls.
-11. A central capability-fencing mechanism.
+11. A central feature-gating mechanism and restricted operating mode.
 12. Transactional change capture and consumer checkpoints where live writes must be preserved.
 13. Standard conflict policies, aggregate revision allocation and projection-state management for
     live mutable backfills.
 
 ### Required change-capture coverage
 
-`runtime_persistent` must have complete transactional outbox coverage for every mutation that can
-occur during online authentication and token traffic, including cleanup and deletion paths.
+`runtime_persistent` remains writable for supported authentication and token traffic. Its migration
+operations must preserve source-version writes through a compatible representation. Transactional
+change capture is required only when a migration introduces a separate representation that cannot
+be brought to a verified target state from the authoritative database before activation.
 
 `entitydb` mutations that remain enabled during Restricted or Full ZDM must have a compatible
-change-capture or dual-representation strategy. Coverage for lifecycle, passkey and JIT provisioning
-mutations is mandatory because they are part of the minimum Restricted ZDM contract. Registration,
-recovery and administrative entity-management mutations are fenced unless the migration explicitly
-supports them.
+representation, change-capture or dual-representation strategy. Registration, recovery, JIT user
+provisioning, organization-unit creation and administrative operations are fenced in the foundation
+restricted mode.
 
 Config DB management writes are fenced by default while Config DB data is migrated. Runtime paths
 that also write Config DB must be inventoried separately from management operations. Config DB writes
@@ -524,10 +606,10 @@ upgrade.
 
 | Logical store | Default online policy |
 |---|---|
-| `config` | Keep Data Plane reads available and fence affected Control Plane writes; preserve runtime writes required by JIT provisioning through compatibility writes or change capture |
-| `entitydb` | Keep login-critical and JIT provisioning mutations writable; fence administrative entity creation, update and deletion by default |
+| `config` | Keep reads needed by supported runtime flows available; fence management writes and JIT provisioning in restricted mode |
+| `entitydb` | Keep compatible login-critical mutations writable; fence registration, recovery, JIT provisioning, organization-unit creation and administrative operations |
 | `runtime_transient` | Share a compatible representation or use versioned namespaces and TTL drain |
-| `runtime_persistent` | Keep writable and capture mutations transactionally through the outbox |
+| `runtime_persistent` | Keep writable through backward-compatible schema and migration operations; add change capture only when the selected migration pattern requires it |
 
 Migration is selected per logical store. One release can use different approaches for different
 stores, coordinated by one global release plan.
@@ -555,7 +637,7 @@ For every persisted-data change, the feature developer must provide:
 9. A stable aggregate key and a selected standard conflict policy for live mutable data.
 10. Insert, update and delete handling.
 11. Domain validation rules.
-12. Required operation capabilities and capability fences.
+12. Required product features and any gates needed for newly introduced write paths.
 13. Mixed-version compatibility behavior.
 14. Activation and rollback boundary.
 15. Resource, lock and expected-duration analysis.
@@ -576,7 +658,7 @@ The shared migration engine owns:
 - conditional conflict-policy enforcement and tombstone handling;
 - framework-managed projection state;
 - retry classification;
-- capability-policy activation;
+- reusable operating-mode and feature-gate enforcement points for serving code;
 - progress, metrics and reports;
 - activation and finalization gates; and
 - startup compatibility evidence.
@@ -623,10 +705,11 @@ The following rules are mandatory after the foundation release:
 10. Make every retryable operation idempotent.
 11. Define a rollback boundary before implementation is approved.
 12. Separate contraction from initial expansion and serving readiness.
-13. Use the central migration engine and capability-policy system.
+13. Use the central migration engine and feature-gate system.
 14. Provide implementations and tests for every supported production database provider.
 15. Document any temporary reduction from Full ZDM to Restricted ZDM.
-16. Preserve login-critical entity mutations and JIT provisioning in Restricted ZDM.
+16. Preserve supported authentication, authorization and token behavior in Restricted ZDM while
+    fencing incompatible auxiliary mutations.
 
 Violating these rules is a release blocker unless the migration is explicitly approved as a downtime
 exception.
@@ -657,36 +740,36 @@ Target release plan
 A store can become internally ready before another store, but the target release cannot serve until
 every required store satisfies the release manifest.
 
-## Capability fencing
+## Restricted operating mode and feature gating
 
-Migration restrictions are expressed as capabilities, not scattered endpoint checks.
+The foundation implementation combines an HTTP boundary with feature-level enforcement.
 
-Example policy:
+Restricted mode disables these feature identifiers:
 
 ```text
-config.flow.update                 fenced
-registration.execute               fenced
-recovery.execute                   fenced
-entity.management.create           fenced
-entity.management.update           fenced
-entity.management.delete           fenced
-entity.runtime.passkey.update       allowed
-entity.runtime.lifecycle.update     allowed
-jit.provision                       allowed
-group.assignment.jit               allowed
-role.assignment.jit                allowed
-runtime.session.update             allowed
-runtime.revocation.update          allowed
+user.registration             disabled
+account.recovery              disabled
+administration                disabled
+user.provisioning             disabled
+organization_unit.creation    disabled
 ```
 
-The migration engine activates the policy for the affected deployment and phase. Services and flow
-executors declare the capabilities they require and fail before the first mutation when a capability
-is fenced.
+The restricted-mode middleware exposes only the HTTP endpoints required for authentication,
+authorization, token operations, health checks, protocol discovery and their frontend support. It
+rejects other endpoints with `feature_unavailable`. The flow service rejects registration,
+user-onboarding, recovery and administration flows. Provisioning and organization-unit executors
+also check their feature before their first mutation, protecting nested executor usage behind the
+shared `/flow/execute` endpoint.
 
-Multi-step operations such as provisioning must not partially execute and then discover that a later
-role or group assignment is fenced. Capability preflight covers the whole configured operation before
-it begins. Because JIT provisioning is part of the minimum Restricted ZDM contract, its configured
-steps must have a compatible mutation path before the migration can claim ZDM readiness.
+`full` is the default operating mode. An omitted value also preserves full access. Unsupported values
+fail configuration validation. Mode changes are administrator-controlled and require all applicable
+instances to be restarted with a consistent configuration.
+
+Future improvements are intentionally outside the current scope:
+
+- hide or disable unavailable Console functions when product requirements call for it;
+- add feature identifiers and enforcement when developers introduce new write paths; and
+- automate mode coordination only if a future deployment workflow requires it.
 
 ## Validation and cutover
 
@@ -739,7 +822,7 @@ Documentation is not sufficient enforcement. Migration rules become release gate
 - resume from partial progress;
 - consumer lag and destination outage;
 - failed validation and blocked cutover;
-- capability fencing before mutation;
+- restricted-mode and feature-gate enforcement before mutation;
 - provider-specific DDL and lock behavior; and
 - rollback before the declared boundary.
 
@@ -777,13 +860,17 @@ After this decision is approved, migration-engine work proceeds in this order:
 4. Add isolated migration commands to the ThunderID binary.
 5. Implement release-plan registration and standard operation contracts.
 6. Implement atomic and checkpointed execution with verified resume.
-7. Implement capability fencing.
-8. Implement transactional outbox, inbox and consumer checkpoints for required stores.
-9. Implement standard conflict policies, aggregate revisions and projection-state handling.
-10. Implement live backfill, delta processing and activation controls.
-11. Implement database-copy snapshot, relay, validation and cutover orchestration.
-12. Add mixed-version and failure-injection qualification suites.
-13. Ship the foundation release through the controlled downtime upgrade path.
+7. Add standalone service-enabled execution for migrate-phase and applicable resume operations.
+8. Implement restricted operating mode and feature gating. Completed.
+9. Qualify the base in-place path with a representative multi-phase migration while a restricted
+   source instance continues serving authentication, authorization and token traffic.
+10. Add deployment-selective data migration and durable target-aware progress for CP/DP deployments.
+11. Add change capture, conflict handling and projection state only for concrete migrations whose
+    writable representations require them.
+12. Implement database-copy snapshot, relay, validation and cutover orchestration when that fallback
+    becomes a product requirement.
+13. Extend mixed-version and failure-injection qualification for each implemented migration pattern.
+14. Ship the foundation release through the controlled downtime upgrade path.
 
 ## Final policy statement
 
