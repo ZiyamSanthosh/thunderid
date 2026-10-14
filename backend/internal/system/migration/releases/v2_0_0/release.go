@@ -32,10 +32,6 @@ func DefinitionWithDependencies(dependencies Dependencies) (*engine.ReleaseDefin
 }
 
 func migrationPlan(Dependencies) (engine.MigrationPlan, error) {
-	removeReasonCheck, err := newRemoveRevocationReasonCheckOperation()
-	if err != nil {
-		return engine.MigrationPlan{}, err
-	}
 	createAuthorizationPDPConnection, err := newCreateAuthorizationPDPConnectionOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
@@ -68,6 +64,46 @@ func migrationPlan(Dependencies) (engine.MigrationPlan, error) {
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
+	createVariable, err := newCreateVariableOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	createSecret, err := newCreateSecretOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	createGateway, err := newCreateGatewayOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	createConfigurationVersion, err := newCreateConfigurationVersionOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	createGatewayAppliedVersion, err := newCreateGatewayAppliedVersionOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	createGatewayExcludedResource, err := newCreateGatewayExcludedResourceOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	createResourceSharingPolicy, err := newCreateResourceSharingPolicyOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	createResourceSharingPolicyUnit, err := newCreateResourceSharingPolicyUnitOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	createResourceSharingPolicyOverlayRule, err := newCreateResourceSharingPolicyOverlayRuleOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	createResourceOverlayValue, err := newCreateResourceOverlayValueOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
 	backfillEntityTypeHandle := newBackfillEntityTypeHandleOperation()
 	addEntityTypeHandleUniqueness, err := newAddEntityTypeHandleUniquenessOperation()
 	if err != nil {
@@ -85,7 +121,6 @@ func migrationPlan(Dependencies) (engine.MigrationPlan, error) {
 	return engine.MigrationPlan{
 		TargetVersion: "2.0.0",
 		Expand: []engine.Operation{
-			removeReasonCheck,
 			createAuthorizationPDPConnection,
 			addEntityTypeHandle,
 			expandEntityTypeLength,
@@ -94,6 +129,16 @@ func migrationPlan(Dependencies) (engine.MigrationPlan, error) {
 			addEntityStateDefault,
 			addSSOSessionProperties,
 			createNotificationTemplate,
+			createVariable,
+			createSecret,
+			createGateway,
+			createConfigurationVersion,
+			createGatewayAppliedVersion,
+			createGatewayExcludedResource,
+			createResourceSharingPolicy,
+			createResourceSharingPolicyUnit,
+			createResourceSharingPolicyOverlayRule,
+			createResourceOverlayValue,
 		},
 		Migrate: []engine.Operation{
 			backfillEntityTypeHandle,

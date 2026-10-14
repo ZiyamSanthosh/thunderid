@@ -4,7 +4,7 @@
 
 The current migration increment implements only the PostgreSQL expand operation:
 
-`2.0.0/entitydb/08_expand_entity_identifier_primary_key`
+`2.0.0/entitydb/07_expand_entity_identifier_primary_key`
 
 It changes the `ENTITY_IDENTIFIER` primary key from
 `(ENTITY_ID, DEPLOYMENT_ID, NAME)` to

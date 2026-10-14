@@ -21,8 +21,8 @@ func verifyResumeAfterFinalizationFailure(t *testing.T, environment migrationhar
 		configDB := environment.OpenDatabase(t, "configdb")
 		_, err := configDB.Exec(`DELETE FROM "MIGRATION_PROGRESS"
 			WHERE OPERATION_ID IN (
-				'2.0.0/configdb/05_backfill_entity_type_handle',
-				'2.0.0/configdb/06_add_entity_type_handle_uniqueness'
+				'2.0.0/configdb/04_backfill_entity_type_handle',
+				'2.0.0/configdb/05_add_entity_type_handle_uniqueness'
 			)`)
 		require.NoError(t, err)
 
@@ -73,10 +73,6 @@ func verifyResumeAbandonedRun(t *testing.T, environment migrationharness.Environ
 		prepareAbandonedStore(t, configDB, "configdb")
 
 		runtimeDB := environment.OpenDatabase(t, "runtime_persistent")
-		_, err = runtimeDB.Exec(`ALTER TABLE "REVOKED_TOKEN"
-			ADD CONSTRAINT "REVOKED_TOKEN_revocation_reason_check"
-			CHECK (REVOCATION_REASON IN ('explicit', 'refresh_rotation'))`)
-		require.NoError(t, err)
 		prepareAbandonedStore(t, runtimeDB, "runtime_persistent")
 
 		environment.RunMigrationCommand(t, "resume")
@@ -91,8 +87,7 @@ func verifyResumeAbandonedRun(t *testing.T, environment migrationharness.Environ
 			"1.0.0:contract_ready:completed")
 		environment.RunMigrationCommand(t, "apply migrate")
 		verifyCreateAuthorizationPDPConnection(t, environment)
-		verifyRemoveRevocationReasonCheck(t, environment)
-		t.Log("verified: resume recovered an abandoned run and reapplied both pending operations")
+		t.Log("verified: resume recovered an abandoned run and reapplied pending operations")
 	})
 }
 

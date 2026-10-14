@@ -49,7 +49,7 @@ Phase rollback includes every store that has progress in the phase. `BeginRollba
 
 Sequence: `apply expand` finishes runtime_persistent (its run row is deleted), then a configdb operation fails. `rollback --phase expand` begins configdb, then fails on runtime_persistent with "active run does not match phase", and `markFailed` marks the begun stores failed. Every retry fails the same way, because the missing row never reappears.
 
-The integration test `TestPostgresExpandPhaseRollbackRestoresEveryParticipatingStore` ([05_backfill_entity_type_handle_rollback_test.go](backend/tests/migration/releases/v2_0_0/05_backfill_entity_type_handle_rollback_test.go)) inserts a run row in every database before running the command. A real failure does not produce that state.
+The integration test `TestPostgresExpandPhaseRollbackRestoresEveryParticipatingStore` ([04_backfill_entity_type_handle_rollback_test.go](backend/tests/migration/releases/v2_0_0/04_backfill_entity_type_handle_rollback_test.go)) inserts a run row in every database before running the command. A real failure does not produce that state.
 
 Fix direction: either keep the run row until the whole run has finished in every namespace, or let `BeginRollbackScope` recreate a missing row from the failing namespace's run (phase, selection) instead of erroring. Add a test that produces the failure with a real failing operation.
 
@@ -66,9 +66,9 @@ Fix direction: treat an existing completed progress row for the same target as "
 Confidence: high. Partly mitigated for contract.
 
 The old binary keeps serving while the store is `migrating` and inserts entity types with `HANDLE NULL`, or renames existing ones.
-- The backfill pages with `ID > lastID` ([05_backfill_entity_type_handle.go](backend/internal/system/migration/releases/v2_0_0/05_backfill_entity_type_handle.go)). Rows that appear behind the cursor are never visited, and renames after the backfill are never re-synced.
+- The backfill pages with `ID > lastID` ([04_backfill_entity_type_handle.go](backend/internal/system/migration/releases/v2_0_0/04_backfill_entity_type_handle.go)). Rows that appear behind the cursor are never visited, and renames after the backfill are never re-synced.
 - On resume the executor continues from the saved checkpoint ([resumable_executor.go](backend/internal/system/migration/engine/resumable_executor.go), `executeBatches`) and never rescans from the beginning. If post-verification found remaining null handles, every retry fails the same way.
-- What is now better: operation 07's verification detects null handles, so `apply contract` is blocked in preflight instead of failing inside the transaction ([07_finalize_entity_type_handle.go](backend/internal/system/migration/releases/v2_0_0/07_finalize_entity_type_handle.go)).
+- What is now better: operation 06's verification detects null handles, so `apply contract` is blocked in preflight instead of failing inside the transaction ([06_finalize_entity_type_handle.go](backend/internal/system/migration/releases/v2_0_0/06_finalize_entity_type_handle.go)).
 - What is still missing: once the store is `contract_ready`, migrate cannot be re-run (`requestedPhaseCompleted`), so the operator has no engine command to fix the null handles. The remediation text names no command.
 
 Fix direction: a database-side mechanism installed in expand (trigger or default derived from the name), or a catch-up pass that rescans from the beginning before contract, or a resumable operation that restarts its scan when post-verification fails.
@@ -76,7 +76,7 @@ Fix direction: a database-side mechanism installed in expand (trigger or default
 ### R4. The backfill rollback operation clears every non-null handle in scope
 Confidence: high.
 
-[05_backfill_entity_type_handle_rollback.go](backend/internal/system/migration/releases/v2_0_0/05_backfill_entity_type_handle_rollback.go) selects `HANDLE IS NOT NULL` and clears all of them. Anything that did not come from this run is lost (handles created by the new binary, or by an earlier selective run). A deployment-specific rollback is correctly scoped to its deployments, but a store-wide rollback wipes everything. The documents now describe this accurately, but it is still data loss in a plausible scenario (rollback after the new binary has run).
+[04_backfill_entity_type_handle_rollback.go](backend/internal/system/migration/releases/v2_0_0/04_backfill_entity_type_handle_rollback.go) selects `HANDLE IS NOT NULL` and clears all of them. Anything that did not come from this run is lost (handles created by the new binary, or by an earlier selective run). A deployment-specific rollback is correctly scoped to its deployments, but a store-wide rollback wipes everything. The documents now describe this accurately, but it is still data loss in a plausible scenario (rollback after the new binary has run).
 
 Fix direction: record which rows the backfill touched (checkpoint list, marker column, or side table) and revert only those, or refuse rollback once the new binary may have written handles.
 
@@ -147,7 +147,7 @@ The startup gate now checks the supported stores and marks the others `skipped` 
 `phaseForExecutionStage` ([state_controller.go](backend/internal/system/migration/engine/state_controller.go)) has no case for `rolling_back`. `resume` tells the operator to rerun the rollback command, but plain `rollback` and `rollback --phase` fail with `unsupported executing migration stage "rolling_back"`. Return a clear error that names `--revert-all`.
 
 ### R17. Operation readiness inspects the whole store even for a `--deployment-id` run
-`CheckReadiness` receives only the plan context, not the selection, so the backfill readiness calls `verifyEntityTypeHandleBackfill(ctx, access, "")` ([05_backfill_entity_type_handle.go](backend/internal/system/migration/releases/v2_0_0/05_backfill_entity_type_handle.go)). Invalid or duplicate handles in deployment B block a selective migration of the healthy deployment A. Pass the selection to readiness checks, or document the behavior.
+`CheckReadiness` receives only the plan context, not the selection, so the backfill readiness calls `verifyEntityTypeHandleBackfill(ctx, access, "")` ([04_backfill_entity_type_handle.go](backend/internal/system/migration/releases/v2_0_0/04_backfill_entity_type_handle.go)). Invalid or duplicate handles in deployment B block a selective migration of the healthy deployment A. Pass the selection to readiness checks, or document the behavior.
 
 ### R18. Operator documentation must reflect the implicit contract phase
 Every changed store now ends through a contract phase. Stores with only expand operations stop at `contract_ready` after expand and become `clean` only when `apply contract` runs, and `apply contract` touches stores that have no contract operations. The diagrams were updated, but the operator-facing documents and the runbook still need to say that contract is required for every changed store. The handoff and status documents still say "compensatable" and "uncompensated", which no longer match the "rollback" vocabulary in the code.
@@ -162,7 +162,7 @@ Every changed store now ends through a contract phase. Stores with only expand o
 [postgres_execution_lock.go](backend/internal/system/migration/engine/postgres_execution_lock.go) uses session-level `pg_try_advisory_lock`, which breaks behind transaction-pooling proxies such as PgBouncer. Document it or detect it.
 
 ### R22. Smaller items
-- The backfill reloads `usedHandles` for every batch (quadratic at scale), [05_backfill_entity_type_handle.go:158](backend/internal/system/migration/releases/v2_0_0/05_backfill_entity_type_handle.go#L158).
+- The backfill reloads `usedHandles` for every batch (quadratic at scale), [04_backfill_entity_type_handle.go:158](backend/internal/system/migration/releases/v2_0_0/04_backfill_entity_type_handle.go#L158).
 - `ADD CONSTRAINT UNIQUE` (06) and `SET NOT NULL` (07) hold heavy locks. `lock_timeout` bounds waiting for the lock, not the build time. Acceptable for a small table.
 - The migration command runs with `context.Background()` and no signal handling ([main.go:51](backend/cmd/server/main.go#L51)), so Ctrl+C kills the process without `failRun`. Forward runs and revert-all now recover from that, but the failure identity is lost and the last operation's progress stays `in_progress`. Installing a signal handler that marks the run failed (using a non-cancelled context) would keep the record exact.
 - Phase rollback still skips a store whose phase progress was entirely reused from an earlier run (reusable schema progress has no row for the current run).

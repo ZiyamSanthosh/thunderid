@@ -59,7 +59,7 @@ Rollback is explicit and is never triggered automatically. Supported scopes are:
 - every compensatable operation before contract.
 
 The realistic rollback operation is
-`2.0.0/configdb/05_backfill_entity_type_handle_rollback`. It clears the complete handle
+`2.0.0/configdb/04_backfill_entity_type_handle_rollback`. It clears the complete handle
 representation in bounded resumable batches before returning to the source version.
 
 ## Required next work

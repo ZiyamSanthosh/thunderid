@@ -25,37 +25,55 @@ func TestDefinitionMatchesProductVersion(t *testing.T) {
 	assert.Equal(t, expectedVersion, definition.Manifest.ReleaseVersion)
 	assert.Equal(t, expectedVersion, definition.Plan.TargetVersion)
 	assert.Len(t, definition.Manifest.Stores, 4)
-	require.Len(t, definition.Plan.Expand, 9)
+	require.Len(t, definition.Plan.Expand, 18)
 	require.Len(t, definition.Plan.Migrate, 2)
 	require.Len(t, definition.Plan.Contract, 2)
 	require.Len(t, definition.Plan.Rollback, 1)
-	assert.Equal(t, "2.0.0/runtime_persistent/01_remove_revocation_reason_check",
+	assert.Equal(t, "2.0.0/configdb/01_create_authorization_pdp_connection",
 		string(definition.Plan.Expand[0].Definition().ID))
-	assert.Equal(t, "2.0.0/configdb/02_create_authorization_pdp_connection",
+	assert.Equal(t, "2.0.0/configdb/02_add_entity_type_handle",
 		string(definition.Plan.Expand[1].Definition().ID))
-	assert.Equal(t, "2.0.0/configdb/03_add_entity_type_handle",
+	assert.Equal(t, "2.0.0/entitydb/03_expand_entity_type_length",
 		string(definition.Plan.Expand[2].Definition().ID))
-	assert.Equal(t, "2.0.0/entitydb/04_expand_entity_type_length",
+	assert.Equal(t, "2.0.0/entitydb/07_expand_entity_identifier_primary_key",
 		string(definition.Plan.Expand[3].Definition().ID))
-	assert.Equal(t, "2.0.0/entitydb/08_expand_entity_identifier_primary_key",
+	assert.Equal(t, "2.0.0/runtime_persistent/08_create_entity_runtime_data",
 		string(definition.Plan.Expand[4].Definition().ID))
-	assert.Equal(t, "2.0.0/runtime_persistent/09_create_entity_runtime_data",
+	assert.Equal(t, "2.0.0/entitydb/09_add_entity_state_default",
 		string(definition.Plan.Expand[5].Definition().ID))
-	assert.Equal(t, "2.0.0/entitydb/10_add_entity_state_default",
+	assert.Equal(t, "2.0.0/runtime_persistent/11_add_sso_session_properties",
 		string(definition.Plan.Expand[6].Definition().ID))
-	assert.Equal(t, "2.0.0/runtime_persistent/12_add_sso_session_properties",
+	assert.Equal(t, "2.0.0/configdb/12_create_notification_template",
 		string(definition.Plan.Expand[7].Definition().ID))
-	assert.Equal(t, "2.0.0/configdb/13_create_notification_template",
+	assert.Equal(t, "2.0.0/configdb/13_create_variable",
 		string(definition.Plan.Expand[8].Definition().ID))
-	assert.Equal(t, "2.0.0/configdb/05_backfill_entity_type_handle",
+	assert.Equal(t, "2.0.0/configdb/14_create_secret",
+		string(definition.Plan.Expand[9].Definition().ID))
+	assert.Equal(t, "2.0.0/configdb/15_create_gateway",
+		string(definition.Plan.Expand[10].Definition().ID))
+	assert.Equal(t, "2.0.0/configdb/16_create_configuration_version",
+		string(definition.Plan.Expand[11].Definition().ID))
+	assert.Equal(t, "2.0.0/configdb/17_create_gateway_applied_version",
+		string(definition.Plan.Expand[12].Definition().ID))
+	assert.Equal(t, "2.0.0/configdb/18_create_gateway_excluded_resource",
+		string(definition.Plan.Expand[13].Definition().ID))
+	assert.Equal(t, "2.0.0/configdb/19_create_resource_sharing_policy",
+		string(definition.Plan.Expand[14].Definition().ID))
+	assert.Equal(t, "2.0.0/configdb/20_create_resource_sharing_policy_unit",
+		string(definition.Plan.Expand[15].Definition().ID))
+	assert.Equal(t, "2.0.0/configdb/21_create_resource_sharing_policy_overlay_rule",
+		string(definition.Plan.Expand[16].Definition().ID))
+	assert.Equal(t, "2.0.0/configdb/22_create_resource_overlay_value",
+		string(definition.Plan.Expand[17].Definition().ID))
+	assert.Equal(t, "2.0.0/configdb/04_backfill_entity_type_handle",
 		string(definition.Plan.Migrate[0].Definition().ID))
-	assert.Equal(t, "2.0.0/configdb/06_add_entity_type_handle_uniqueness",
+	assert.Equal(t, "2.0.0/configdb/05_add_entity_type_handle_uniqueness",
 		string(definition.Plan.Migrate[1].Definition().ID))
-	assert.Equal(t, "2.0.0/configdb/07_finalize_entity_type_handle",
+	assert.Equal(t, "2.0.0/configdb/06_finalize_entity_type_handle",
 		string(definition.Plan.Contract[0].Definition().ID))
-	assert.Equal(t, "2.0.0/entitydb/11_remove_entity_state",
+	assert.Equal(t, "2.0.0/entitydb/10_remove_entity_state",
 		string(definition.Plan.Contract[1].Definition().ID))
-	assert.Equal(t, "2.0.0/configdb/05_backfill_entity_type_handle_rollback",
+	assert.Equal(t, "2.0.0/configdb/04_backfill_entity_type_handle_rollback",
 		string(definition.Plan.Rollback[0].Definition().ID))
 	assert.Equal(t, definition.Plan.Migrate[0].Definition().ID,
 		definition.Plan.Rollback[0].ForwardOperationID())
@@ -84,18 +102,6 @@ func TestDefinitionWithDependenciesMatchesDefaultDefinition(t *testing.T) {
 		assert.Equal(t,
 			defaultDefinition.Plan.Expand[index].Definition(),
 			dependencyDefinition.Plan.Expand[index].Definition())
-	}
-}
-
-func TestFreshRuntimePersistentSchemasDoNotRestrictRevocationReasons(t *testing.T) {
-	for _, path := range []string{
-		"../../../../../dbscripts/runtime_persistent/postgres.sql",
-		"../../../../../dbscripts/runtime_persistent/sqlite.sql",
-	} {
-		schema, err := os.ReadFile(path)
-		require.NoError(t, err)
-		assert.NotContains(t, string(schema),
-			"CHECK (REVOCATION_REASON IN ('explicit', 'refresh_rotation'))")
 	}
 }
 
