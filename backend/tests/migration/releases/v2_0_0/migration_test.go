@@ -31,12 +31,18 @@ func runPostgresMigrationSuite(t *testing.T, configFile string) {
 	verifyCreateAuthorizationPDPConnection(t, environment)
 	verifyAddEntityTypeHandle(t, environment)
 	verifyExpandEntityTypeLength(t, environment)
+	verifyExpandEntityIdentifierPrimaryKey(t, environment)
+	verifyCreateEntityRuntimeData(t, environment)
+	verifyAddEntityStateDefault(t, environment)
+	verifyAddSSOSessionProperties(t, environment)
+	verifyCreateNotificationTemplate(t, environment)
 	verifyBackfillEntityTypeHandle(t, environment)
 	verifyAddEntityTypeHandleUniqueness(t, environment)
 	verifyResumeAfterFinalizationFailure(t, environment)
 	verifyResumeAbandonedRun(t, environment)
 	verifyConcurrentMigrationRejected(t, environment)
 	verifyFinalizeEntityTypeHandle(t, environment)
+	verifyRemoveEntityState(t, environment)
 	verifyReleaseState(t, environment)
 }
 

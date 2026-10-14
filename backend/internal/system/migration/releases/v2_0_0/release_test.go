@@ -25,9 +25,9 @@ func TestDefinitionMatchesProductVersion(t *testing.T) {
 	assert.Equal(t, expectedVersion, definition.Manifest.ReleaseVersion)
 	assert.Equal(t, expectedVersion, definition.Plan.TargetVersion)
 	assert.Len(t, definition.Manifest.Stores, 4)
-	require.Len(t, definition.Plan.Expand, 4)
+	require.Len(t, definition.Plan.Expand, 9)
 	require.Len(t, definition.Plan.Migrate, 2)
-	require.Len(t, definition.Plan.Contract, 1)
+	require.Len(t, definition.Plan.Contract, 2)
 	require.Len(t, definition.Plan.Rollback, 1)
 	assert.Equal(t, "2.0.0/runtime_persistent/01_remove_revocation_reason_check",
 		string(definition.Plan.Expand[0].Definition().ID))
@@ -37,12 +37,24 @@ func TestDefinitionMatchesProductVersion(t *testing.T) {
 		string(definition.Plan.Expand[2].Definition().ID))
 	assert.Equal(t, "2.0.0/entitydb/04_expand_entity_type_length",
 		string(definition.Plan.Expand[3].Definition().ID))
+	assert.Equal(t, "2.0.0/entitydb/08_expand_entity_identifier_primary_key",
+		string(definition.Plan.Expand[4].Definition().ID))
+	assert.Equal(t, "2.0.0/runtime_persistent/09_create_entity_runtime_data",
+		string(definition.Plan.Expand[5].Definition().ID))
+	assert.Equal(t, "2.0.0/entitydb/10_add_entity_state_default",
+		string(definition.Plan.Expand[6].Definition().ID))
+	assert.Equal(t, "2.0.0/runtime_persistent/12_add_sso_session_properties",
+		string(definition.Plan.Expand[7].Definition().ID))
+	assert.Equal(t, "2.0.0/configdb/13_create_notification_template",
+		string(definition.Plan.Expand[8].Definition().ID))
 	assert.Equal(t, "2.0.0/configdb/05_backfill_entity_type_handle",
 		string(definition.Plan.Migrate[0].Definition().ID))
 	assert.Equal(t, "2.0.0/configdb/06_add_entity_type_handle_uniqueness",
 		string(definition.Plan.Migrate[1].Definition().ID))
 	assert.Equal(t, "2.0.0/configdb/07_finalize_entity_type_handle",
 		string(definition.Plan.Contract[0].Definition().ID))
+	assert.Equal(t, "2.0.0/entitydb/11_remove_entity_state",
+		string(definition.Plan.Contract[1].Definition().ID))
 	assert.Equal(t, "2.0.0/configdb/05_backfill_entity_type_handle_rollback",
 		string(definition.Plan.Rollback[0].Definition().ID))
 	assert.Equal(t, definition.Plan.Migrate[0].Definition().ID,
@@ -84,5 +96,17 @@ func TestFreshRuntimePersistentSchemasDoNotRestrictRevocationReasons(t *testing.
 		require.NoError(t, err)
 		assert.NotContains(t, string(schema),
 			"CHECK (REVOCATION_REASON IN ('explicit', 'refresh_rotation'))")
+	}
+}
+
+func TestFreshEntitySchemasUseExpandedIdentifierPrimaryKey(t *testing.T) {
+	for _, path := range []string{
+		"../../../../../dbscripts/entitydb/postgres.sql",
+		"../../../../../dbscripts/entitydb/sqlite.sql",
+	} {
+		schema, err := os.ReadFile(path)
+		require.NoError(t, err)
+		assert.Contains(t, string(schema),
+			"PRIMARY KEY (ENTITY_ID, DEPLOYMENT_ID, NAME, VALUE)")
 	}
 }

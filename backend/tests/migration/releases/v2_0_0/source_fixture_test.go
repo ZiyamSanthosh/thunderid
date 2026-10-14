@@ -44,5 +44,10 @@ func prepareEntityTypeMigrationSource(t *testing.T, environment migrationharness
         VALUES ('migration-deployment', '0199a123-4703-7abc-8def-0123456789ab', 'user', $1, 'ACTIVE',
             '0199a123-4702-7abc-8def-0123456789ab', NOW(), NOW())`, legacyEntityTypeName)
 	require.NoError(t, err)
+	_, err = entityDB.Exec(`INSERT INTO "ENTITY_IDENTIFIER"
+		(DEPLOYMENT_ID, ENTITY_ID, NAME, VALUE, SOURCE, CREATED_AT)
+		VALUES ('migration-deployment', '0199a123-4703-7abc-8def-0123456789ab',
+			'username', 'legacy-person', 'attribute', NOW())`)
+	require.NoError(t, err)
 	t.Log("prepared: legacy entity-type and entity rows for migration verification")
 }

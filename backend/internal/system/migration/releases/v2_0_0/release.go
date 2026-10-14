@@ -48,12 +48,36 @@ func migrationPlan(Dependencies) (engine.MigrationPlan, error) {
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
+	expandEntityIdentifierPrimaryKey, err := newExpandEntityIdentifierPrimaryKeyOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	createEntityRuntimeData, err := newCreateEntityRuntimeDataOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	addEntityStateDefault, err := newAddEntityStateDefaultOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	addSSOSessionProperties, err := newAddSSOSessionPropertiesOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	createNotificationTemplate, err := newCreateNotificationTemplateOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
 	backfillEntityTypeHandle := newBackfillEntityTypeHandleOperation()
 	addEntityTypeHandleUniqueness, err := newAddEntityTypeHandleUniquenessOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
 	finalizeEntityTypeHandle, err := newFinalizeEntityTypeHandleOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	removeEntityState, err := newRemoveEntityStateOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
@@ -65,12 +89,20 @@ func migrationPlan(Dependencies) (engine.MigrationPlan, error) {
 			createAuthorizationPDPConnection,
 			addEntityTypeHandle,
 			expandEntityTypeLength,
+			expandEntityIdentifierPrimaryKey,
+			createEntityRuntimeData,
+			addEntityStateDefault,
+			addSSOSessionProperties,
+			createNotificationTemplate,
 		},
 		Migrate: []engine.Operation{
 			backfillEntityTypeHandle,
 			addEntityTypeHandleUniqueness,
 		},
-		Contract: []engine.Operation{finalizeEntityTypeHandle},
+		Contract: []engine.Operation{
+			finalizeEntityTypeHandle,
+			removeEntityState,
+		},
 		Rollback: []engine.RollbackOperation{
 			rollbackEntityTypeHandleBackfill,
 		},

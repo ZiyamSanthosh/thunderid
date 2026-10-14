@@ -852,25 +852,27 @@ migration definitions where practical, but they may use controlled downtime.
 
 ## Foundation implementation order
 
-After this decision is approved, migration-engine work proceeds in this order:
+The implementation now proceeds in this order:
 
-1. Finalize the embedded release manifest and compatibility model.
-2. Implement migration state, progress and execution leases.
-3. Implement the read-only startup compatibility gate.
-4. Add isolated migration commands to the ThunderID binary.
-5. Implement release-plan registration and standard operation contracts.
-6. Implement atomic and checkpointed execution with verified resume.
-7. Add standalone service-enabled execution for migrate-phase and applicable resume operations.
-8. Implement restricted operating mode and feature gating. Completed.
-9. Qualify the base in-place path with a representative multi-phase migration while a restricted
-   source instance continues serving authentication, authorization and token traffic.
-10. Add deployment-selective data migration and durable target-aware progress for CP/DP deployments.
-11. Add change capture, conflict handling and projection state only for concrete migrations whose
-    writable representations require them.
-12. Implement database-copy snapshot, relay, validation and cutover orchestration when that fallback
-    becomes a product requirement.
-13. Extend mixed-version and failure-injection qualification for each implemented migration pattern.
-14. Ship the foundation release through the controlled downtime upgrade path.
+1. Complete the PostgreSQL migration-engine foundation, including manifests, compatibility gates,
+   commands, atomic and resumable execution, readiness checks, deployment-selective progress,
+   restricted operating mode and rollback. Completed.
+2. Maintain the representative multi-phase 2.0.0 migration and its PostgreSQL integration suite.
+   Completed.
+3. Qualify the base in-place path while a restricted source instance continuously serves
+   authentication, authorization and token traffic. This is the next required increment.
+4. Add configurable backfill resource controls and complete provider-specific serving-impact
+   qualification.
+5. Publish the operator runbook for preflight, execution, monitoring, cutover, contract and
+   rollback.
+6. Add standalone service initialization only when a real migration operation requires a ThunderID
+   business service.
+7. Add change capture, conflict handling and projection state only for concrete migrations whose
+   writable representations require them.
+8. Implement database-copy snapshot, relay, validation and cutover orchestration only when that
+   fallback becomes a product requirement.
+9. Extend mixed-version and failure-injection qualification for each newly implemented migration
+   pattern and database provider.
 
 ## Final policy statement
 

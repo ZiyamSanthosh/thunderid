@@ -1,168 +1,149 @@
-# Migration Engine Handoff
+# Migration engine handoff
 
-## Repository state
+## Current position
 
-- Repository: ThunderID
-- Branch: `migration-plan`
-- Latest migration commit: `c5e0a474b Add explicit migration rollback lifecycle`
-- The rollback implementation is committed locally. Nothing has been pushed.
-- This handoff file was intentionally created after that commit.
+The PostgreSQL migration-engine foundation is functionally complete. ThunderID now has the engine,
+commands, metadata, compatibility gates, realistic release operations, readiness checks, recovery
+and rollback behavior needed to qualify an in-place zero-downtime migration workflow.
 
-The following pre-existing files are unrelated to the rollback commit and must be preserved unless the user explicitly asks to change them:
+The system is not yet a production ZDM guarantee. The remaining required work is integrated
+mixed-version qualification while a source instance continues serving real traffic, followed by
+serving-impact controls and operator documentation.
 
-- `backend/cmd/server/deployment.yaml`
-- `migration-engine-implementation-backlog.md`
-- `zero-downtime-migration-final-decision.md`
-- `claude-migration-diagrams.excalidraw`
-- `claude-migration-system-review-findings.md`
-- `migration-engine-review-findings.md`
+The current branch contains these recent migration commits:
 
-## Current migration model
+- `3db8e9f95 Add explicit migration rollback lifecycle`
+- `8ba2d3df6 Add operation readiness checks`
+- `70e2d51f6 Align entity type handle rollback naming`
+- `0cfc71202 Update migration design records`
 
-ThunderID ships the migration engine inside the target binary. Migration commands currently run as standalone administrative commands rather than as a background task in a serving target process.
+## Implemented foundation
 
-The lifecycle is divided into:
+- Embedded release manifests and ordered `expand`, `migrate` and `contract` plans.
+- Four-table PostgreSQL migration metadata shared by all logical stores.
+- Initialization, status, phase readiness, apply, resume and rollback commands.
+- Startup compatibility enforcement before normal service initialization.
+- Atomic and resumable execution with transactional progress and checkpoints.
+- Namespace-level PostgreSQL execution ownership locks.
+- Complete-store and deployment-selective migration targets.
+- Separate-database and shared-physical-database operation.
+- Restricted operating mode and feature gates for incompatible writes.
+- Explicit contract authorization after source instances are drained.
+- Failed-operation, failed-phase and complete pre-contract rollback.
+- Realistic 2.0.0 PostgreSQL schema and data operations.
+- Operation-specific readiness checks for every forward 2.0.0 operation.
+- PostgreSQL integration coverage for migration, recovery, concurrency, deployment selection and
+  rollback behavior.
+- Manual PostgreSQL POC setup and teardown scripts.
 
-1. `expand`: add backward-compatible schema and structures.
-2. `migrate`: backfill or transform data, including resumable batched operations.
-3. `contract`: remove obsolete representations only after source instances are drained.
+## Readiness coverage
 
-Migration can target the complete store or selected deployment IDs. Schema operations execute once for the physical store. Deployment-aware data operations resolve selected deployments or the complete store.
+The 2.0.0 release operations now report deterministic preflight state before reservation:
 
-Operation execution and implementation style are independent dimensions:
+1. The revoked-token constraint operation recognizes the exact source and target schemas.
+2. The authorization PDP table operation validates relation names, columns, primary key and index.
+3. The entity-type handle expansion validates the source column and nullable target column.
+4. The entity type length expansion accepts only the supported 50-to-100 transition.
+5. The handle backfill defers until expansion, then validates handle syntax and uniqueness.
+6. Handle uniqueness defers until backfill and validates the required column and constraint layout.
+7. Contract validates the final constraint layout and confirms that no null handles remain.
 
-- Execution can be atomic or resumable.
-- Implementation can use SQL or programmatic Go code.
-- Programmatic operations may receive narrowly wired ThunderID business-service dependencies through the release construction seam.
+Execution-time verification remains mandatory because the database can change after preflight.
 
-## Major capabilities already implemented
+## Rollback coverage
 
-- Release manifests and ordered expand, migrate, and contract plans
-- PostgreSQL migration metadata and initialization
-- Compatibility gate before serving
-- Human-readable status and check output
-- Store assessment and optional operation readiness checks
-- Atomic and resumable operation execution
-- Durable checkpoints and resume-forward recovery
-- PostgreSQL execution ownership lock
-- Deployment-selective migrate execution
-- Operation-specific target resolution
-- Restricted operating mode and generic feature gates
-- Management API restriction and flow write fencing
-- Manual Docker-based migration POC setup and teardown
-- Realistic v2.0.0 schema and data migration operations
-- Explicit administrator-controlled rollback lifecycle
+Rollback is explicit and is never triggered automatically. Supported scopes are:
 
-## Rollback design
+- the failed operation and execution target;
+- completed work in the failed phase; and
+- every compensatable operation before contract.
 
-Rollback is compensation, not database transaction reversal. It is never triggered automatically.
-
-Rollback operations are optional and declared separately in `MigrationPlan.Rollback`. Each rollback operation identifies its forward operation through `ForwardOperationID()`. The plan registry validates that the mapping is unique and that the forward and rollback operations use the same store and operation kind.
-
-Supported commands:
-
-```text
-thunderid migration rollback
-thunderid migration rollback --phase migrate
-thunderid migration rollback --revert-all
-```
-
-Behavior:
-
-- Plain rollback compensates only the failed forward operation and exact execution target. Earlier successful operations remain unchanged.
-- After plain rollback, the migration state remains failed. The administrator repairs the failure cause and runs `migration resume` to continue forward.
-- Atomic operations whose failed transaction committed no progress require no compensation.
-- Phase rollback compensates mapped operations from the failed phase in reverse order and restores the preceding phase boundary.
-- Complete rollback compensates all mapped executed operations across phases in reverse order and restores the accepted source boundary.
-- A completed contract operation without compensation blocks complete rollback.
-- Deployment-specific execution targets are preserved during compensation.
-- Resumable rollback operations persist and resume their own checkpoints.
-
-Durable failure identity is stored in `MIGRATION_FAILURE`, including:
-
-- run ID
-- migration state ID
-- failed forward operation ID
-- currently executing operation ID
-- execution target ID
-- forward or rollback direction
-- compensation status
-- failure summary
-
-The realistic rollback example is:
-
-- Forward: `05_backfill_entity_type_handle`
-- Compensation: `08_rollback_entity_type_handle_backfill`
-
-The compensation clears handles populated by the backfill in bounded batches. It supports both complete-store and deployment-specific targets.
-
-## Important rollback files
-
-- `backend/internal/system/migration/engine/rollback.go`
-- `backend/internal/system/migration/engine/rollback_test.go`
-- `backend/internal/system/migration/engine/state_controller.go`
-- `backend/internal/system/migration/engine/metadata.go`
-- `backend/internal/system/migration/engine/metadata_store.go`
-- `backend/internal/system/migration/engine/postgres_metadata.sql`
-- `backend/cmd/server/migration_cmd.go`
-- `backend/internal/system/migration/releases/v2_0_0/08_rollback_entity_type_handle_backfill.go`
-- `backend/tests/migration/releases/v2_0_0/08_rollback_entity_type_handle_backfill_test.go`
-
-## Validation completed
-
-The following checks passed before the final small rollback cleanup:
-
-```bash
-GOCACHE=/tmp/thunderid-go-cache go test ./internal/system/migration/... ./cmd/server
-GOCACHE=/tmp/thunderid-go-cache go test -tags migration_integration -run '^$' ./tests/migration/releases/v2_0_0
-```
-
-After the final cleanup, the focused engine suite passed:
-
-```bash
-GOCACHE=/tmp/thunderid-go-cache go test -vet=off ./internal/system/migration/engine
-```
-
-`git diff --check` also passed.
-
-## Environment blocker
-
-The real PostgreSQL rollback integration test could not complete because the host disk became full. Rancher Desktop BuildKit changed to a read-only filesystem while building the migration runner image. The failure occurred before test assertions ran.
-
-Observed conditions:
-
-- Host filesystem was at 100 percent capacity.
-- Rancher Desktop reported writes under `/var/lib/docker/buildkit` as read-only.
-- Go also reported no space left on device.
-
-The disposable `/tmp/thunderid-go-cache` created during testing was removed. The user must free additional host and Rancher Desktop disk space, then restart Rancher Desktop before retrying Docker integration tests.
+The realistic rollback operation is
+`2.0.0/configdb/05_backfill_entity_type_handle_rollback`. It clears the complete handle
+representation in bounded resumable batches before returning to the source version.
 
 ## Required next work
 
-1. Free disk space and restart Rancher Desktop.
-2. Recreate the migration POC databases because metadata now includes the `MIGRATION_FAILURE` table.
-3. Run the existing real rollback integration test:
+### 1. Integrated in-place qualification
 
-   ```bash
-   cd backend
-   GOCACHE=/tmp/thunderid-go-cache go test -tags migration_integration \
-     -run '^TestPostgresMigrationRollback$' -v ./tests/migration/releases/v2_0_0
-   ```
+Automate a complete topology that:
 
-4. Add real PostgreSQL end-to-end cases for:
-   - `migration rollback --phase migrate`
-   - `migration rollback --revert-all`
-   - reverse operation order
-   - deployment-specific phase rollback
-   - complete rollback blocked by an uncompensated completed contract operation
-   - interrupted resumable compensation followed by another rollback invocation
-5. Run the targeted migration suites again.
-6. Fix only defects revealed by those tests. The rollback architecture has already been decided.
+1. starts a supported source artifact in restricted mode;
+2. continuously exercises authentication, authorization, token, logout and revocation traffic;
+3. proves that fenced mutations fail before their first write;
+4. runs the target artifact as a standalone migration process;
+5. exercises interruption and resume during the pre-serving phases;
+6. verifies that target readiness is reported only after operation verification;
+7. starts a target serving instance against the migrated databases;
+8. shifts traffic, drains the source instances and explicitly runs contract; and
+9. proves that the source version is rejected after contract.
 
-## Starting prompt for the next conversation
+Run this qualification with separate logical databases and with all logical stores sharing one
+physical PostgreSQL database.
 
-Use this prompt:
+### 2. Serving-impact and resource qualification
 
-```text
-Read migration-engine-handoff.md and continue the remaining rollback PostgreSQL integration tests. Preserve the unrelated dirty files listed in the handoff. Do not redesign the rollback lifecycle unless a test exposes a concrete defect.
+- Measure request latency while schema operations acquire their bounded locks.
+- Exercise the two-second lock timeout under contention.
+- Add configurable backfill batch sizing, pacing or throttling and resource limits.
+- Verify that migration load stays within the documented serving budget.
+
+### 3. Broader failure injection
+
+Add integrated failures during source traffic, readiness evaluation, migration execution, target
+startup, traffic handoff and contract authorization. Existing lower-level coverage already includes
+resumable interruption, abandoned-run recovery, concurrent-runner rejection and interrupted
+rollback.
+
+### 4. Operator documentation
+
+Publish a runbook covering prerequisites, backups, restricted mode, every migration command,
+deployment selection, monitoring, failure recovery, source draining, contract and rollback
+boundaries.
+
+### 5. Documentation maintenance
+
+Keep `migration-engine-implementation-backlog.md` and
+`zero-downtime-upgrade-current-status.md` aligned with implementation evidence. Historical review
+files are reference material and are not the source of truth for pending work.
+
+## Conditional future work
+
+Do not implement these without a concrete release or product requirement:
+
+- service-enabled migration operations;
+- change capture, transactional outbox and conflict handling;
+- target serving while `migrate` is still running;
+- hosted background migration coordination;
+- contract-only release plans;
+- database-copy or blue-green migration;
+- machine-readable report files; and
+- production providers other than PostgreSQL.
+
+The service-dependency construction seam already exists. Add concrete service initialization only
+when an actual operation needs it.
+
+## Current workspace note
+
+`backend/cmd/server/deployment.yaml` contains local uncommitted configuration, including plaintext
+SMTP credentials. Do not commit that file until the credentials are removed and rotated if they are
+real.
+
+## Validation baseline
+
+The latest readiness work passed:
+
+```bash
+cd backend
+go test ./internal/system/migration/...
+go test -tags migration_integration -run '^$' ./tests/migration/releases/v2_0_0
 ```
+
+The second command compiles the integration suite without starting Docker. The user separately
+confirmed that the POC workflow behaves as expected after the readiness changes.
+
+## Recommended next task
+
+Implement the automated mixed-version in-place qualification harness. Do not add speculative
+service operations or change-capture infrastructure before that qualification or a concrete
+migration requires them.
