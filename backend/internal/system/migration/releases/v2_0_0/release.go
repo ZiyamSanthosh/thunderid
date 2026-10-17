@@ -48,18 +48,20 @@ func migrationPlan(Dependencies) (engine.MigrationPlan, error) {
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	createEntityRuntimeData, err := newCreateEntityRuntimeDataOperation()
-	if err != nil {
-		return engine.MigrationPlan{}, err
-	}
-	addEntityStateDefault, err := newAddEntityStateDefaultOperation()
-	if err != nil {
-		return engine.MigrationPlan{}, err
-	}
-	addSSOSessionProperties, err := newAddSSOSessionPropertiesOperation()
-	if err != nil {
-		return engine.MigrationPlan{}, err
-	}
+	// Operations 08 through 10 must remain disabled until the entity runtime-data product change is merged.
+	// createEntityRuntimeData, err := newCreateEntityRuntimeDataOperation()
+	// if err != nil {
+	// 	return engine.MigrationPlan{}, err
+	// }
+	// addEntityStateDefault, err := newAddEntityStateDefaultOperation()
+	// if err != nil {
+	// 	return engine.MigrationPlan{}, err
+	// }
+	// Operation 11 must remain disabled until the SSO session properties product change is merged.
+	// addSSOSessionProperties, err := newAddSSOSessionPropertiesOperation()
+	// if err != nil {
+	// 	return engine.MigrationPlan{}, err
+	// }
 	createNotificationTemplate, err := newCreateNotificationTemplateOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
@@ -176,6 +178,14 @@ func migrationPlan(Dependencies) (engine.MigrationPlan, error) {
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
+	expandRevocationCriterionValue, err := newExpandRevocationCriterionValueOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	addSSOSessionParticipantApplicationIndex, err := newAddSSOSessionParticipantApplicationIndexOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
 	primaryKeyContractOperations, err := newLegacyPrimaryKeyContractOperations([]engine.Operation{
 		expandEntityTypesPrimaryKey,
 		expandRolePrimaryKey,
@@ -207,10 +217,11 @@ func migrationPlan(Dependencies) (engine.MigrationPlan, error) {
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	removeEntityState, err := newRemoveEntityStateOperation()
-	if err != nil {
-		return engine.MigrationPlan{}, err
-	}
+	// Enable operation 10 with operations 08 and 09 after the entity runtime-data product change is merged.
+	// removeEntityState, err := newRemoveEntityStateOperation()
+	// if err != nil {
+	// 	return engine.MigrationPlan{}, err
+	// }
 	rollbackEntityTypeHandleBackfill := newRollbackEntityTypeHandleBackfillOperation()
 	return engine.MigrationPlan{
 		TargetVersion: "2.0.0",
@@ -219,9 +230,11 @@ func migrationPlan(Dependencies) (engine.MigrationPlan, error) {
 			addEntityTypeHandle,
 			expandEntityTypeLength,
 			expandEntityIdentifierPrimaryKey,
-			createEntityRuntimeData,
-			addEntityStateDefault,
-			addSSOSessionProperties,
+			// Enable operations 08 and 09 after the entity runtime-data product change is merged.
+			// createEntityRuntimeData,
+			// addEntityStateDefault,
+			// Enable operation 11 after the SSO session properties product change is merged.
+			// addSSOSessionProperties,
 			createNotificationTemplate,
 			createVariable,
 			createSecret,
@@ -251,6 +264,8 @@ func migrationPlan(Dependencies) (engine.MigrationPlan, error) {
 			expandEntityPrimaryKey,
 			expandGroupPrimaryKey,
 			expandCertificateReferenceID,
+			expandRevocationCriterionValue,
+			addSSOSessionParticipantApplicationIndex,
 		},
 		Migrate: []engine.Operation{
 			backfillEntityTypeHandle,
@@ -258,7 +273,8 @@ func migrationPlan(Dependencies) (engine.MigrationPlan, error) {
 		},
 		Contract: append([]engine.Operation{
 			finalizeEntityTypeHandle,
-			removeEntityState,
+			// Enable operation 10 with operations 08 and 09 after the product change is merged.
+			// removeEntityState,
 		}, primaryKeyContractOperations...),
 		Rollback: []engine.RollbackOperation{
 			rollbackEntityTypeHandleBackfill,

@@ -17,6 +17,8 @@ const legacyEntityTypeName = "Legacy Person"
 
 const legacyCertificateReferenceID = "legacy-client"
 
+const legacyRevocationCriterionValue = "legacy-token-family"
+
 const entityTypeBackfillFixtureCount = 101
 
 func prepareEntityTypeMigrationSource(t *testing.T, environment migrationharness.Environment) {
@@ -55,6 +57,18 @@ func prepareEntityTypeMigrationSource(t *testing.T, environment migrationharness
 		(DEPLOYMENT_ID, ENTITY_ID, NAME, VALUE, SOURCE, CREATED_AT)
 		VALUES ('migration-deployment', '0199a123-4703-7abc-8def-0123456789ab',
 			'username', 'legacy-person', 'attribute', NOW())`)
+	require.NoError(t, err)
+
+	runtimeDB := environment.OpenDatabase(t, "runtime_persistent")
+	_, err = runtimeDB.Exec(`INSERT INTO "REVOCATION_CRITERIA"
+		(DEPLOYMENT_ID, ID, CRITERION_TYPE, CRITERION_VALUE, REASON, REVOKED_AT, EXPIRY_TIME)
+		VALUES ('migration-deployment', '0199a123-4797-7abc-8def-0123456789ab',
+			'token_family', $1, 'test', NOW(), NOW() + INTERVAL '1 day')`, legacyRevocationCriterionValue)
+	require.NoError(t, err)
+	_, err = runtimeDB.Exec(`INSERT INTO "SSO_SESSION_PARTICIPANT"
+		(SESSION_ID, DEPLOYMENT_ID, APP_ID, TFID, FIRST_JOINED_AT, LAST_ACTIVE_AT)
+		VALUES ('0199a123-4796-7abc-8def-0123456789ab', 'migration-deployment',
+			'0199a123-4795-7abc-8def-0123456789ab', NULL, NOW(), NOW())`)
 	require.NoError(t, err)
 	t.Log("prepared: legacy entity-type and entity rows for migration verification")
 }

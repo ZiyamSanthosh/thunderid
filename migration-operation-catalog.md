@@ -260,6 +260,8 @@ order.
   operations 09 and 10 verify. State-changing target capabilities must not become available while
   source instances still serve. Readiness does not currently preflight a collision with the
   PostgreSQL-generated primary-key index name, so that conflict would be reported during execution.
+  Operations 08 through 10 are implemented but intentionally disabled in `release.go` until the
+  entity runtime-data product change and database scripts are merged.
 
 ### 09: Add temporary entity state default
 
@@ -280,7 +282,8 @@ order.
   10 removes the complete column at contract.
 - **Dependencies:** Operation 10 requires this compatibility state and operation 08's runtime table.
 - **Pending concerns:** Target features that persist non-active runtime state must remain unavailable
-  until the source is drained.
+  until the source is drained. Operations 08 through 10 are implemented but intentionally disabled
+  in `release.go` until the entity runtime-data product change and database scripts are merged.
 
 ### 10: Remove legacy entity state
 
@@ -299,6 +302,8 @@ order.
   operation and must already be drained.
 - **Rollback:** None.
 - **Pending concerns:** Enable target-only state management only after contract completes.
+  Operations 08 through 10 are implemented but intentionally disabled in `release.go` until the
+  entity runtime-data product change and database scripts are merged.
 
 ### 11: Add SSO session properties
 
@@ -318,7 +323,8 @@ order.
 - **Rollback:** None. The nullable column can remain when returning to the source version.
 - **Pending concerns:** None specific to the schema operation. Any future target feature using the
   properties must tolerate `NULL` for existing and source-created sessions during mixed-version
-  serving.
+  serving. The operation is implemented but intentionally disabled in `release.go` until the SSO
+  session properties product change and database scripts are merged.
 
 ### 12: Create notification template table
 
@@ -769,6 +775,48 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
   instances.
 - **Rollback:** None. Shrinking could reject target-written references longer than 36 characters.
 - **Pending concerns:** None specific to this operation.
+
+### 41: Expand revocation criterion value length
+
+- **ID:** `2.0.0/runtime_persistent/41_expand_revocation_criterion_value`
+- **Definition:**
+  [`41_expand_revocation_criterion_value.go`](backend/internal/system/migration/releases/v2_0_0/41_expand_revocation_criterion_value.go)
+- **Purpose:** Increase `REVOCATION_CRITERIA.CRITERION_VALUE` from `VARCHAR(255)` to
+  `VARCHAR(2048)` so longer revocation identifiers can be stored.
+- **Source state:** Exactly one non-null `VARCHAR(255)` `REVOCATION_CRITERIA.CRITERION_VALUE`
+  column.
+- **Readiness:** Ready for the exact source or target definition. A missing, nullable, non-varchar,
+  or differently sized column blocks execution.
+- **Execution:** Set a two-second local lock timeout, then widen the column to `VARCHAR(2048)`.
+- **Verification:** Target requires a non-null `VARCHAR(2048)` column.
+- **Compatibility:** The wider column accepts every source value and remains readable by source
+  instances.
+- **Rollback:** None. Shrinking could reject target-written criterion values longer than 255
+  characters.
+- **Pending concerns:** None specific to this operation. PostgreSQL integration coverage verifies
+  the exact target column, preservation of a source value, a 2048-character insert, and completed
+  operation progress.
+
+### 42: Add SSO participant application lookup index
+
+- **ID:** `2.0.0/runtime_persistent/42_add_sso_session_participant_application_index`
+- **Definition:**
+  [`42_add_sso_session_participant_application_index.go`](backend/internal/system/migration/releases/v2_0_0/42_add_sso_session_participant_application_index.go)
+- **Purpose:** Add the `idx_sso_session_participant_app` non-unique index on
+  `SSO_SESSION_PARTICIPANT (DEPLOYMENT_ID, APP_ID)` for application-participation lookups.
+- **Source state:** The required non-null columns exist and the named index is absent, or an
+  interrupted concurrent build left an invalid index with the expected definition.
+- **Readiness:** Ready for the exact source, recoverable interrupted, or target state. Missing
+  columns or a conflicting index definition block execution.
+- **Execution:** Drop a recoverable invalid index when present, then build the index with
+  `CREATE INDEX CONCURRENTLY` outside a transaction.
+- **Verification:** Target requires an exact non-unique, valid, ready index on
+  `(DEPLOYMENT_ID, APP_ID)`.
+- **Compatibility:** The index is additive and is ignored safely by source instances.
+- **Rollback:** None required. Retaining the index does not change stored data or query semantics.
+- **Pending concerns:** None specific to this operation. PostgreSQL integration coverage verifies
+  the exact valid, ready, non-unique B-tree index without a predicate, preservation of a source row,
+  and completed operation progress.
 
 ## Cross-operation pending work
 

@@ -25,18 +25,15 @@ func TestDefinitionMatchesProductVersion(t *testing.T) {
 	assert.Equal(t, expectedVersion, definition.Manifest.ReleaseVersion)
 	assert.Equal(t, expectedVersion, definition.Plan.TargetVersion)
 	assert.Len(t, definition.Manifest.Stores, 4)
-	require.Len(t, definition.Plan.Expand, 36)
+	require.Len(t, definition.Plan.Expand, 35)
 	require.Len(t, definition.Plan.Migrate, 2)
-	require.Len(t, definition.Plan.Contract, 19)
+	require.Len(t, definition.Plan.Contract, 18)
 	require.Len(t, definition.Plan.Rollback, 1)
 	expectedExpandIDs := []string{
 		"2.0.0/configdb/01_create_authorization_pdp_connection",
 		"2.0.0/configdb/02_add_entity_type_handle",
 		"2.0.0/entitydb/03_expand_entity_type_length",
 		"2.0.0/entitydb/07_expand_entity_identifier_primary_key",
-		"2.0.0/runtime_persistent/08_create_entity_runtime_data",
-		"2.0.0/entitydb/09_add_entity_state_default",
-		"2.0.0/runtime_persistent/11_add_sso_session_properties",
 		"2.0.0/configdb/12_create_notification_template",
 		"2.0.0/configdb/13_create_variable",
 		"2.0.0/configdb/14_create_secret",
@@ -66,6 +63,8 @@ func TestDefinitionMatchesProductVersion(t *testing.T) {
 		"2.0.0/entitydb/38_expand_entity_primary_key",
 		"2.0.0/entitydb/39_expand_group_primary_key",
 		"2.0.0/configdb/40_expand_certificate_reference_id",
+		"2.0.0/runtime_persistent/41_expand_revocation_criterion_value",
+		"2.0.0/runtime_persistent/42_add_sso_session_participant_application_index",
 	}
 	for index, expectedID := range expectedExpandIDs {
 		assert.Equal(t, expectedID, string(definition.Plan.Expand[index].Definition().ID))
@@ -76,8 +75,6 @@ func TestDefinitionMatchesProductVersion(t *testing.T) {
 		string(definition.Plan.Migrate[1].Definition().ID))
 	assert.Equal(t, "2.0.0/configdb/06_finalize_entity_type_handle",
 		string(definition.Plan.Contract[0].Definition().ID))
-	assert.Equal(t, "2.0.0/entitydb/10_remove_entity_state",
-		string(definition.Plan.Contract[1].Definition().ID))
 	expectedPrimaryKeyContractIDs := []string{
 		"2.0.0/configdb/23_finalize_entity_types_primary_key",
 		"2.0.0/configdb/24_finalize_role_primary_key",
@@ -98,7 +95,7 @@ func TestDefinitionMatchesProductVersion(t *testing.T) {
 		"2.0.0/entitydb/39_finalize_group_primary_key",
 	}
 	for index, expectedID := range expectedPrimaryKeyContractIDs {
-		assert.Equal(t, expectedID, string(definition.Plan.Contract[index+2].Definition().ID))
+		assert.Equal(t, expectedID, string(definition.Plan.Contract[index+1].Definition().ID))
 	}
 	assert.Equal(t, "2.0.0/configdb/04_backfill_entity_type_handle_rollback",
 		string(definition.Plan.Rollback[0].Definition().ID))
