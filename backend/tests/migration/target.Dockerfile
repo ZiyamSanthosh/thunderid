@@ -1,7 +1,7 @@
 # Copyright 2026 The ThunderID Authors
 # SPDX-License-Identifier: Apache-2.0
 
-FROM golang:1.26-alpine3.23 AS builder
+FROM golang:1.27-alpine3.23 AS builder
 
 WORKDIR /src/backend
 COPY go.mod go.sum ./

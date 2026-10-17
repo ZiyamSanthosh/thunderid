@@ -54,5 +54,68 @@ func verifyCreateAdditionalConfigTables(t *testing.T, environment migrationharne
 	} {
 		migrationharness.AssertOperationCompleted(t, db, operationID)
 	}
+
+	for _, key := range []struct {
+		table   string
+		columns string
+	}{
+		{table: "RESOURCE_SHARING_POLICY", columns: "DEPLOYMENT_ID,ID"},
+		{table: "RESOURCE_SHARING_POLICY_UNIT", columns: "DEPLOYMENT_ID,POLICY_ID,OU_ID"},
+		{table: "RESOURCE_SHARING_POLICY_OVERLAY_RULE", columns: "DEPLOYMENT_ID,ID"},
+	} {
+		migrationharness.AssertQueryValue(t, db,
+			`SELECT string_agg(UPPER(a.attname), ',' ORDER BY key_position.ordinality)
+				FROM pg_constraint c
+				INNER JOIN pg_class table_class ON table_class.oid = c.conrelid
+				INNER JOIN pg_namespace n ON n.oid = table_class.relnamespace
+				CROSS JOIN LATERAL unnest(c.conkey) WITH ORDINALITY AS key_position(attnum, ordinality)
+				INNER JOIN pg_attribute a ON a.attrelid = table_class.oid AND a.attnum = key_position.attnum
+				WHERE n.nspname = CURRENT_SCHEMA() AND table_class.relname = $1 AND c.contype = 'p'`,
+			key.columns, key.table)
+	}
+
+	for _, table := range []string{
+		"RESOURCE_SHARING_POLICY_UNIT",
+		"RESOURCE_SHARING_POLICY_OVERLAY_RULE",
+	} {
+		migrationharness.AssertQueryValue(t, db,
+			`SELECT
+				(SELECT string_agg(UPPER(a.attname), ',' ORDER BY key_position.ordinality)
+				 FROM unnest(c.conkey) WITH ORDINALITY AS key_position(attnum, ordinality)
+				 INNER JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = key_position.attnum)
+				|| '->' ||
+				(SELECT string_agg(UPPER(a.attname), ',' ORDER BY key_position.ordinality)
+				 FROM unnest(c.confkey) WITH ORDINALITY AS key_position(attnum, ordinality)
+				 INNER JOIN pg_attribute a ON a.attrelid = c.confrelid AND a.attnum = key_position.attnum)
+				FROM pg_constraint c
+				INNER JOIN pg_class table_class ON table_class.oid = c.conrelid
+				INNER JOIN pg_namespace n ON n.oid = table_class.relnamespace
+				WHERE n.nspname = CURRENT_SCHEMA() AND table_class.relname = $1 AND c.contype = 'f'`,
+			"DEPLOYMENT_ID,POLICY_ID->DEPLOYMENT_ID,ID", table)
+	}
+
+	for _, index := range []struct {
+		name     string
+		expected string
+	}{
+		{name: "idx_rsp_parent", expected: "false:DEPLOYMENT_ID,PARENT_POLICY_ID:false"},
+		{name: "idx_rspu_ou", expected: "false:DEPLOYMENT_ID,OU_ID:false"},
+		{name: "idx_rspor_policy", expected: "false:DEPLOYMENT_ID,POLICY_ID:false"},
+		{name: "idx_rspor_blanket_once", expected: "true:DEPLOYMENT_ID,POLICY_ID,SECTION,FIELD_KEY:true"},
+	} {
+		migrationharness.AssertQueryValue(t, db,
+			`SELECT i.indisunique::TEXT || ':' ||
+				string_agg(UPPER(a.attname), ',' ORDER BY key_position.ordinality) || ':' ||
+				(i.indpred IS NOT NULL)::TEXT
+				FROM pg_class index_class
+				INNER JOIN pg_namespace n ON n.oid = index_class.relnamespace
+				INNER JOIN pg_index i ON i.indexrelid = index_class.oid
+				INNER JOIN pg_class table_class ON table_class.oid = i.indrelid
+				CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY AS key_position(attnum, ordinality)
+				INNER JOIN pg_attribute a ON a.attrelid = table_class.oid AND a.attnum = key_position.attnum
+				WHERE n.nspname = CURRENT_SCHEMA() AND index_class.relname = $1
+				GROUP BY i.indisunique, i.indpred`,
+			index.expected, index.name)
+	}
 	t.Log("verified: additional configuration tables match the required schemas")
 }

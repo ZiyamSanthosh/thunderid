@@ -443,12 +443,12 @@ order.
 - **Source state:** `RESOURCE_SHARING_POLICY` is absent and its explicit index name is unused.
 - **Readiness:** Ready for the absent source or exact target table. Any partial or conflicting
   relation, schema, check, key, or index blocks execution.
-- **Execution:** Create the policy table, policy-stage check, uniqueness rule, and parent index.
+- **Execution:** Create the policy table with primary key `(DEPLOYMENT_ID, ID)`, the deployment-scoped
+  resource uniqueness rule, policy-stage check, and parent index `(DEPLOYMENT_ID, PARENT_POLICY_ID)`.
 - **Verification:** Checks ordered columns and defaults, keys, check semantics, and index definition.
 - **Compatibility:** Additive. Source instances ignore the table.
 - **Rollback:** None.
-- **Pending concerns:** The current fresh-install script still uses an earlier resource-sharing
-  model. The owning product change must align it before release validation.
+- **Pending concerns:** None. The operation matches the current PostgreSQL fresh-install schema.
 
 ### 20: Create resource sharing policy unit table
 
@@ -459,12 +459,14 @@ order.
 - **Source state:** `RESOURCE_SHARING_POLICY_UNIT` is absent and its explicit index name is unused.
 - **Readiness:** Deferred to operation 19 when the policy table is absent. Otherwise ready for the
   absent source or exact target table. Any partial or conflicting schema blocks execution.
-- **Execution:** Create the policy-unit table, cascading policy foreign key, checks, and OU index.
+- **Execution:** Create the policy-unit table with primary key `(DEPLOYMENT_ID, POLICY_ID, OU_ID)`,
+  cascading foreign key `(DEPLOYMENT_ID, POLICY_ID)` to the policy table, checks, and deployment-scoped
+  OU index.
 - **Verification:** Checks ordered columns, key and cascade definitions, checks, and index.
 - **Compatibility:** Additive. Source instances ignore the table.
 - **Rollback:** None.
 - **Dependencies:** Operation 19 creates the referenced policy table.
-- **Pending concerns:** The fresh-install script alignment noted for operation 19 also applies.
+- **Pending concerns:** None. The operation matches the current PostgreSQL fresh-install schema.
 
 ### 21: Create resource sharing policy overlay-rule table
 
@@ -475,13 +477,14 @@ order.
 - **Source state:** `RESOURCE_SHARING_POLICY_OVERLAY_RULE` is absent and its index names are unused.
 - **Readiness:** Deferred to operation 19 when the policy table is absent. Otherwise ready for the
   absent source or exact target table. Any partial or conflicting schema blocks execution.
-- **Execution:** Create the overlay-rule table, cascading policy foreign key, section check,
-  uniqueness constraint, policy index, and blanket-rule partial unique index.
+- **Execution:** Create the overlay-rule table with primary key `(DEPLOYMENT_ID, ID)`, cascading
+  deployment-scoped policy foreign key, deployment-scoped uniqueness constraint and policy index,
+  section check, and deployment-scoped blanket-rule partial unique index.
 - **Verification:** Checks ordered columns, keys and cascade action, check semantics, and indexes.
 - **Compatibility:** Additive. Source instances ignore the table.
 - **Rollback:** None.
 - **Dependencies:** Operation 19 creates the referenced policy table.
-- **Pending concerns:** The fresh-install script alignment noted for operation 19 also applies.
+- **Pending concerns:** None. The operation matches the current PostgreSQL fresh-install schema.
 
 ### 22: Create resource overlay value table
 
@@ -496,7 +499,7 @@ order.
 - **Verification:** Checks relation kind, ordered columns and defaults, and the primary key.
 - **Compatibility:** Additive. Source instances ignore the table.
 - **Rollback:** None.
-- **Pending concerns:** The fresh-install script alignment noted for operation 19 also applies.
+- **Pending concerns:** None. The operation matches the current PostgreSQL fresh-install schema.
 
 ### 23: Scope ENTITY_TYPES primary key by deployment
 

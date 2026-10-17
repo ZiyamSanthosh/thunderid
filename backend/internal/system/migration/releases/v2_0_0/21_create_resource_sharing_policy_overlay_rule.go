@@ -18,14 +18,20 @@ var resourceSharingPolicyOverlayRuleTable = configTableSpec{
 		{name: "requested", nullable: "NO", dataType: "jsonb", maximumLength: "none", defaultValue: "none"},
 	},
 	keys: []configKeySpec{
-		{typeCode: "f", columns: "policy_id", referencedTable: "resource_sharing_policy", referencedColumns: "id", deleteAction: "c"},
-		{typeCode: "p", columns: "id"},
-		{typeCode: "u", columns: "policy_id,section,ou_id,field_key"},
+		{
+			typeCode: "f", columns: "deployment_id,policy_id", referencedTable: "resource_sharing_policy",
+			referencedColumns: "deployment_id,id", deleteAction: "c",
+		},
+		{typeCode: "p", columns: "deployment_id,id"},
+		{typeCode: "u", columns: "deployment_id,policy_id,section,ou_id,field_key"},
 	},
 	checks: []configCheckSpec{{requiredFragments: []string{"section", "allUnits", "childUnits", "otherTreeRoots"}}},
 	indexes: []configIndexSpec{
-		{name: "idx_rspor_blanket_once", unique: "true", columns: "policy_id,section,field_key", predicateFragments: []string{"ou_id", "is null"}},
-		{name: "idx_rspor_policy", unique: "false", columns: "policy_id"},
+		{
+			name: "idx_rspor_blanket_once", unique: "true",
+			columns: "deployment_id,policy_id,section,field_key", predicateFragments: []string{"ou_id", "is null"},
+		},
+		{name: "idx_rspor_policy", unique: "false", columns: "deployment_id,policy_id"},
 	},
 	dependencies: []configTableDependency{{
 		table: "RESOURCE_SHARING_POLICY", operationID: "2.0.0/configdb/19_create_resource_sharing_policy",
@@ -47,20 +53,22 @@ func newCreateResourceSharingPolicyOverlayRuleOperation() (engine.Operation, err
 
 const postgresCreateResourceSharingOverlayRuleTableSQL = `CREATE TABLE "RESOURCE_SHARING_POLICY_OVERLAY_RULE" (
     DEPLOYMENT_ID       VARCHAR(255) NOT NULL,
-    ID                  VARCHAR(36) PRIMARY KEY,
-    POLICY_ID           VARCHAR(36) NOT NULL
-                        REFERENCES "RESOURCE_SHARING_POLICY" (ID) ON DELETE CASCADE,
+    ID                  VARCHAR(36) NOT NULL,
+    POLICY_ID           VARCHAR(36) NOT NULL,
     SECTION             VARCHAR(16) NOT NULL CHECK (SECTION IN ('allUnits', 'childUnits', 'otherTreeRoots')),
     OU_ID               VARCHAR(36),
     FIELD_KEY           VARCHAR(255) NOT NULL,
     RESOLVED            JSONB NOT NULL,
     REQUESTED           JSONB NOT NULL,
-    UNIQUE (POLICY_ID, SECTION, OU_ID, FIELD_KEY)
+    PRIMARY KEY (DEPLOYMENT_ID, ID),
+    FOREIGN KEY (DEPLOYMENT_ID, POLICY_ID)
+        REFERENCES "RESOURCE_SHARING_POLICY" (DEPLOYMENT_ID, ID) ON DELETE CASCADE,
+    UNIQUE (DEPLOYMENT_ID, POLICY_ID, SECTION, OU_ID, FIELD_KEY)
 )`
 
 const postgresCreateResourceSharingOverlayRulePolicyIndexSQL = `CREATE INDEX idx_rspor_policy
-    ON "RESOURCE_SHARING_POLICY_OVERLAY_RULE" (POLICY_ID)`
+    ON "RESOURCE_SHARING_POLICY_OVERLAY_RULE" (DEPLOYMENT_ID, POLICY_ID)`
 
 const postgresCreateResourceSharingOverlayRuleBlanketIndexSQL = `CREATE UNIQUE INDEX idx_rspor_blanket_once
-    ON "RESOURCE_SHARING_POLICY_OVERLAY_RULE" (POLICY_ID, SECTION, FIELD_KEY)
+    ON "RESOURCE_SHARING_POLICY_OVERLAY_RULE" (DEPLOYMENT_ID, POLICY_ID, SECTION, FIELD_KEY)
     WHERE OU_ID IS NULL`

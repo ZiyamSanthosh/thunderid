@@ -15,8 +15,11 @@ var resourceSharingPolicyUnitTable = configTableSpec{
 		{name: "reach", nullable: "NO", dataType: "character varying", maximumLength: "16", defaultValue: "none"},
 	},
 	keys: []configKeySpec{
-		{typeCode: "f", columns: "policy_id", referencedTable: "resource_sharing_policy", referencedColumns: "id", deleteAction: "c"},
-		{typeCode: "p", columns: "policy_id,ou_id"},
+		{
+			typeCode: "f", columns: "deployment_id,policy_id", referencedTable: "resource_sharing_policy",
+			referencedColumns: "deployment_id,id", deleteAction: "c",
+		},
+		{typeCode: "p", columns: "deployment_id,policy_id,ou_id"},
 	},
 	checks: []configCheckSpec{
 		{requiredFragments: []string{"section", "childUnits", "otherTreeRoots"}},
@@ -43,12 +46,13 @@ func newCreateResourceSharingPolicyUnitOperation() (engine.Operation, error) {
 
 const postgresCreateResourceSharingPolicyUnitTableSQL = `CREATE TABLE "RESOURCE_SHARING_POLICY_UNIT" (
     DEPLOYMENT_ID VARCHAR(255) NOT NULL,
-    POLICY_ID     VARCHAR(36) NOT NULL
-                  REFERENCES "RESOURCE_SHARING_POLICY" (ID) ON DELETE CASCADE,
+    POLICY_ID     VARCHAR(36) NOT NULL,
     SECTION       VARCHAR(16) NOT NULL CHECK (SECTION IN ('childUnits', 'otherTreeRoots')),
     OU_ID         VARCHAR(36) NOT NULL,
     REACH         VARCHAR(16) NOT NULL CHECK (REACH IN ('unit', 'subtree')),
-    PRIMARY KEY (POLICY_ID, OU_ID),
+    PRIMARY KEY (DEPLOYMENT_ID, POLICY_ID, OU_ID),
+    FOREIGN KEY (DEPLOYMENT_ID, POLICY_ID)
+        REFERENCES "RESOURCE_SHARING_POLICY" (DEPLOYMENT_ID, ID) ON DELETE CASCADE,
     CHECK (SECTION = 'childUnits' OR REACH = 'unit')
 )`
 

@@ -22,11 +22,13 @@ var resourceSharingPolicyTable = configTableSpec{
 		{name: "updated_at", nullable: "YES", dataType: "timestamp with time zone", maximumLength: "none", defaultValue: "now()"},
 	},
 	keys: []configKeySpec{
-		{typeCode: "p", columns: "id"},
+		{typeCode: "p", columns: "deployment_id,id"},
 		{typeCode: "u", columns: "deployment_id,resource_type,resource_id,initiating_ou_id"},
 	},
-	checks:  []configCheckSpec{{requiredFragments: []string{"policy_stage", "share", "reshare"}}},
-	indexes: []configIndexSpec{{name: "idx_rsp_parent", unique: "false", columns: "parent_policy_id"}},
+	checks: []configCheckSpec{{requiredFragments: []string{"policy_stage", "share", "reshare"}}},
+	indexes: []configIndexSpec{{
+		name: "idx_rsp_parent", unique: "false", columns: "deployment_id,parent_policy_id",
+	}},
 }
 
 func newCreateResourceSharingPolicyOperation() (engine.Operation, error) {
@@ -43,7 +45,7 @@ func newCreateResourceSharingPolicyOperation() (engine.Operation, error) {
 
 const postgresCreateResourceSharingPolicyTableSQL = `CREATE TABLE "RESOURCE_SHARING_POLICY" (
     DEPLOYMENT_ID    VARCHAR(255) NOT NULL,
-    ID               VARCHAR(36) PRIMARY KEY,
+    ID               VARCHAR(36) NOT NULL,
     RESOURCE_TYPE    VARCHAR(64) NOT NULL,
     RESOURCE_ID      VARCHAR(36) NOT NULL,
     OWNING_OU_ID     VARCHAR(36) NOT NULL,
@@ -54,8 +56,9 @@ const postgresCreateResourceSharingPolicyTableSQL = `CREATE TABLE "RESOURCE_SHAR
     VERSION          INTEGER NOT NULL DEFAULT 1,
     CREATED_AT       TIMESTAMPTZ DEFAULT NOW(),
     UPDATED_AT       TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (DEPLOYMENT_ID, ID),
     UNIQUE (DEPLOYMENT_ID, RESOURCE_TYPE, RESOURCE_ID, INITIATING_OU_ID)
 )`
 
 const postgresCreateResourceSharingPolicyParentIndexSQL = `CREATE INDEX idx_rsp_parent
-    ON "RESOURCE_SHARING_POLICY" (PARENT_POLICY_ID)`
+    ON "RESOURCE_SHARING_POLICY" (DEPLOYMENT_ID, PARENT_POLICY_ID)`
