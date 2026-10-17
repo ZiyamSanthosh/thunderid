@@ -104,6 +104,100 @@ func migrationPlan(Dependencies) (engine.MigrationPlan, error) {
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
+	expandEntityTypesPrimaryKey, err := newExpandEntityTypesPrimaryKeyOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	expandRolePrimaryKey, err := newExpandRolePrimaryKeyOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	expandThemePrimaryKey, err := newExpandThemePrimaryKeyOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	expandLayoutPrimaryKey, err := newExpandLayoutPrimaryKeyOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	expandInboundClientPrimaryKey, err := newExpandInboundClientPrimaryKeyOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	expandIDPPrimaryKey, err := newExpandIDPPrimaryKeyOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	expandNotificationSenderPrimaryKey, err := newExpandNotificationSenderPrimaryKeyOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	expandCertificatePrimaryKey, err := newExpandCertificatePrimaryKeyOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	expandResourceServerPrimaryKey, err := newExpandResourceServerPrimaryKeyOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	expandResourcePrimaryKey, err := newExpandResourcePrimaryKeyOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	expandActionPrimaryKey, err := newExpandActionPrimaryKeyOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	expandFlowPrimaryKey, err := newExpandFlowPrimaryKeyOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	expandPresentationDefinitionPrimaryKey, err := newExpandPresentationDefinitionPrimaryKeyOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	expandCredentialConfigurationPrimaryKey, err := newExpandCredentialConfigurationPrimaryKeyOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	expandOrganizationUnitPrimaryKey, err := newExpandOrganizationUnitPrimaryKeyOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	expandEntityPrimaryKey, err := newExpandEntityPrimaryKeyOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	expandGroupPrimaryKey, err := newExpandGroupPrimaryKeyOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	expandCertificateReferenceID, err := newExpandCertificateReferenceIDOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	primaryKeyContractOperations, err := newLegacyPrimaryKeyContractOperations([]engine.Operation{
+		expandEntityTypesPrimaryKey,
+		expandRolePrimaryKey,
+		expandThemePrimaryKey,
+		expandLayoutPrimaryKey,
+		expandInboundClientPrimaryKey,
+		expandIDPPrimaryKey,
+		expandNotificationSenderPrimaryKey,
+		expandCertificatePrimaryKey,
+		expandResourceServerPrimaryKey,
+		expandResourcePrimaryKey,
+		expandActionPrimaryKey,
+		expandFlowPrimaryKey,
+		expandPresentationDefinitionPrimaryKey,
+		expandCredentialConfigurationPrimaryKey,
+		expandOrganizationUnitPrimaryKey,
+		expandEntityPrimaryKey,
+		expandGroupPrimaryKey,
+	})
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
 	backfillEntityTypeHandle := newBackfillEntityTypeHandleOperation()
 	addEntityTypeHandleUniqueness, err := newAddEntityTypeHandleUniquenessOperation()
 	if err != nil {
@@ -139,15 +233,33 @@ func migrationPlan(Dependencies) (engine.MigrationPlan, error) {
 			createResourceSharingPolicyUnit,
 			createResourceSharingPolicyOverlayRule,
 			createResourceOverlayValue,
+			expandEntityTypesPrimaryKey,
+			expandRolePrimaryKey,
+			expandThemePrimaryKey,
+			expandLayoutPrimaryKey,
+			expandInboundClientPrimaryKey,
+			expandIDPPrimaryKey,
+			expandNotificationSenderPrimaryKey,
+			expandCertificatePrimaryKey,
+			expandResourceServerPrimaryKey,
+			expandResourcePrimaryKey,
+			expandActionPrimaryKey,
+			expandFlowPrimaryKey,
+			expandPresentationDefinitionPrimaryKey,
+			expandCredentialConfigurationPrimaryKey,
+			expandOrganizationUnitPrimaryKey,
+			expandEntityPrimaryKey,
+			expandGroupPrimaryKey,
+			expandCertificateReferenceID,
 		},
 		Migrate: []engine.Operation{
 			backfillEntityTypeHandle,
 			addEntityTypeHandleUniqueness,
 		},
-		Contract: []engine.Operation{
+		Contract: append([]engine.Operation{
 			finalizeEntityTypeHandle,
 			removeEntityState,
-		},
+		}, primaryKeyContractOperations...),
 		Rollback: []engine.RollbackOperation{
 			rollbackEntityTypeHandleBackfill,
 		},

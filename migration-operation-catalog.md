@@ -14,8 +14,9 @@ verification, rollback, or compatibility behavior changes.
 - **Verification** is used before and after execution. A source result means work remains, a target
   result means the operation is already satisfied, and an invalid result means the schema or data
   is outside the accepted transition.
-- **Atomic** operations run as one transaction. **Resumable** operations process bounded batches
-  and persist checkpoints.
+- **Atomic** operations run as one transaction. **Online** schema operations execute restartable
+  autocommit DDL and use durable progress plus catalog verification for recovery. **Resumable**
+  operations process bounded batches and persist checkpoints.
 - Contract operations are irreversible boundaries. They run only after source instances are
   drained and rollback authorization has ended.
 - The current migration implementation supports PostgreSQL only.
@@ -27,7 +28,7 @@ verification, rollback, or compatibility behavior changes.
 | Expand | 01 | `configdb` | Create authorization PDP connection table | Schema, atomic | None | Implemented |
 | Expand | 02 | `configdb` | Add nullable entity-type handle | Schema, atomic | Schema retained | Implemented |
 | Expand | 03 | `entitydb` | Expand `ENTITY.TYPE` to 100 characters | Schema, atomic | None | Implemented |
-| Expand | 07 | `entitydb` | Add `VALUE` to the `ENTITY_IDENTIFIER` primary key | Schema, atomic | None | Expand only implemented |
+| Expand | 07 | `entitydb` | Add `VALUE` to the `ENTITY_IDENTIFIER` primary key | Schema, online | None | Expand only implemented |
 | Expand | 08 | `runtime_persistent` | Create `ENTITY_RUNTIME_DATA` | Schema, atomic | None | Implemented |
 | Expand | 09 | `entitydb` | Add temporary `ACTIVE` default to `ENTITY.STATE` | Schema, atomic | Not required | Implemented |
 | Expand | 11 | `runtime_persistent` | Add nullable SSO session properties | Schema, atomic | None | Implemented |
@@ -42,8 +43,26 @@ verification, rollback, or compatibility behavior changes.
 | Expand | 20 | `configdb` | Create resource sharing policy unit table | Schema, atomic | None | Implemented |
 | Expand | 21 | `configdb` | Create resource sharing policy overlay-rule table | Schema, atomic | None | Implemented |
 | Expand | 22 | `configdb` | Create resource overlay value table | Schema, atomic | None | Implemented |
+| Expand | 23 | `configdb` | Scope `ENTITY_TYPES` primary key by deployment | Schema, online | Conditional | Implemented |
+| Expand | 24 | `configdb` | Scope `ROLE` primary key by deployment | Schema, online | Conditional | Implemented |
+| Expand | 25 | `configdb` | Scope `THEME` primary key by deployment | Schema, online | Conditional | Implemented |
+| Expand | 26 | `configdb` | Scope `LAYOUT` primary key by deployment | Schema, online | Conditional | Implemented |
+| Expand | 27 | `configdb` | Scope `INBOUND_CLIENT` primary key by deployment | Schema, online | Conditional | Implemented |
+| Expand | 28 | `configdb` | Scope `IDP` primary key by deployment | Schema, online | Conditional | Implemented |
+| Expand | 29 | `configdb` | Scope `NOTIFICATION_SENDER` primary key by deployment | Schema, online | Conditional | Implemented |
+| Expand | 30 | `configdb` | Scope `CERTIFICATE` primary key by deployment | Schema, online | Conditional | Implemented |
+| Expand | 31 | `configdb` | Scope `RESOURCE_SERVER` primary key by deployment | Schema, online | Conditional | Implemented |
+| Expand | 32 | `configdb` | Scope `RESOURCE` primary key by deployment | Schema, online | Conditional | Implemented |
+| Expand | 33 | `configdb` | Scope `ACTION` primary key by deployment | Schema, online | Conditional | Implemented |
+| Expand | 34 | `configdb` | Scope `FLOW` primary key by deployment | Schema, online | Conditional | Implemented |
+| Expand | 35 | `configdb` | Scope `PRESENTATION_DEFINITION` primary key by deployment | Schema, online | Conditional | Implemented |
+| Expand | 36 | `configdb` | Scope `CREDENTIAL_CONFIGURATION` primary key by deployment | Schema, online | Conditional | Implemented |
+| Expand | 37 | `entitydb` | Scope `ORGANIZATION_UNIT` primary key by deployment | Schema, online | Conditional | Implemented |
+| Expand | 38 | `entitydb` | Scope `ENTITY` primary key by deployment | Schema, online | Conditional | Implemented |
+| Expand | 39 | `entitydb` | Scope `GROUP` primary key by deployment | Schema, online | Conditional | Implemented |
+| Expand | 40 | `configdb` | Expand `CERTIFICATE.REF_ID` to 2048 characters | Schema, atomic | None | Implemented |
 | Migrate | 04 | `configdb` | Backfill entity-type handles | Data, resumable | Operation 04 rollback | Implemented |
-| Migrate | 05 | `configdb` | Add entity-type handle uniqueness | Schema, atomic | None | Implemented |
+| Migrate | 05 | `configdb` | Add entity-type handle uniqueness | Schema, online | None | Implemented |
 | Contract | 06 | `configdb` | Finalize entity-type handles | Schema, atomic | None | Implemented |
 | Contract | 10 | `entitydb` | Remove legacy `ENTITY.STATE` | Schema, atomic | None | Implemented |
 
@@ -160,13 +179,16 @@ order.
 - **Readiness:** Deferred until operations 02 and 04 when their results are not yet available.
   Ready when both uniqueness constraints already coexist. Unexpected columns or constraints block
   execution.
-- **Execution:** Set a two-second local lock timeout, then add the target unique constraint.
-- **Verification:** Target requires both legacy name uniqueness and target handle uniqueness.
+- **Execution:** Build the target unique index concurrently. An invalid index left by an interrupted
+  build is dropped concurrently and rebuilt. Finalization uses a two-second lock timeout to attach
+  the prepared index as the target unique constraint in a short transaction.
+- **Verification:** Target requires both legacy name uniqueness and target handle uniqueness with
+  no leftover migration index.
 - **Compatibility:** Both source and target invariants coexist during mixed-version serving.
 - **Rollback:** No separate schema rollback. Clearing handles through operation 04 rollback leaves
   the nullable target uniqueness constraint harmless to the source.
-- **Pending concerns:** Adding the constraint validates existing data and needs a table lock within
-  the configured timeout.
+- **Pending concerns:** Serving-impact qualification must measure the final constraint-attachment
+  lock under representative load.
 
 ### 06: Finalize entity-type handles
 
@@ -196,13 +218,16 @@ order.
 - **Purpose:** Allow more than one value for the same entity identifier name by changing the primary
   key from `(ENTITY_ID, DEPLOYMENT_ID, NAME)` to `(ENTITY_ID, DEPLOYMENT_ID, NAME, VALUE)`.
 - **Source state:** Exact accepted `ENTITY_IDENTIFIER` columns and the exact three-column legacy
-  primary key. The temporary target index name must be unused.
-- **Readiness:** Ready for the exact legacy or target key. Unexpected columns, key order, relation
-  type, or conflicting index name blocks execution.
-- **Execution:** Set a two-second local lock timeout, create a unique target-key index, drop the old
-  primary key, and attach the new primary key using that index.
-- **Verification:** Target requires the exact four-column primary key and no leftover temporary
-  index conflict.
+  primary key. The dedicated migration index may be absent, valid, or an invalid interrupted build
+  with the expected target columns.
+- **Readiness:** Ready for the exact legacy, recoverable prepared, or target key. Unexpected column
+  definitions, key order, relation type, or a conflicting index definition blocks execution.
+- **Execution:** Build the unique four-column target index concurrently outside the engine
+  transaction. An invalid interrupted build is dropped concurrently and rebuilt. Finalization uses
+  a two-second lock timeout in a short transaction to replace the primary key using the prepared
+  index.
+- **Verification:** Target requires the exact four-column primary key and no leftover migration
+  index.
 - **Compatibility:** Existing rows remain valid. Source writes that produce one value per name are
   still accepted by the expanded key.
 - **Rollback:** None. Reverting to the legacy key may be impossible after multiple values exist.
@@ -472,6 +497,275 @@ order.
 - **Compatibility:** Additive. Source instances ignore the table.
 - **Rollback:** None.
 - **Pending concerns:** The fresh-install script alignment noted for operation 19 also applies.
+
+### 23: Scope ENTITY_TYPES primary key by deployment
+
+- **ID:** `2.0.0/configdb/23_expand_entity_types_primary_key`
+- **Definition:**
+  [`23_expand_entity_types_primary_key.go`](backend/internal/system/migration/releases/v2_0_0/23_expand_entity_types_primary_key.go)
+- **Purpose:** Replace the globally unique `ENTITY_TYPES.ID` primary key with
+  `(DEPLOYMENT_ID, ID)`.
+- **Source state:** `ENTITY_TYPES` is an ordinary table with non-null `DEPLOYMENT_ID` and `ID`
+  columns and a primary key on `ID`. The dedicated migration index is either absent, valid with the
+  target columns, or an invalid interrupted concurrent build with the target columns.
+- **Target state:** After Expand, the primary key is `(DEPLOYMENT_ID, ID)`, the temporary target
+  index has been attached as that key, and a separate unique `ID` compatibility index preserves the
+  source invariant. Contract removes the compatibility index after source drain.
+- **Readiness:** Accepts the exact source, recoverable interrupted-index, or target state. Missing
+  columns, nullable key columns, unexpected primary-key columns, or a conflicting index definition
+  block execution.
+- **Execution:** Build both the unique `(DEPLOYMENT_ID, ID)` target index and unique `ID`
+  compatibility index concurrently outside a transaction. Invalid interrupted builds are dropped
+  concurrently and rebuilt. Finalization uses a two-second lock timeout in a short transaction to
+  replace the primary key while leaving global `ID` uniqueness active for mixed-version serving.
+- **Verification:** Re-inspects the table, required non-null columns, ordered primary-key columns,
+  and temporary index state.
+- **Compatibility:** Existing source and target queries continue supplying UUID identifiers and
+  deployment scope. Global `ID` uniqueness remains enforced until Contract, so target writes cannot
+  introduce an identity shape that the source did not previously accept.
+- **Rollback:** Restoring the global `ID` key is possible only while `ID` remains globally unique.
+  No automatic rollback operation is currently registered.
+- **Pending concerns:** Serving-impact qualification must measure the final primary-key cutover lock.
+
+Operations 07 and 23 through 39 use the same online primary-key preparation and bounded cutover.
+Operations 23 through 39 additionally build a unique compatibility index over the legacy key before
+the cutover. Where a parent key has dependent foreign keys, the operation first adds deployment-scoped
+foreign keys as `NOT VALID`, validates them without blocking ordinary reads and writes, and removes
+the legacy foreign keys only in the final short transaction. The compatibility index continues to
+enforce the source uniqueness invariant throughout canary serving. Separate Contract operations,
+with IDs such as `23_finalize_entity_types_primary_key`, drop those indexes concurrently after source
+drain. Operation 07 intentionally does not retain its old uniqueness because allowing multiple values
+is the purpose of that key change. The shared implementations are
+[`online_primary_key_operation.go`](backend/internal/system/migration/releases/v2_0_0/online_primary_key_operation.go)
+and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migration/releases/v2_0_0/legacy_primary_key_contract_operation.go).
+
+### 24: Scope ROLE primary key by deployment
+
+- **ID:** `2.0.0/configdb/24_expand_role_primary_key`
+- **Definition:** [`24_expand_role_primary_key.go`](backend/internal/system/migration/releases/v2_0_0/24_expand_role_primary_key.go)
+- **Purpose:** Change `ROLE` from primary key `(ID)` to `(DEPLOYMENT_ID, ID)`.
+- **Source state and readiness:** Requires non-null key columns, the legacy key, and the legacy
+  `ROLE_PERMISSION(ROLE_ID)` foreign key. Exact target and recoverable prepared states are accepted.
+- **Execution and verification:** Concurrently prepares the target unique index and validates
+  `ROLE_PERMISSION(DEPLOYMENT_ID, ROLE_ID)` before the transactional key and foreign-key cutover.
+- **Compatibility:** Both binaries continue using deployment-scoped UUID role identifiers.
+- **Rollback:** Conditional on `ID` remaining globally unique. No automatic rollback is registered.
+- **Pending concerns:** Measure the final cutover lock under representative load.
+
+### 25: Scope THEME primary key by deployment
+
+- **ID:** `2.0.0/configdb/25_expand_theme_primary_key`
+- **Definition:** [`25_expand_theme_primary_key.go`](backend/internal/system/migration/releases/v2_0_0/25_expand_theme_primary_key.go)
+- **Purpose:** Change `THEME` from primary key `(ID)` to `(DEPLOYMENT_ID, ID)`.
+- **Source state and readiness:** Requires the ordinary table, non-null key columns, the legacy key,
+  and no conflicting migration index. Exact target and recoverable interrupted-index states pass.
+- **Execution and verification:** Concurrently prepares the target index, performs the bounded
+  transactional key swap, and verifies the ordered target key with no leftover migration index.
+- **Compatibility:** The change only relaxes global identifier uniqueness by deployment.
+- **Rollback:** Conditional on `ID` remaining globally unique. No automatic rollback is registered.
+- **Pending concerns:** Measure the final cutover lock under representative load.
+
+### 26: Scope LAYOUT primary key by deployment
+
+- **ID:** `2.0.0/configdb/26_expand_layout_primary_key`
+- **Definition:** [`26_expand_layout_primary_key.go`](backend/internal/system/migration/releases/v2_0_0/26_expand_layout_primary_key.go)
+- **Purpose:** Change `LAYOUT` from primary key `(ID)` to `(DEPLOYMENT_ID, ID)`.
+- **Source state and readiness:** Requires non-null key columns and the exact legacy or target key;
+  an invalid interrupted target index is recoverable, while other schema shapes are blocked.
+- **Execution and verification:** Uses concurrent index preparation followed by the short
+  transactional key swap and exact catalog verification.
+- **Compatibility:** Existing deployment-scoped reads and writes remain valid.
+- **Rollback:** Conditional on global `ID` uniqueness. No automatic rollback is registered.
+- **Pending concerns:** Measure the final cutover lock under representative load.
+
+### 27: Scope INBOUND_CLIENT primary key by deployment
+
+- **ID:** `2.0.0/configdb/27_expand_inbound_client_primary_key`
+- **Definition:** [`27_expand_inbound_client_primary_key.go`](backend/internal/system/migration/releases/v2_0_0/27_expand_inbound_client_primary_key.go)
+- **Purpose:** Change `INBOUND_CLIENT` from `(ENTITY_ID)` to `(DEPLOYMENT_ID, ENTITY_ID)`.
+- **Source state and readiness:** Requires both non-null key columns and the legacy
+  `OAUTH_INBOUND_PROFILE(ENTITY_ID)` foreign key, or the exact completed target.
+- **Execution and verification:** Prepares the parent index concurrently, adds and validates the
+  composite profile foreign key, then swaps both constraints in the bounded final transaction.
+- **Compatibility:** Existing identifiers remain valid and deployment-scoped queries are unchanged.
+- **Rollback:** Conditional on global `ENTITY_ID` uniqueness. No automatic rollback is registered.
+- **Pending concerns:** Measure the final cutover lock under representative load.
+
+### 28: Scope IDP primary key by deployment
+
+- **ID:** `2.0.0/configdb/28_expand_idp_primary_key`
+- **Definition:** [`28_expand_idp_primary_key.go`](backend/internal/system/migration/releases/v2_0_0/28_expand_idp_primary_key.go)
+- **Purpose:** Change `IDP` from primary key `(ID)` to `(DEPLOYMENT_ID, ID)`.
+- **Source state and readiness:** Accepts only the exact legacy, prepared, or target catalog state
+  with non-null key columns.
+- **Execution and verification:** Concurrent index preparation and a short transactional key swap,
+  followed by exact key and temporary-index verification.
+- **Compatibility:** Existing deployment-scoped reads and writes remain valid.
+- **Rollback:** Conditional on global `ID` uniqueness. No automatic rollback is registered.
+- **Pending concerns:** Measure the final cutover lock under representative load.
+
+### 29: Scope NOTIFICATION_SENDER primary key by deployment
+
+- **ID:** `2.0.0/configdb/29_expand_notification_sender_primary_key`
+- **Definition:** [`29_expand_notification_sender_primary_key.go`](backend/internal/system/migration/releases/v2_0_0/29_expand_notification_sender_primary_key.go)
+- **Purpose:** Change `NOTIFICATION_SENDER` from `(ID)` to `(DEPLOYMENT_ID, ID)`.
+- **Source state and readiness:** Requires the exact table, non-null key columns, and recognized key
+  and migration-index states.
+- **Execution and verification:** Concurrent index preparation, bounded key cutover, and exact
+  catalog verification.
+- **Compatibility:** Existing deployment-scoped reads and writes remain valid.
+- **Rollback:** Conditional on global `ID` uniqueness. No automatic rollback is registered.
+- **Pending concerns:** Measure the final cutover lock under representative load.
+
+### 30: Scope CERTIFICATE primary key by deployment
+
+- **ID:** `2.0.0/configdb/30_expand_certificate_primary_key`
+- **Definition:** [`30_expand_certificate_primary_key.go`](backend/internal/system/migration/releases/v2_0_0/30_expand_certificate_primary_key.go)
+- **Purpose:** Change `CERTIFICATE` from `(ID)` to `(DEPLOYMENT_ID, ID)`.
+- **Source state and readiness:** Requires non-null key columns and an exact legacy, prepared, or
+  target catalog state.
+- **Execution and verification:** Concurrently prepares the target index and verifies the final key
+  after a bounded transactional cutover.
+- **Compatibility:** Existing deployment-scoped reads and writes remain valid.
+- **Rollback:** Conditional on global `ID` uniqueness. No automatic rollback is registered.
+- **Pending concerns:** Measure the final cutover lock under representative load.
+
+### 31: Scope RESOURCE_SERVER primary key by deployment
+
+- **ID:** `2.0.0/configdb/31_expand_resource_server_primary_key`
+- **Definition:** [`31_expand_resource_server_primary_key.go`](backend/internal/system/migration/releases/v2_0_0/31_expand_resource_server_primary_key.go)
+- **Purpose:** Change `RESOURCE_SERVER` from `(ID)` to `(DEPLOYMENT_ID, ID)`.
+- **Source state and readiness:** Requires the legacy key and the legacy `RESOURCE` and `ACTION`
+  foreign keys, or an exact recoverable prepared or completed state.
+- **Execution and verification:** Prepares the parent index concurrently, validates composite
+  foreign keys from both child tables, and swaps the constraints in the bounded final transaction.
+- **Compatibility:** The legacy foreign keys remain enforced until their validated replacements
+  are ready. Existing deployment-scoped application behavior remains valid.
+- **Rollback:** Conditional on global `ID` uniqueness. No automatic rollback is registered.
+- **Pending concerns:** Measure the multi-constraint final cutover lock under representative load.
+
+### 32: Scope RESOURCE primary key by deployment
+
+- **ID:** `2.0.0/configdb/32_expand_resource_primary_key`
+- **Definition:** [`32_expand_resource_primary_key.go`](backend/internal/system/migration/releases/v2_0_0/32_expand_resource_primary_key.go)
+- **Purpose:** Change `RESOURCE` from `(ID)` to `(DEPLOYMENT_ID, ID)`.
+- **Source state and readiness:** Requires the legacy self-reference and `ACTION` foreign key, or an
+  exact recoverable prepared or completed state.
+- **Execution and verification:** Prepares the parent index, validates deployment-scoped self and
+  action foreign keys, and performs their final transactional cutover with the primary key.
+- **Compatibility:** The legacy global `ID` compatibility index remains through mixed-version
+  serving. Runtime and imported nested resources receive service-generated UUIDv7 IDs; declarative
+  nested resources remain in the file store with synthetic IDs.
+- **Rollback:** Conditional on global `ID` uniqueness. No automatic rollback is registered.
+- **Pending concerns:** Measure the multi-constraint final cutover lock under representative load.
+
+### 33: Scope ACTION primary key by deployment
+
+- **ID:** `2.0.0/configdb/33_expand_action_primary_key`
+- **Definition:** [`33_expand_action_primary_key.go`](backend/internal/system/migration/releases/v2_0_0/33_expand_action_primary_key.go)
+- **Purpose:** Change `ACTION` from `(ID)` to `(DEPLOYMENT_ID, ID)`.
+- **Source state and readiness:** Requires non-null key columns and an exact legacy, prepared, or
+  target catalog state.
+- **Execution and verification:** Concurrent target-index construction, bounded key swap, and exact
+  catalog verification.
+- **Compatibility:** Existing deployment-scoped reads and writes remain valid.
+- **Rollback:** Conditional on global `ID` uniqueness. No automatic rollback is registered.
+- **Pending concerns:** Measure the final cutover lock under representative load.
+
+### 34: Scope FLOW primary key by deployment
+
+- **ID:** `2.0.0/configdb/34_expand_flow_primary_key`
+- **Definition:** [`34_expand_flow_primary_key.go`](backend/internal/system/migration/releases/v2_0_0/34_expand_flow_primary_key.go)
+- **Purpose:** Change `FLOW` from `(ID)` to `(DEPLOYMENT_ID, ID)`.
+- **Source state and readiness:** Requires the legacy key and `FLOW_VERSION(FLOW_ID)` foreign key,
+  or an exact recoverable prepared or target state.
+- **Execution and verification:** Prepares the parent index, validates the composite flow-version
+  foreign key, then swaps the constraints in the bounded transaction and verifies the target.
+- **Compatibility:** The legacy foreign key remains active during online preparation.
+- **Rollback:** Conditional on global `ID` uniqueness. No automatic rollback is registered.
+- **Pending concerns:** Measure the final cutover lock under representative load.
+
+### 35: Scope PRESENTATION_DEFINITION primary key by deployment
+
+- **ID:** `2.0.0/configdb/35_expand_presentation_definition_primary_key`
+- **Definition:** [`35_expand_presentation_definition_primary_key.go`](backend/internal/system/migration/releases/v2_0_0/35_expand_presentation_definition_primary_key.go)
+- **Purpose:** Change `PRESENTATION_DEFINITION` from `(ID)` to `(DEPLOYMENT_ID, ID)`.
+- **Source state and readiness:** Requires non-null key columns and an exact legacy, prepared, or
+  target catalog state.
+- **Execution and verification:** Concurrent index preparation, bounded transactional cutover, and
+  exact catalog verification.
+- **Compatibility:** Existing deployment-scoped reads and writes remain valid.
+- **Rollback:** Conditional on global `ID` uniqueness. No automatic rollback is registered.
+- **Pending concerns:** Measure the final cutover lock under representative load.
+
+### 36: Scope CREDENTIAL_CONFIGURATION primary key by deployment
+
+- **ID:** `2.0.0/configdb/36_expand_credential_configuration_primary_key`
+- **Definition:** [`36_expand_credential_configuration_primary_key.go`](backend/internal/system/migration/releases/v2_0_0/36_expand_credential_configuration_primary_key.go)
+- **Purpose:** Change `CREDENTIAL_CONFIGURATION` from `(ID)` to `(DEPLOYMENT_ID, ID)`.
+- **Source state and readiness:** Requires non-null key columns and an exact legacy, prepared, or
+  target catalog state.
+- **Execution and verification:** Concurrent index preparation, bounded transactional cutover, and
+  exact catalog verification.
+- **Compatibility:** Existing deployment-scoped reads and writes remain valid.
+- **Rollback:** Conditional on global `ID` uniqueness. No automatic rollback is registered.
+- **Pending concerns:** Measure the final cutover lock under representative load.
+
+### 37: Scope ORGANIZATION_UNIT primary key by deployment
+
+- **ID:** `2.0.0/entitydb/37_expand_organization_unit_primary_key`
+- **Definition:** [`37_expand_organization_unit_primary_key.go`](backend/internal/system/migration/releases/v2_0_0/37_expand_organization_unit_primary_key.go)
+- **Purpose:** Change `ORGANIZATION_UNIT` from `(OU_ID)` to `(DEPLOYMENT_ID, OU_ID)`.
+- **Source state and readiness:** Requires non-null key columns and an exact legacy, prepared, or
+  target catalog state.
+- **Execution and verification:** Concurrent index preparation, bounded transactional cutover, and
+  exact catalog verification.
+- **Compatibility:** Existing deployment-scoped organizational-unit behavior remains valid.
+- **Rollback:** Conditional on global `OU_ID` uniqueness. No automatic rollback is registered.
+- **Pending concerns:** Measure the final cutover lock under representative load.
+
+### 38: Scope ENTITY primary key by deployment
+
+- **ID:** `2.0.0/entitydb/38_expand_entity_primary_key`
+- **Definition:** [`38_expand_entity_primary_key.go`](backend/internal/system/migration/releases/v2_0_0/38_expand_entity_primary_key.go)
+- **Purpose:** Change `ENTITY` from `(ID)` to `(DEPLOYMENT_ID, ID)`.
+- **Source state and readiness:** Requires the legacy key and
+  `ENTITY_IDENTIFIER(ENTITY_ID)` foreign key, or an exact recoverable prepared or target state.
+- **Execution and verification:** Prepares the parent index, validates the composite identifier
+  foreign key, and performs the foreign-key and primary-key cutover in the bounded transaction.
+- **Compatibility:** The legacy identifier foreign key remains enforced during online preparation.
+- **Rollback:** Conditional on global `ID` uniqueness. No automatic rollback is registered.
+- **Pending concerns:** Measure the final cutover lock under representative load.
+
+### 39: Scope GROUP primary key by deployment
+
+- **ID:** `2.0.0/entitydb/39_expand_group_primary_key`
+- **Definition:** [`39_expand_group_primary_key.go`](backend/internal/system/migration/releases/v2_0_0/39_expand_group_primary_key.go)
+- **Purpose:** Change `GROUP` from `(ID)` to `(DEPLOYMENT_ID, ID)`.
+- **Source state and readiness:** Requires non-null key columns and an exact legacy, prepared, or
+  target catalog state.
+- **Execution and verification:** Concurrent index preparation, bounded transactional cutover, and
+  exact catalog verification.
+- **Compatibility:** Existing deployment-scoped reads and writes remain valid.
+- **Rollback:** Conditional on global `ID` uniqueness. No automatic rollback is registered.
+- **Pending concerns:** Measure the final cutover lock under representative load.
+
+### 40: Expand certificate reference ID length
+
+- **ID:** `2.0.0/configdb/40_expand_certificate_reference_id`
+- **Definition:**
+  [`40_expand_certificate_reference_id.go`](backend/internal/system/migration/releases/v2_0_0/40_expand_certificate_reference_id.go)
+- **Purpose:** Increase `CERTIFICATE.REF_ID` from `VARCHAR(36)` to `VARCHAR(2048)` so references such
+  as metadata document URLs can be stored.
+- **Source state:** Exactly one non-null `VARCHAR(36)` `CERTIFICATE.REF_ID` column.
+- **Readiness:** Ready for the exact source or target definition. A missing, nullable, non-varchar,
+  or differently sized column blocks execution.
+- **Execution:** Set a two-second local lock timeout, then widen the column to `VARCHAR(2048)`.
+- **Verification:** Target requires a non-null `VARCHAR(2048)` column and preserves existing values.
+- **Compatibility:** The wider column accepts every source value and remains readable by source
+  instances.
+- **Rollback:** None. Shrinking could reject target-written references longer than 36 characters.
+- **Pending concerns:** None specific to this operation.
 
 ## Cross-operation pending work
 

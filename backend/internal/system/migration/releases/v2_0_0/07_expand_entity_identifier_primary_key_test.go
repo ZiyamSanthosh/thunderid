@@ -51,14 +51,13 @@ func TestExpandEntityIdentifierPrimaryKeyOperation(t *testing.T) {
 	assert.Equal(t, engine.OperationID("2.0.0/entitydb/07_expand_entity_identifier_primary_key"), definition.ID)
 	assert.Equal(t, engine.StoreIDEntityDB, definition.StoreID)
 	assert.Equal(t, engine.OperationKindSchemaChange, definition.Kind)
-	assert.Equal(t, engine.InterruptionModeAtomic, definition.InterruptionMode)
-
-	implementation, err := operation.(*engine.SQLOperation).Implementation(engine.DatabaseTypePostgres)
-	require.NoError(t, err)
-	require.Len(t, implementation.Statements, 3)
-	assert.Contains(t, implementation.Statements[1].Query,
-		`(ENTITY_ID, DEPLOYMENT_ID, NAME, VALUE)`)
-	assert.Contains(t, implementation.Statements[2].Query, `PRIMARY KEY USING INDEX`)
+	assert.Equal(t, engine.InterruptionModeOnline, definition.InterruptionMode)
+	onlineOperation := operation.(*entityIdentifierPrimaryKeyOperation)
+	assert.False(t, onlineOperation.preserveLegacyUniqueness)
+	assert.Contains(t, onlineOperation.createIndexQuery.PostgresQuery, `CREATE UNIQUE INDEX CONCURRENTLY`)
+	assert.Contains(t, onlineOperation.createIndexQuery.PostgresQuery,
+		`("entity_id", "deployment_id", "name", "value")`)
+	assert.Contains(t, onlineOperation.finalizeQuery.PostgresQuery, `PRIMARY KEY USING INDEX`)
 
 	source, err := operation.PreVerify(
 		context.Background(), entityIdentifierPrimaryKeyAccess(legacyEntityIdentifierPrimaryKeyColumns),
@@ -76,7 +75,7 @@ func TestExpandEntityIdentifierPrimaryKeyOperation(t *testing.T) {
 func TestExpandEntityIdentifierPrimaryKeyReadiness(t *testing.T) {
 	operation, err := newExpandEntityIdentifierPrimaryKeyOperation()
 	require.NoError(t, err)
-	sqlOperation := operation.(*engine.SQLOperation)
+	onlineOperation := operation.(*entityIdentifierPrimaryKeyOperation)
 
 	tests := []struct {
 		name          string
@@ -105,23 +104,37 @@ func TestExpandEntityIdentifierPrimaryKeyReadiness(t *testing.T) {
 			findingCount:  1,
 		},
 		{
+			name: "interrupted migration index is recoverable",
+			access: func() entityIdentifierPrimaryKeyReadAccess {
+				access := entityIdentifierPrimaryKeyAccess(legacyEntityIdentifierPrimaryKeyColumns)
+				access.rowsByQueryID["MIG-ENTITY-PK-07-04"] = []engine.QueryRow{{
+					"is_unique": true, "is_valid": false, "is_ready": false,
+					"column_names": targetEntityIdentifierPrimaryKeyColumns,
+				}}
+				return access
+			}(),
+			expectedState: engine.ReadinessReady,
+			expectedText:  "ready to include VALUE",
+		},
+		{
 			name: "migration index name collision blocks migration",
 			access: func() entityIdentifierPrimaryKeyReadAccess {
 				access := entityIdentifierPrimaryKeyAccess(legacyEntityIdentifierPrimaryKeyColumns)
-				access.rowsByQueryID[queryEntityIdentifierPrimaryKeyIndexName.GetID()] = []engine.QueryRow{{
-					"relation_kind": "i",
+				access.rowsByQueryID["MIG-ENTITY-PK-07-04"] = []engine.QueryRow{{
+					"is_unique": false, "is_valid": true, "is_ready": true,
+					"column_names": targetEntityIdentifierPrimaryKeyColumns,
 				}}
 				return access
 			}(),
 			expectedState: engine.ReadinessBlocked,
-			expectedText:  "already in use",
+			expectedText:  "unexpected index",
 			findingCount:  1,
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			result, err := sqlOperation.CheckReadiness(
+			result, err := onlineOperation.CheckReadiness(
 				context.Background(), test.access, engine.PlanContext{})
 
 			require.NoError(t, err)
@@ -148,14 +161,14 @@ func TestExpandEntityIdentifierPrimaryKeyRejectsUnexpectedSchema(t *testing.T) {
 		{
 			name: "missing table",
 			mutateAccess: func(access *entityIdentifierPrimaryKeyReadAccess) {
-				access.rowsByQueryID[queryEntityIdentifierTable.GetID()] = nil
+				access.rowsByQueryID["MIG-ENTITY-PK-07-01"] = nil
 			},
 			expectedText: "Expected one ENTITY_IDENTIFIER table",
 		},
 		{
 			name: "wrong relation kind",
 			mutateAccess: func(access *entityIdentifierPrimaryKeyReadAccess) {
-				access.rowsByQueryID[queryEntityIdentifierTable.GetID()] = []engine.QueryRow{{
+				access.rowsByQueryID["MIG-ENTITY-PK-07-01"] = []engine.QueryRow{{
 					"relation_kind": "v",
 				}}
 			},
@@ -171,7 +184,7 @@ func TestExpandEntityIdentifierPrimaryKeyRejectsUnexpectedSchema(t *testing.T) {
 		{
 			name: "missing primary key",
 			mutateAccess: func(access *entityIdentifierPrimaryKeyReadAccess) {
-				access.rowsByQueryID[queryEntityIdentifierPrimaryKey.GetID()] = nil
+				access.rowsByQueryID["MIG-ENTITY-PK-07-03"] = nil
 			},
 			expectedText: "Expected one ENTITY_IDENTIFIER primary key",
 		},
@@ -195,7 +208,7 @@ func TestExpandEntityIdentifierPrimaryKeyReadinessPropagatesInspectionFailure(t 
 	operation, err := newExpandEntityIdentifierPrimaryKeyOperation()
 	require.NoError(t, err)
 
-	result, err := operation.(*engine.SQLOperation).CheckReadiness(
+	result, err := operation.(*entityIdentifierPrimaryKeyOperation).CheckReadiness(
 		context.Background(), entityIdentifierPrimaryKeyReadAccess{err: errors.New("database unavailable")},
 		engine.PlanContext{})
 
@@ -205,29 +218,31 @@ func TestExpandEntityIdentifierPrimaryKeyReadinessPropagatesInspectionFailure(t 
 }
 
 func entityIdentifierPrimaryKeyAccess(primaryKeyColumns string) entityIdentifierPrimaryKeyReadAccess {
-	return entityIdentifierPrimaryKeyReadAccess{rowsByQueryID: map[string][]engine.QueryRow{
-		queryEntityIdentifierTable.GetID(): {{"relation_kind": "r"}},
-		queryEntityIdentifierColumns.GetID(): {
-			{
-				"column_name": "DEPLOYMENT_ID", "is_nullable": "NO",
-				"data_type": "character varying", "maximum_length": "255",
-			},
-			{
-				"column_name": "ENTITY_ID", "is_nullable": "NO",
-				"data_type": "character varying", "maximum_length": "36",
-			},
-			{
-				"column_name": "NAME", "is_nullable": "NO",
-				"data_type": "character varying", "maximum_length": "255",
-			},
-			{
-				"column_name": "VALUE", "is_nullable": "NO",
-				"data_type": "text", "maximum_length": "none",
-			},
+	columnRows := []engine.QueryRow{
+		{
+			"column_name": "DEPLOYMENT_ID", "is_nullable": "NO",
+			"data_type": "character varying", "maximum_length": "255",
 		},
-		queryEntityIdentifierPrimaryKey.GetID(): {{
+		{
+			"column_name": "ENTITY_ID", "is_nullable": "NO",
+			"data_type": "character varying", "maximum_length": "36",
+		},
+		{
+			"column_name": "NAME", "is_nullable": "NO",
+			"data_type": "character varying", "maximum_length": "255",
+		},
+		{
+			"column_name": "VALUE", "is_nullable": "NO",
+			"data_type": "text", "maximum_length": "none",
+		},
+	}
+	return entityIdentifierPrimaryKeyReadAccess{rowsByQueryID: map[string][]engine.QueryRow{
+		"MIG-ENTITY-PK-07-01":                {{"relation_kind": "r"}},
+		"MIG-ENTITY-PK-07-02":                columnRows,
+		queryEntityIdentifierColumns.GetID(): columnRows,
+		"MIG-ENTITY-PK-07-03": {{
 			"constraint_name": "ENTITY_IDENTIFIER_pkey", "column_names": primaryKeyColumns,
 		}},
-		queryEntityIdentifierPrimaryKeyIndexName.GetID(): nil,
+		"MIG-ENTITY-PK-07-04": nil,
 	}}
 }

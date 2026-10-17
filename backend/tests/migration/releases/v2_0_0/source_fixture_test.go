@@ -15,6 +15,8 @@ import (
 
 const legacyEntityTypeName = "Legacy Person"
 
+const legacyCertificateReferenceID = "legacy-client"
+
 const entityTypeBackfillFixtureCount = 101
 
 func prepareEntityTypeMigrationSource(t *testing.T, environment migrationharness.Environment) {
@@ -37,6 +39,11 @@ func prepareEntityTypeMigrationSource(t *testing.T, environment migrationharness
 			fmt.Sprintf("Batch Entity %03d", index+1))
 		require.NoError(t, err)
 	}
+	_, err = configDB.Exec(`INSERT INTO "CERTIFICATE"
+		(DEPLOYMENT_ID, ID, REF_TYPE, REF_ID, TYPE, VALUE)
+		VALUES ('migration-deployment', '0199a123-4799-7abc-8def-0123456789ab',
+			'application', $1, 'JWKS', 'legacy-certificate')`, legacyCertificateReferenceID)
+	require.NoError(t, err)
 
 	entityDB := environment.OpenDatabase(t, "entitydb")
 	_, err = entityDB.Exec(`INSERT INTO "ENTITY"

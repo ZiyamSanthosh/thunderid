@@ -25,6 +25,8 @@ The current branch contains these recent migration commits:
 - Startup compatibility enforcement before normal service initialization.
 - Atomic and resumable execution with transactional progress and checkpoints.
 - Namespace-level PostgreSQL execution ownership locks.
+- Restartable online schema execution for PostgreSQL DDL that cannot run inside a transaction,
+  including concurrent index creation.
 - Complete-store and deployment-selective migration targets.
 - Separate-database and shared-physical-database operation.
 - Restricted operating mode and feature gates for incompatible writes.

@@ -25,46 +25,51 @@ func TestDefinitionMatchesProductVersion(t *testing.T) {
 	assert.Equal(t, expectedVersion, definition.Manifest.ReleaseVersion)
 	assert.Equal(t, expectedVersion, definition.Plan.TargetVersion)
 	assert.Len(t, definition.Manifest.Stores, 4)
-	require.Len(t, definition.Plan.Expand, 18)
+	require.Len(t, definition.Plan.Expand, 36)
 	require.Len(t, definition.Plan.Migrate, 2)
-	require.Len(t, definition.Plan.Contract, 2)
+	require.Len(t, definition.Plan.Contract, 19)
 	require.Len(t, definition.Plan.Rollback, 1)
-	assert.Equal(t, "2.0.0/configdb/01_create_authorization_pdp_connection",
-		string(definition.Plan.Expand[0].Definition().ID))
-	assert.Equal(t, "2.0.0/configdb/02_add_entity_type_handle",
-		string(definition.Plan.Expand[1].Definition().ID))
-	assert.Equal(t, "2.0.0/entitydb/03_expand_entity_type_length",
-		string(definition.Plan.Expand[2].Definition().ID))
-	assert.Equal(t, "2.0.0/entitydb/07_expand_entity_identifier_primary_key",
-		string(definition.Plan.Expand[3].Definition().ID))
-	assert.Equal(t, "2.0.0/runtime_persistent/08_create_entity_runtime_data",
-		string(definition.Plan.Expand[4].Definition().ID))
-	assert.Equal(t, "2.0.0/entitydb/09_add_entity_state_default",
-		string(definition.Plan.Expand[5].Definition().ID))
-	assert.Equal(t, "2.0.0/runtime_persistent/11_add_sso_session_properties",
-		string(definition.Plan.Expand[6].Definition().ID))
-	assert.Equal(t, "2.0.0/configdb/12_create_notification_template",
-		string(definition.Plan.Expand[7].Definition().ID))
-	assert.Equal(t, "2.0.0/configdb/13_create_variable",
-		string(definition.Plan.Expand[8].Definition().ID))
-	assert.Equal(t, "2.0.0/configdb/14_create_secret",
-		string(definition.Plan.Expand[9].Definition().ID))
-	assert.Equal(t, "2.0.0/configdb/15_create_gateway",
-		string(definition.Plan.Expand[10].Definition().ID))
-	assert.Equal(t, "2.0.0/configdb/16_create_configuration_version",
-		string(definition.Plan.Expand[11].Definition().ID))
-	assert.Equal(t, "2.0.0/configdb/17_create_gateway_applied_version",
-		string(definition.Plan.Expand[12].Definition().ID))
-	assert.Equal(t, "2.0.0/configdb/18_create_gateway_excluded_resource",
-		string(definition.Plan.Expand[13].Definition().ID))
-	assert.Equal(t, "2.0.0/configdb/19_create_resource_sharing_policy",
-		string(definition.Plan.Expand[14].Definition().ID))
-	assert.Equal(t, "2.0.0/configdb/20_create_resource_sharing_policy_unit",
-		string(definition.Plan.Expand[15].Definition().ID))
-	assert.Equal(t, "2.0.0/configdb/21_create_resource_sharing_policy_overlay_rule",
-		string(definition.Plan.Expand[16].Definition().ID))
-	assert.Equal(t, "2.0.0/configdb/22_create_resource_overlay_value",
-		string(definition.Plan.Expand[17].Definition().ID))
+	expectedExpandIDs := []string{
+		"2.0.0/configdb/01_create_authorization_pdp_connection",
+		"2.0.0/configdb/02_add_entity_type_handle",
+		"2.0.0/entitydb/03_expand_entity_type_length",
+		"2.0.0/entitydb/07_expand_entity_identifier_primary_key",
+		"2.0.0/runtime_persistent/08_create_entity_runtime_data",
+		"2.0.0/entitydb/09_add_entity_state_default",
+		"2.0.0/runtime_persistent/11_add_sso_session_properties",
+		"2.0.0/configdb/12_create_notification_template",
+		"2.0.0/configdb/13_create_variable",
+		"2.0.0/configdb/14_create_secret",
+		"2.0.0/configdb/15_create_gateway",
+		"2.0.0/configdb/16_create_configuration_version",
+		"2.0.0/configdb/17_create_gateway_applied_version",
+		"2.0.0/configdb/18_create_gateway_excluded_resource",
+		"2.0.0/configdb/19_create_resource_sharing_policy",
+		"2.0.0/configdb/20_create_resource_sharing_policy_unit",
+		"2.0.0/configdb/21_create_resource_sharing_policy_overlay_rule",
+		"2.0.0/configdb/22_create_resource_overlay_value",
+		"2.0.0/configdb/23_expand_entity_types_primary_key",
+		"2.0.0/configdb/24_expand_role_primary_key",
+		"2.0.0/configdb/25_expand_theme_primary_key",
+		"2.0.0/configdb/26_expand_layout_primary_key",
+		"2.0.0/configdb/27_expand_inbound_client_primary_key",
+		"2.0.0/configdb/28_expand_idp_primary_key",
+		"2.0.0/configdb/29_expand_notification_sender_primary_key",
+		"2.0.0/configdb/30_expand_certificate_primary_key",
+		"2.0.0/configdb/31_expand_resource_server_primary_key",
+		"2.0.0/configdb/32_expand_resource_primary_key",
+		"2.0.0/configdb/33_expand_action_primary_key",
+		"2.0.0/configdb/34_expand_flow_primary_key",
+		"2.0.0/configdb/35_expand_presentation_definition_primary_key",
+		"2.0.0/configdb/36_expand_credential_configuration_primary_key",
+		"2.0.0/entitydb/37_expand_organization_unit_primary_key",
+		"2.0.0/entitydb/38_expand_entity_primary_key",
+		"2.0.0/entitydb/39_expand_group_primary_key",
+		"2.0.0/configdb/40_expand_certificate_reference_id",
+	}
+	for index, expectedID := range expectedExpandIDs {
+		assert.Equal(t, expectedID, string(definition.Plan.Expand[index].Definition().ID))
+	}
 	assert.Equal(t, "2.0.0/configdb/04_backfill_entity_type_handle",
 		string(definition.Plan.Migrate[0].Definition().ID))
 	assert.Equal(t, "2.0.0/configdb/05_add_entity_type_handle_uniqueness",
@@ -73,6 +78,28 @@ func TestDefinitionMatchesProductVersion(t *testing.T) {
 		string(definition.Plan.Contract[0].Definition().ID))
 	assert.Equal(t, "2.0.0/entitydb/10_remove_entity_state",
 		string(definition.Plan.Contract[1].Definition().ID))
+	expectedPrimaryKeyContractIDs := []string{
+		"2.0.0/configdb/23_finalize_entity_types_primary_key",
+		"2.0.0/configdb/24_finalize_role_primary_key",
+		"2.0.0/configdb/25_finalize_theme_primary_key",
+		"2.0.0/configdb/26_finalize_layout_primary_key",
+		"2.0.0/configdb/27_finalize_inbound_client_primary_key",
+		"2.0.0/configdb/28_finalize_idp_primary_key",
+		"2.0.0/configdb/29_finalize_notification_sender_primary_key",
+		"2.0.0/configdb/30_finalize_certificate_primary_key",
+		"2.0.0/configdb/31_finalize_resource_server_primary_key",
+		"2.0.0/configdb/32_finalize_resource_primary_key",
+		"2.0.0/configdb/33_finalize_action_primary_key",
+		"2.0.0/configdb/34_finalize_flow_primary_key",
+		"2.0.0/configdb/35_finalize_presentation_definition_primary_key",
+		"2.0.0/configdb/36_finalize_credential_configuration_primary_key",
+		"2.0.0/entitydb/37_finalize_organization_unit_primary_key",
+		"2.0.0/entitydb/38_finalize_entity_primary_key",
+		"2.0.0/entitydb/39_finalize_group_primary_key",
+	}
+	for index, expectedID := range expectedPrimaryKeyContractIDs {
+		assert.Equal(t, expectedID, string(definition.Plan.Contract[index+2].Definition().ID))
+	}
 	assert.Equal(t, "2.0.0/configdb/04_backfill_entity_type_handle_rollback",
 		string(definition.Plan.Rollback[0].Definition().ID))
 	assert.Equal(t, definition.Plan.Migrate[0].Definition().ID,

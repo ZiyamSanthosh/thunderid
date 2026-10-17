@@ -22,11 +22,10 @@ func TestAddEntityTypeHandleUniquenessOperation(t *testing.T) {
 	definition := operation.Definition()
 	assert.Equal(t, engine.OperationID("2.0.0/configdb/05_add_entity_type_handle_uniqueness"), definition.ID)
 	assert.Equal(t, engine.OperationKindSchemaChange, definition.Kind)
-
-	implementation, err := operation.(*engine.SQLOperation).Implementation(engine.DatabaseTypePostgres)
-	require.NoError(t, err)
-	require.Len(t, implementation.Statements, 2)
-	assert.Contains(t, implementation.Statements[1].Query, `UNIQUE (HANDLE, CATEGORY, DEPLOYMENT_ID)`)
+	assert.Equal(t, engine.InterruptionModeOnline, definition.InterruptionMode)
+	onlineOperation := operation.(*entityTypeHandleUniquenessOperation)
+	assert.Contains(t, onlineOperation.createIndexQuery.PostgresQuery, `CREATE UNIQUE INDEX CONCURRENTLY`)
+	assert.Contains(t, onlineOperation.finalizeQuery.PostgresQuery, `UNIQUE USING INDEX`)
 
 	source, err := operation.PreVerify(context.Background(), entityTypeContractAccess(
 		entityTypeExpandedColumnRows(), legacyEntityTypeUniqueColumns), engine.ExecutionTarget{})
@@ -48,7 +47,7 @@ func TestAddEntityTypeHandleUniquenessOperation(t *testing.T) {
 func TestAddEntityTypeHandleUniquenessReadiness(t *testing.T) {
 	operation, err := newAddEntityTypeHandleUniquenessOperation()
 	require.NoError(t, err)
-	sqlOperation := operation.(*engine.SQLOperation)
+	onlineOperation := operation.(*entityTypeHandleUniquenessOperation)
 
 	tests := []struct {
 		name          string
@@ -90,7 +89,7 @@ func TestAddEntityTypeHandleUniquenessReadiness(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			result, err := sqlOperation.CheckReadiness(
+			result, err := onlineOperation.CheckReadiness(
 				context.Background(), test.access, engine.PlanContext{})
 
 			require.NoError(t, err)
@@ -112,13 +111,34 @@ func TestAddEntityTypeHandleUniquenessReadinessPropagatesInspectionFailure(t *te
 	operation, err := newAddEntityTypeHandleUniquenessOperation()
 	require.NoError(t, err)
 
-	result, err := operation.(*engine.SQLOperation).CheckReadiness(
+	result, err := operation.(*entityTypeHandleUniquenessOperation).CheckReadiness(
 		context.Background(), authorizationPDPReadAccess{err: errors.New("database unavailable")},
 		engine.PlanContext{})
 
 	require.Error(t, err)
 	assert.Empty(t, result.State)
 	assert.ErrorContains(t, err, "database unavailable")
+}
+
+func TestAddEntityTypeHandleUniquenessRecognizesPreparedIndexStates(t *testing.T) {
+	operation, err := newAddEntityTypeHandleUniquenessOperation()
+	require.NoError(t, err)
+
+	invalidPreparedIndex := []engine.QueryRow{{
+		"is_unique": true, "is_valid": false, "is_ready": false,
+		"column_names": targetEntityTypeUniqueColumns,
+	}}
+	access := entityTypeContractAccess(entityTypeExpandedColumnRows(), legacyEntityTypeUniqueColumns)
+	access.rows[queryEntityTypeHandleUniqueIndex.GetID()] = invalidPreparedIndex
+
+	verification, err := operation.PreVerify(context.Background(), access, engine.ExecutionTarget{})
+	require.NoError(t, err)
+	assert.Equal(t, engine.VerificationSource, verification.State)
+
+	readiness, err := operation.(*entityTypeHandleUniquenessOperation).CheckReadiness(
+		context.Background(), access, engine.PlanContext{})
+	require.NoError(t, err)
+	assert.Equal(t, engine.ReadinessDeferred, readiness.State)
 }
 
 func entityTypeContractAccess(
@@ -135,6 +155,7 @@ func entityTypeContractAccess(
 	return authorizationPDPReadAccess{rows: map[string][]engine.QueryRow{
 		queryEntityTypeMigrationColumns.GetID():  columns,
 		queryEntityTypeUniqueConstraints.GetID(): constraintRows,
+		queryEntityTypeHandleUniqueIndex.GetID(): nil,
 		queryEntityTypeNullHandles.GetID():       {{"has_null_handles": false}},
 	}}
 }

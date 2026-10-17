@@ -152,8 +152,9 @@ func NewSQLOperation(config SQLOperationConfig) (*SQLOperation, error) {
 	if err := validateOperationDefinition(config.Definition, knownStores); err != nil {
 		return nil, fmt.Errorf("create SQL operation: %w", err)
 	}
-	if config.Definition.InterruptionMode != InterruptionModeAtomic {
-		return nil, errors.New("create SQL operation: interruption mode must be atomic")
+	if config.Definition.InterruptionMode != InterruptionModeAtomic &&
+		config.Definition.InterruptionMode != InterruptionModeOnline {
+		return nil, errors.New("create SQL operation: interruption mode must be atomic or online")
 	}
 	if config.Definition.Kind == OperationKindSchemaChange && config.TargetResolver != nil {
 		return nil, errors.New("create SQL operation: schema-change operation cannot define a target resolver")
@@ -270,6 +271,12 @@ func (o *SQLOperation) Execute(ctx context.Context, execution OperationExecution
 			return fmt.Errorf("execute operation %q statement %q: %w", o.definition.ID, statement.ID, err)
 		}
 	}
+	return nil
+}
+
+// Finalize completes the short transactional portion of an online operation.
+// Plain SQL operations have no separate finalization step.
+func (o *SQLOperation) Finalize(context.Context, OperationExecution) error {
 	return nil
 }
 

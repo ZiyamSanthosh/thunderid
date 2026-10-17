@@ -47,6 +47,9 @@ The current implementation contains:
 - an atomic complete-store executor that reuses ThunderID's transactioner to verify reservation
   ownership, pre-verify, execute or skip, post-verify and complete operation progress in one
   transaction;
+- an online schema executor that durably records in-progress work, executes PostgreSQL autocommit
+  DDL outside a transaction, and uses source and target verification to complete or safely resume
+  operations whose DDL and progress updates cannot be atomic;
 - a resumable complete-store executor that commits bounded data batches independently, persists
   each checkpoint in the same transaction as its data changes, rejects checkpoints that do not
   advance and continues an interrupted operation from its last committed checkpoint;
@@ -117,6 +120,9 @@ The current implementation contains:
 - operation-specific readiness checks for every forward 2.0.0 operation, including exact source and
   target schema recognition, relation-name conflict detection, handle validation, dependency-aware
   deferred readiness and null-handle contract validation;
+- online deployment-scoped primary-key operations for the affected configuration and entity
+  tables, including concurrent unique-index preparation, validated replacement foreign keys,
+  bounded transactional cutover and recovery from interrupted online preparation;
 - provider-neutral typed query-row helpers for operation readiness and verification queries;
 - a Docker Compose PostgreSQL integration test that builds the target ThunderID binary, obtains the
   configured source release schema from its published image, initializes all four logical

@@ -57,6 +57,10 @@ func (o testOperation) Execute(context.Context, OperationExecution) error {
 	return nil
 }
 
+func (o testOperation) Finalize(context.Context, OperationExecution) error {
+	return nil
+}
+
 func (o testOperation) PostVerify(context.Context, ReadAccess, ExecutionTarget) (VerificationResult, error) {
 	return VerificationResult{State: VerificationTarget, Summary: "Test target is valid"}, nil
 }
@@ -91,6 +95,20 @@ func TestPlanRegistryAcceptsNoChangePlan(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Empty(t, registry.Plan().Operations())
+}
+
+func TestPlanRegistryAcceptsOnlineSchemaOperation(t *testing.T) {
+	manifest := changedStoreManifest(StoreIDEntityDB)
+	operation := validPlanOperation(StoreIDEntityDB)
+	operation.definition.Kind = OperationKindSchemaChange
+	operation.definition.InterruptionMode = InterruptionModeOnline
+	plan := MigrationPlan{TargetVersion: manifest.ReleaseVersion, Expand: []Operation{operation}}
+
+	registry, err := NewPlanRegistry(manifest, plan)
+
+	require.NoError(t, err)
+	assert.Equal(t, InterruptionModeOnline,
+		registry.Plan().Expand[0].Definition().InterruptionMode)
 }
 
 func TestMigrationPlanReturnsOperationsForPhase(t *testing.T) {
@@ -264,6 +282,9 @@ func TestPlanRegistryRejectsInvalidOperationDefinition(t *testing.T) {
 			definition.Kind = OperationKindSchemaChange
 			definition.InterruptionMode = InterruptionModeResumable
 		}, errorMatch: "resumable execution requires a data-change operation"},
+		{name: "online data change", mutate: func(definition *OperationDefinition) {
+			definition.InterruptionMode = InterruptionModeOnline
+		}, errorMatch: "online execution requires a schema-change operation"},
 		{name: "unknown read store", mutate: func(definition *OperationDefinition) {
 			definition.ReadStoreIDs = []StoreID{"unknown"}
 		}, errorMatch: "reads undeclared"},
