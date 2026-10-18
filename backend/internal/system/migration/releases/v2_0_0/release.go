@@ -217,12 +217,22 @@ func migrationPlan(Dependencies) (engine.MigrationPlan, error) {
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
+	migrateEntityTypeReferences := newMigrateEntityTypeReferencesOperation()
+	migrateInboundClientEntityTypeReferences := newMigrateInboundClientEntityTypeReferencesOperation()
+	migrateIDPEntityTypeReferences := newMigrateIDPEntityTypeReferencesOperation()
+	migrateAuthorizationPDPEntityTypeReferences := newMigrateAuthorizationPDPEntityTypeReferencesOperation()
+	migrateFlowEntityTypeReferences := newMigrateFlowEntityTypeReferencesOperation()
 	// Enable operation 10 with operations 08 and 09 after the entity runtime-data product change is merged.
 	// removeEntityState, err := newRemoveEntityStateOperation()
 	// if err != nil {
 	// 	return engine.MigrationPlan{}, err
 	// }
 	rollbackEntityTypeHandleBackfill := newRollbackEntityTypeHandleBackfillOperation()
+	rollbackEntityTypeReferences := newRollbackEntityTypeReferencesOperation()
+	rollbackInboundClientEntityTypeReferences := newRollbackInboundClientEntityTypeReferencesOperation()
+	rollbackIDPEntityTypeReferences := newRollbackIDPEntityTypeReferencesOperation()
+	rollbackAuthorizationPDPEntityTypeReferences := newRollbackAuthorizationPDPEntityTypeReferencesOperation()
+	rollbackFlowEntityTypeReferences := newRollbackFlowEntityTypeReferencesOperation()
 	return engine.MigrationPlan{
 		TargetVersion: "2.0.0",
 		Expand: []engine.Operation{
@@ -270,6 +280,11 @@ func migrationPlan(Dependencies) (engine.MigrationPlan, error) {
 		Migrate: []engine.Operation{
 			backfillEntityTypeHandle,
 			addEntityTypeHandleUniqueness,
+			migrateEntityTypeReferences,
+			migrateInboundClientEntityTypeReferences,
+			migrateIDPEntityTypeReferences,
+			migrateAuthorizationPDPEntityTypeReferences,
+			migrateFlowEntityTypeReferences,
 		},
 		Contract: append([]engine.Operation{
 			finalizeEntityTypeHandle,
@@ -277,6 +292,11 @@ func migrationPlan(Dependencies) (engine.MigrationPlan, error) {
 			// removeEntityState,
 		}, primaryKeyContractOperations...),
 		Rollback: []engine.RollbackOperation{
+			rollbackFlowEntityTypeReferences,
+			rollbackAuthorizationPDPEntityTypeReferences,
+			rollbackIDPEntityTypeReferences,
+			rollbackInboundClientEntityTypeReferences,
+			rollbackEntityTypeReferences,
 			rollbackEntityTypeHandleBackfill,
 		},
 	}, nil

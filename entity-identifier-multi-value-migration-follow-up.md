@@ -37,11 +37,25 @@ The follow-up must define and test consistent PostgreSQL and SQLite behavior for
 The fallback is a correctness path, not a replacement for the identifier projection. Normal indexed
 lookups should continue using `ENTITY_IDENTIFIER`.
 
-## Pending identifier resynchronization operation
+## Identifier resynchronization decision
+
+A bulk identifier resynchronization operation is not required for the current migration. Existing
+entities without projected rows continue through the entity JSON lookup fallback, and later entity
+mutations can populate the projection through the normal product path. The array-membership defect
+in that fallback remains a product query issue and must be fixed separately.
+
+Do not treat identifier resynchronization as pending implementation work. Reconsider it only if a
+future requirement demands a complete eagerly populated projection, or if production evidence shows
+that relying on the corrected fallback is not operationally acceptable.
+
+### Superseded design retained for reference
 
 Existing entities may contain multi-valued indexed attributes that have no corresponding identifier
-rows because the previous synchronization logic skipped arrays. A later operation must rebuild the
-identifier projection for those entities.
+rows because the previous synchronization logic skipped arrays. If the decision is revisited, an
+operation could rebuild the identifier projection for those entities.
+
+The following design was considered before the decision above. It is retained to preserve the
+analysis, but it is not part of the current migration plan.
 
 The planned operation is a deployment-scoped, resumable data operation that runs after source
 instances are drained. It should be the first contract operation for this change.
@@ -61,7 +75,7 @@ The implementation should use the existing resumable-operation contract and a na
 service interface injected through the release dependency seam. The generic migration engine must not
 depend on entity business packages.
 
-## Mixed-version constraints
+### Superseded mixed-version constraints
 
 Before the source is drained:
 
@@ -79,7 +93,7 @@ After source instances are drained, contract authorization ends source rollback 
 resynchronization operation is resumed after interruption rather than reversed to the old
 array-skipping projection.
 
-## Required follow-up validation
+### Superseded validation plan
 
 - Source binaries continue serving supported authentication against the expanded primary key.
 - Target binaries preserve existing scalar identifier behavior before resynchronization.

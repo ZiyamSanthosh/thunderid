@@ -815,13 +815,9 @@ func (c *MigrationCoordinator) storeCompletedPhase(
 		return state.Status == StatusClean && state.Stage == MigrationStageComplete &&
 			state.CompletedLevel == requirement.RequiredLevel, nil
 	}
-	completedStage, err := completedStageBeforePhase(phasePlan.next)
-	if err != nil {
-		return false, err
-	}
-	return state.Status == StatusCompleted && state.Stage == completedStage &&
-		state.CompletedLevel == requirement.AcceptedSourceLevel &&
-		state.TargetLevel == requirement.RequiredLevel && state.ActiveRunID == "", nil
+	return state.CompletedLevel == requirement.AcceptedSourceLevel &&
+		state.ActiveRunID == "" &&
+		requestedPhaseCompleted(phase, requirement.RequiredLevel, &state), nil
 }
 
 func (c *MigrationCoordinator) inspectCompletedProgress(

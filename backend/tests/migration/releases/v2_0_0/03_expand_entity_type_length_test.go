@@ -21,8 +21,8 @@ func verifyExpandEntityTypeLength(t *testing.T, environment migrationharness.Env
 			"100")
 		migrationharness.AssertQueryValue(t, db,
 			`SELECT TYPE FROM "ENTITY" WHERE ID = '0199a123-4703-7abc-8def-0123456789ab'`,
-			legacyEntityTypeName)
+			"legacy-person")
 		migrationharness.AssertOperationCompleted(t, db, "2.0.0/entitydb/03_expand_entity_type_length")
-		t.Log("verified: ENTITY.TYPE accepts 100 characters without changing existing values")
+		t.Log("verified: ENTITY.TYPE accepts 100 characters before the later reference migration")
 	})
 }

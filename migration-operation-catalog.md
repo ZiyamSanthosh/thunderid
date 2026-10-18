@@ -19,6 +19,10 @@ verification, rollback, or compatibility behavior changes.
   operations process bounded batches and persist checkpoints.
 - Contract operations are irreversible boundaries. They run only after source instances are
   drained and rollback authorization has ended.
+- For this release, source instances may serve only through Expand. Stop source traffic before
+  Migrate because operations 43 through 47 replace legacy entity-type names with handles and the
+  source and target binaries do not provide a dual-read representation. Keep the service offline
+  through Contract, then start the target binary after final verification.
 - The current migration implementation supports PostgreSQL only.
 
 ## Release plan at a glance
@@ -61,8 +65,15 @@ verification, rollback, or compatibility behavior changes.
 | Expand | 38 | `entitydb` | Scope `ENTITY` primary key by deployment | Schema, online | Conditional | Implemented |
 | Expand | 39 | `entitydb` | Scope `GROUP` primary key by deployment | Schema, online | Conditional | Implemented |
 | Expand | 40 | `configdb` | Expand `CERTIFICATE.REF_ID` to 2048 characters | Schema, atomic | None | Implemented |
+| Expand | 41 | `runtime_persistent` | Expand revocation criterion values to 2048 characters | Schema, atomic | None | Implemented |
+| Expand | 42 | `runtime_persistent` | Add SSO participant application lookup index | Schema, online | None | Implemented |
 | Migrate | 04 | `configdb` | Backfill entity-type handles | Data, resumable | Operation 04 rollback | Implemented |
 | Migrate | 05 | `configdb` | Add entity-type handle uniqueness | Schema, online | None | Implemented |
+| Migrate | 43 | `entitydb` | Replace entity record type names with handles | Data, resumable | Operation 43 rollback | Implemented |
+| Migrate | 44 | `configdb` | Replace inbound-client entity-type names with handles | Data, resumable | Operation 44 rollback | Implemented |
+| Migrate | 45 | `configdb` | Replace identity-provider entity-type names with handles | Data, resumable | Operation 45 rollback | Implemented |
+| Migrate | 46 | `configdb` | Replace authorization PDP entity-type names with handles | Data, resumable | Operation 46 rollback | Implemented |
+| Migrate | 47 | `configdb` | Replace flow entity-type names with handles | Data, resumable | Operation 47 rollback | Implemented |
 | Contract | 06 | `configdb` | Finalize entity-type handles | Schema, atomic | None | Implemented |
 | Contract | 10 | `entitydb` | Remove legacy `ENTITY.STATE` | Schema, atomic | None | Implemented |
 
@@ -231,9 +242,9 @@ order.
 - **Compatibility:** Existing rows remain valid. Source writes that produce one value per name are
   still accepted by the expanded key.
 - **Rollback:** None. Reverting to the legacy key may be impossible after multiple values exist.
-- **Pending concerns:** This operation changes only the schema. Array-aware JSON fallback lookup and
-  the deployment-scoped identifier resynchronization operation are still pending. Their behavior,
-  mixed-version controls, and validation requirements are recorded in
+- **Pending concerns:** This operation changes only the schema. Array-aware JSON fallback lookup is
+  still pending. A bulk identifier resynchronization operation was considered and deliberately
+  excluded from the current migration plan. The decision and former design are recorded in
   [`entity-identifier-multi-value-migration-follow-up.md`](entity-identifier-multi-value-migration-follow-up.md).
 
 ### 08: Create entity runtime data table
@@ -818,21 +829,103 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
   the exact valid, ready, non-unique B-tree index without a predicate, preservation of a source row,
   and completed operation progress.
 
+### 43: Migrate entity record type references
+
+- **ID:** `2.0.0/entitydb/43_migrate_entity_type_references`
+- **Definition:**
+  [`43_migrate_entity_type_references.go`](backend/internal/system/migration/releases/v2_0_0/43_migrate_entity_type_references.go)
+- **Purpose:** Replace legacy entity-type names in `ENTITY.TYPE` with the exact handles persisted by
+  operation 04.
+- **Source state:** Every non-empty type value resolves by deployment and `ENTITY.CATEGORY` to an
+  `ENTITY_TYPES.NAME` or is already a valid persisted handle.
+- **Readiness:** Deferred until the handle column and complete backfill exist. Unknown or malformed
+  references block execution.
+- **Execution:** Read the persisted `(DEPLOYMENT_ID, CATEGORY, NAME, HANDLE)` mapping from `configdb`,
+  update `entitydb` in batches of 100 ordered by deployment and entity ID, and persist a cursor.
+- **Verification:** The target requires every entity type value to resolve as a persisted handle.
+- **Compatibility:** Requires downtime. The source binary must not serve after this operation
+  begins, and the target starts only after the complete migration is verified.
+- **Rollback:** The paired rollback restores names before operation 04 clears the handle column
+  values.
+- **Pending concerns:** None specific to this operation.
+
+### 44: Migrate inbound-client entity-type references
+
+- **ID:** `2.0.0/configdb/44_migrate_inbound_client_entity_type_references`
+- **Definition:**
+  [`44_migrate_inbound_client_entity_type_references.go`](backend/internal/system/migration/releases/v2_0_0/44_migrate_inbound_client_entity_type_references.go)
+- **Purpose:** Replace names in `INBOUND_CLIENT.PROPERTIES.allowedUserTypes`, `allowedAgentTypes`,
+  and the keys of `subjectAttribute` with persisted handles.
+- **Readiness:** Deferred until operation 04 has produced a complete mapping. Invalid JSON,
+  unexpected field shapes, unknown names, and translated duplicate map keys block execution.
+- **Execution:** Rewrite only the affected JSON fields in batches of 100 and checkpoint by
+  deployment and entity ID.
+- **Verification:** Every affected value and map key must resolve as a persisted handle.
+- **Compatibility:** Requires the same downtime boundary as operation 43.
+- **Rollback:** Restores legacy names using the persisted reverse mapping.
+- **Pending concerns:** None specific to this operation.
+
+### 45: Migrate identity-provider entity-type references
+
+- **ID:** `2.0.0/configdb/45_migrate_idp_entity_type_references`
+- **Definition:**
+  [`45_migrate_idp_entity_type_references.go`](backend/internal/system/migration/releases/v2_0_0/45_migrate_idp_entity_type_references.go)
+- **Purpose:** Replace names in `IDP.ATTRIBUTE_CONFIGURATION`, including
+  `userTypeResolution.default`, every `userTypeResolution.valueMapping` value, and every
+  `userTypeAttributeMappings[].userType` value.
+- **Readiness:** Deferred until operation 04. Invalid JSON, unexpected structures, or unknown user
+  types block execution.
+- **Execution:** Rewrite affected JSON fields in resumable batches of 100.
+- **Verification:** Every affected value must resolve as a persisted user-type handle.
+- **Compatibility:** Requires the same downtime boundary as operation 43.
+- **Rollback:** Restores legacy user-type names from the persisted mapping.
+- **Pending concerns:** None specific to this operation.
+
+### 46: Migrate authorization PDP entity-type references
+
+- **ID:** `2.0.0/configdb/46_migrate_authorization_pdp_entity_type_references`
+- **Definition:**
+  [`46_migrate_authorization_pdp_entity_type_references.go`](backend/internal/system/migration/releases/v2_0_0/46_migrate_authorization_pdp_entity_type_references.go)
+- **Purpose:** Replace every
+  `AUTHORIZATION_PDP_CONNECTION.PROPERTIES.subjectAttributeMappings[].entityType` name with its
+  persisted handle.
+- **Readiness:** Deferred until operation 04. Invalid JSON, unexpected structures, unknown names,
+  or a reference that resolves differently in user and agent categories blocks execution.
+- **Execution:** Rewrite affected JSON values in resumable batches of 100.
+- **Verification:** Every affected value must resolve as one unambiguous persisted handle.
+- **Compatibility:** Requires the same downtime boundary as operation 43.
+- **Rollback:** Restores the corresponding legacy names.
+- **Pending concerns:** References do not carry a category. A value shared by user and agent
+  categories is accepted only when both categories translate to the same value.
+
+### 47: Migrate flow entity-type references
+
+- **ID:** `2.0.0/configdb/47_migrate_flow_entity_type_references`
+- **Definition:**
+  [`47_migrate_flow_entity_type_references.go`](backend/internal/system/migration/releases/v2_0_0/47_migrate_flow_entity_type_references.go)
+- **Purpose:** Rewrite every stored flow version, replacing `allowedUserTypes` on
+  `UserTypeResolver` nodes and `allowedAgentTypes` on `AgentTypeResolver` nodes with persisted
+  handles.
+- **Readiness:** Deferred until operation 04. Invalid node JSON, unexpected affected field shapes,
+  or unknown entity types block execution.
+- **Execution:** Process every `FLOW_VERSION`, including inactive versions, in batches of 100 and
+  checkpoint by deployment, flow ID, and version.
+- **Verification:** Every affected resolver value must resolve as a persisted handle.
+- **Compatibility:** Requires the same downtime boundary as operation 43.
+- **Rollback:** Restores legacy names in every affected flow version.
+- **Pending concerns:** None specific to this operation.
+
 ## Cross-operation pending work
 
-1. Implement and validate the operation 07 follow-up: array-aware fallback lookup and resumable
-   identifier resynchronization after source drain.
+1. Implement and validate the operation 07 array-aware fallback lookup. Identifier
+   resynchronization is deliberately not part of the current migration plan.
 2. Complete production controls for resumable data work, including configurable batch sizing,
    pacing, resource limits, and operational observability.
-3. Keep capability restrictions migration-specific. Entity-type writers, identifier-projection
-   writers, and runtime-state management need only the controls required by the operation that is
-   active. Authentication and token issuance should remain available when they do not mutate the
-   affected representation.
-4. Reconcile the synthetic `TestPostgresResumableBackfill` integration expectation with the
-   engine's explicit contract boundary. The relevant ThunderID 2.0.0 separate-store and shared-store
-   migration workflows pass, but the full migration integration package still reports that
-   unrelated fixture mismatch.
-5. Keep the daily main-branch deployment mapping described in
+3. Enforce the release-level downtime procedure for operations 43 through 47. Source serving ends
+   before Migrate, no application writes are allowed through Migrate and Contract, and the target
+   starts only after final verification. Migration-specific capability restrictions remain useful
+   for future releases that retain a mixed-version serving window.
+4. Keep the daily main-branch deployment mapping described in
    [`saas-continuous-deployment-migration-model.md`](saas-continuous-deployment-migration-model.md)
    aligned with immutable operation IDs and release-plan ordering.
 

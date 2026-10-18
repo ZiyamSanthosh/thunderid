@@ -135,6 +135,26 @@ func TestMigrationCoordinatorStoreCompletedPhaseAllowsUndeclaredStorePhase(t *te
 	assert.True(t, completed)
 }
 
+func TestMigrationCoordinatorStoreCompletedPhaseAllowsStoreBeyondRequestedPhase(t *testing.T) {
+	release := phaseAwareStateControllerTestRelease()
+	coordinator := &MigrationCoordinator{plan: release.Plan}
+	requirement := release.Manifest.Stores[0]
+
+	completed, err := coordinator.storeCompletedPhase(
+		requirement,
+		State{
+			CompletedLevel: requirement.AcceptedSourceLevel,
+			TargetLevel:    requirement.RequiredLevel,
+			Stage:          MigrationStageContractReady,
+			Status:         StatusCompleted,
+		},
+		OperationPhaseExpand,
+	)
+
+	require.NoError(t, err)
+	assert.True(t, completed)
+}
+
 func TestMigrationCoordinatorStoreCompletedPhaseRejectsUnsupportedPhase(t *testing.T) {
 	release := coordinatorTestRelease()
 	coordinator := &MigrationCoordinator{plan: release.Plan}

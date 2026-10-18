@@ -46,6 +46,34 @@ func prepareEntityTypeMigrationSource(t *testing.T, environment migrationharness
 		VALUES ('migration-deployment', '0199a123-4799-7abc-8def-0123456789ab',
 			'application', $1, 'JWKS', 'legacy-certificate')`, legacyCertificateReferenceID)
 	require.NoError(t, err)
+	_, err = configDB.Exec(`INSERT INTO "INBOUND_CLIENT"
+		(DEPLOYMENT_ID, ENTITY_ID, AUTH_FLOW_ID, PROPERTIES)
+		VALUES ('migration-deployment', '0199a123-4794-7abc-8def-0123456789ab',
+			'0199a123-4793-7abc-8def-0123456789ab', $1::jsonb)`, fmt.Sprintf(`{
+			"allowedUserTypes":[%q],
+			"subjectAttribute":{%q:"email"}
+		}`, legacyEntityTypeName, legacyEntityTypeName))
+	require.NoError(t, err)
+	_, err = configDB.Exec(`INSERT INTO "IDP"
+		(DEPLOYMENT_ID, ID, NAME, TYPE, ATTRIBUTE_CONFIGURATION)
+		VALUES ('migration-deployment', '0199a123-4792-7abc-8def-0123456789ab',
+			'Legacy IDP', 'OIDC', $1::jsonb)`, fmt.Sprintf(`{
+			"userTypeResolution":{"default":%q,"valueMapping":{"legacy":%q}},
+			"userTypeAttributeMappings":[{"userType":%q,"attributes":[]}]
+		}`, legacyEntityTypeName, legacyEntityTypeName, legacyEntityTypeName))
+	require.NoError(t, err)
+	_, err = configDB.Exec(`INSERT INTO "FLOW"
+		(DEPLOYMENT_ID, ID, HANDLE, NAME, FLOW_TYPE, ACTIVE_VERSION)
+		VALUES ('migration-deployment', '0199a123-4791-7abc-8def-0123456789ab',
+			'legacy-registration', 'Legacy Registration', 'REGISTRATION', 1)`)
+	require.NoError(t, err)
+	_, err = configDB.Exec(`INSERT INTO "FLOW_VERSION"
+		(DEPLOYMENT_ID, FLOW_ID, VERSION, NODES)
+		VALUES ('migration-deployment', '0199a123-4791-7abc-8def-0123456789ab', 1, $1::jsonb)`,
+		fmt.Sprintf(`[{"id":"resolver","type":"TASK_EXECUTION",
+			"executor":{"name":"UserTypeResolver"},
+			"properties":{"allowedUserTypes":[%q]}}]`, legacyEntityTypeName))
+	require.NoError(t, err)
 
 	entityDB := environment.OpenDatabase(t, "entitydb")
 	_, err = entityDB.Exec(`INSERT INTO "ENTITY"
