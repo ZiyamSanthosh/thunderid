@@ -39,6 +39,20 @@ var deploymentScopedPrimaryKeyOperations = []deploymentScopedPrimaryKeyOperation
 	{store: "entitydb", number: "39", table: "GROUP", columns: "DEPLOYMENT_ID,ID"},
 }
 
+func verifyLegacyThemeLayoutForeignKeys(t *testing.T, environment migrationharness.Environment) {
+	t.Helper()
+	db := environment.OpenDatabase(t, "configdb")
+	for _, parentTable := range []string{"THEME", "LAYOUT"} {
+		migrationharness.AssertQueryValue(t, db,
+			`SELECT COUNT(*)::TEXT FROM pg_constraint constraint_def
+				INNER JOIN pg_class child_table ON child_table.oid = constraint_def.conrelid
+				INNER JOIN pg_class parent_table ON parent_table.oid = constraint_def.confrelid
+				WHERE constraint_def.contype = 'f'
+				AND child_table.relname = 'INBOUND_CLIENT' AND parent_table.relname = $1`,
+			"1", parentTable)
+	}
+}
+
 func verifyDeploymentScopedPrimaryKeys(t *testing.T, environment migrationharness.Environment) {
 	t.Helper()
 	for _, operation := range deploymentScopedPrimaryKeyOperations {
@@ -61,6 +75,21 @@ func verifyDeploymentScopedPrimaryKeys(t *testing.T, environment migrationharnes
 				"1", operation.table, legacyPrimaryKeyIndexName(operation.table))
 		})
 	}
+	db := environment.OpenDatabase(t, "configdb")
+	for _, parentTable := range []string{"THEME", "LAYOUT"} {
+		migrationharness.AssertQueryValue(t, db,
+			`SELECT COUNT(*)::TEXT FROM pg_constraint constraint_def
+				INNER JOIN pg_class child_table ON child_table.oid = constraint_def.conrelid
+				INNER JOIN pg_class parent_table ON parent_table.oid = constraint_def.confrelid
+				WHERE constraint_def.contype = 'f'
+				AND child_table.relname = 'INBOUND_CLIENT' AND parent_table.relname = $1`,
+			"0", parentTable)
+	}
+	migrationharness.AssertQueryValue(t, db,
+		`SELECT THEME_ID || ':' || LAYOUT_ID FROM "INBOUND_CLIENT"
+			WHERE DEPLOYMENT_ID = 'migration-deployment'
+			AND ENTITY_ID = '0199a123-4794-7abc-8def-0123456789ab'`,
+		"0199a123-4780-7abc-8def-0123456789ab:0199a123-4781-7abc-8def-0123456789ab")
 	t.Log("verified: deployment-scoped primary keys retain legacy uniqueness for mixed-version serving")
 }
 

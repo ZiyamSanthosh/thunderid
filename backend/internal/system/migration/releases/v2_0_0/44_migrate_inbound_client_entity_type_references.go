@@ -31,20 +31,26 @@ var (
 	}
 )
 
-func newMigrateInboundClientEntityTypeReferencesOperation() engine.Operation {
-	return newEntityTypeReferenceOperation(inboundClientEntityTypeReferencesOperationConfig(
-		migrateInboundClientEntityTypeReferencesOperationID,
-		"Replace entity type names with handles in inbound client configuration",
-		entityTypeReferenceForward,
-	))
+func newMigrateInboundClientEntityTypeReferencesOperation(
+	declared *declarativeEntityTypeSource,
+) engine.Operation {
+	return newEntityTypeReferenceOperation(withDeclaredEntityTypes(
+		declared, inboundClientEntityTypeReferencesOperationConfig(
+			migrateInboundClientEntityTypeReferencesOperationID,
+			"Replace entity type names with handles in inbound client configuration",
+			entityTypeReferenceForward,
+		)))
 }
 
-func newRollbackInboundClientEntityTypeReferencesOperation() engine.RollbackOperation {
-	return newRollbackEntityTypeReferenceOperation(inboundClientEntityTypeReferencesOperationConfig(
-		"2.0.0/configdb/44_migrate_inbound_client_entity_type_references_rollback",
-		"Restore entity type names in inbound client configuration",
-		entityTypeReferenceRollback,
-	), migrateInboundClientEntityTypeReferencesOperationID)
+func newRollbackInboundClientEntityTypeReferencesOperation(
+	declared *declarativeEntityTypeSource,
+) engine.RollbackOperation {
+	return newRollbackEntityTypeReferenceOperation(withDeclaredEntityTypes(
+		declared, inboundClientEntityTypeReferencesOperationConfig(
+			"2.0.0/configdb/44_migrate_inbound_client_entity_type_references_rollback",
+			"Restore entity type names in inbound client configuration",
+			entityTypeReferenceRollback,
+		)), migrateInboundClientEntityTypeReferencesOperationID)
 }
 
 func inboundClientEntityTypeReferencesOperationConfig(

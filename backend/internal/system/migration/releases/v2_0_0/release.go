@@ -15,7 +15,12 @@ var manifestData []byte
 
 // Dependencies contains the dependencies available while constructing this release's operations.
 // Add narrowly typed providers only when a concrete operation requires them.
-type Dependencies struct{}
+type Dependencies struct {
+	// DeclarativeEntityTypes lazily provides the read-only entity types defined in declarative resource
+	// files, which have no ENTITY_TYPES row. It is used by the entity-type reference operations (43 to
+	// 47). When nil, those operations map entity types from the database alone.
+	DeclarativeEntityTypes func() (DeclarativeEntityTypes, error)
+}
 
 // Definition returns the manifest and plan owned by ThunderID 2.0.0.
 func Definition() (*engine.ReleaseDefinition, error) {
@@ -31,7 +36,8 @@ func DefinitionWithDependencies(dependencies Dependencies) (*engine.ReleaseDefin
 	return engine.NewReleaseDefinition(manifestData, plan)
 }
 
-func migrationPlan(Dependencies) (engine.MigrationPlan, error) {
+func migrationPlan(dependencies Dependencies) (engine.MigrationPlan, error) {
+	declaredEntityTypes := newDeclarativeEntityTypeSource(dependencies.DeclarativeEntityTypes)
 	createAuthorizationPDPConnection, err := newCreateAuthorizationPDPConnectionOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
@@ -208,7 +214,7 @@ func migrationPlan(Dependencies) (engine.MigrationPlan, error) {
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	backfillEntityTypeHandle := newBackfillEntityTypeHandleOperation()
+	backfillEntityTypeHandle := newBackfillEntityTypeHandleOperation(declaredEntityTypes)
 	addEntityTypeHandleUniqueness, err := newAddEntityTypeHandleUniquenessOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
@@ -217,22 +223,26 @@ func migrationPlan(Dependencies) (engine.MigrationPlan, error) {
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	migrateEntityTypeReferences := newMigrateEntityTypeReferencesOperation()
-	migrateInboundClientEntityTypeReferences := newMigrateInboundClientEntityTypeReferencesOperation()
-	migrateIDPEntityTypeReferences := newMigrateIDPEntityTypeReferencesOperation()
-	migrateAuthorizationPDPEntityTypeReferences := newMigrateAuthorizationPDPEntityTypeReferencesOperation()
-	migrateFlowEntityTypeReferences := newMigrateFlowEntityTypeReferencesOperation()
+	migrateEntityTypeReferences := newMigrateEntityTypeReferencesOperation(declaredEntityTypes)
+	migrateInboundClientEntityTypeReferences := newMigrateInboundClientEntityTypeReferencesOperation(declaredEntityTypes)
+	migrateIDPEntityTypeReferences := newMigrateIDPEntityTypeReferencesOperation(declaredEntityTypes)
+	migrateAuthorizationPDPEntityTypeReferences := newMigrateAuthorizationPDPEntityTypeReferencesOperation(declaredEntityTypes)
+	migrateFlowEntityTypeReferences := newMigrateFlowEntityTypeReferencesOperation(declaredEntityTypes)
+	migrateDefaultAgentNameSchema := newMigrateDefaultAgentNameSchemaOperation()
+	migrateAgentNamesToAttributes := newMigrateAgentNamesToAttributesOperation(declaredEntityTypes)
 	// Enable operation 10 with operations 08 and 09 after the entity runtime-data product change is merged.
 	// removeEntityState, err := newRemoveEntityStateOperation()
 	// if err != nil {
 	// 	return engine.MigrationPlan{}, err
 	// }
 	rollbackEntityTypeHandleBackfill := newRollbackEntityTypeHandleBackfillOperation()
-	rollbackEntityTypeReferences := newRollbackEntityTypeReferencesOperation()
-	rollbackInboundClientEntityTypeReferences := newRollbackInboundClientEntityTypeReferencesOperation()
-	rollbackIDPEntityTypeReferences := newRollbackIDPEntityTypeReferencesOperation()
-	rollbackAuthorizationPDPEntityTypeReferences := newRollbackAuthorizationPDPEntityTypeReferencesOperation()
-	rollbackFlowEntityTypeReferences := newRollbackFlowEntityTypeReferencesOperation()
+	rollbackEntityTypeReferences := newRollbackEntityTypeReferencesOperation(declaredEntityTypes)
+	rollbackInboundClientEntityTypeReferences := newRollbackInboundClientEntityTypeReferencesOperation(declaredEntityTypes)
+	rollbackIDPEntityTypeReferences := newRollbackIDPEntityTypeReferencesOperation(declaredEntityTypes)
+	rollbackAuthorizationPDPEntityTypeReferences := newRollbackAuthorizationPDPEntityTypeReferencesOperation(declaredEntityTypes)
+	rollbackFlowEntityTypeReferences := newRollbackFlowEntityTypeReferencesOperation(declaredEntityTypes)
+	rollbackDefaultAgentNameSchema := newRollbackDefaultAgentNameSchemaOperation()
+	rollbackAgentNamesToAttributes := newRollbackAgentNamesToAttributesOperation(declaredEntityTypes)
 	return engine.MigrationPlan{
 		TargetVersion: "2.0.0",
 		Expand: []engine.Operation{
@@ -285,6 +295,8 @@ func migrationPlan(Dependencies) (engine.MigrationPlan, error) {
 			migrateIDPEntityTypeReferences,
 			migrateAuthorizationPDPEntityTypeReferences,
 			migrateFlowEntityTypeReferences,
+			migrateDefaultAgentNameSchema,
+			migrateAgentNamesToAttributes,
 		},
 		Contract: append([]engine.Operation{
 			finalizeEntityTypeHandle,
@@ -292,6 +304,8 @@ func migrationPlan(Dependencies) (engine.MigrationPlan, error) {
 			// removeEntityState,
 		}, primaryKeyContractOperations...),
 		Rollback: []engine.RollbackOperation{
+			rollbackAgentNamesToAttributes,
+			rollbackDefaultAgentNameSchema,
 			rollbackFlowEntityTypeReferences,
 			rollbackAuthorizationPDPEntityTypeReferences,
 			rollbackIDPEntityTypeReferences,

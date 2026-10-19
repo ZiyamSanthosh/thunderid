@@ -14,7 +14,7 @@ import (
 )
 
 func TestEntityTypeReferenceReadinessDefersUntilHandleColumnExists(t *testing.T) {
-	operation := newMigrateInboundClientEntityTypeReferencesOperation()
+	operation := newMigrateInboundClientEntityTypeReferencesOperation(nil)
 	result, err := operation.(engine.ReadinessChecker).CheckReadiness(
 		context.Background(),
 		authorizationPDPReadAccess{rows: map[string][]engine.QueryRow{
@@ -140,11 +140,11 @@ func TestEntityTypeReferenceOperationsAreResumableAndUseTheExpectedStores(t *tes
 		store      engine.StoreID
 		readStores []engine.StoreID
 	}{
-		{newMigrateEntityTypeReferencesOperation(), engine.StoreIDEntityDB, []engine.StoreID{engine.StoreIDConfigDB}},
-		{newMigrateInboundClientEntityTypeReferencesOperation(), engine.StoreIDConfigDB, nil},
-		{newMigrateIDPEntityTypeReferencesOperation(), engine.StoreIDConfigDB, nil},
-		{newMigrateAuthorizationPDPEntityTypeReferencesOperation(), engine.StoreIDConfigDB, nil},
-		{newMigrateFlowEntityTypeReferencesOperation(), engine.StoreIDConfigDB, nil},
+		{newMigrateEntityTypeReferencesOperation(nil), engine.StoreIDEntityDB, []engine.StoreID{engine.StoreIDConfigDB}},
+		{newMigrateInboundClientEntityTypeReferencesOperation(nil), engine.StoreIDConfigDB, nil},
+		{newMigrateIDPEntityTypeReferencesOperation(nil), engine.StoreIDConfigDB, nil},
+		{newMigrateAuthorizationPDPEntityTypeReferencesOperation(nil), engine.StoreIDConfigDB, nil},
+		{newMigrateFlowEntityTypeReferencesOperation(nil), engine.StoreIDConfigDB, nil},
 	}
 
 	for _, test := range tests {

@@ -31,20 +31,26 @@ var (
 	}
 )
 
-func newMigrateIDPEntityTypeReferencesOperation() engine.Operation {
-	return newEntityTypeReferenceOperation(idpEntityTypeReferencesOperationConfig(
-		migrateIDPEntityTypeReferencesOperationID,
-		"Replace entity type names with handles in identity provider configuration",
-		entityTypeReferenceForward,
-	))
+func newMigrateIDPEntityTypeReferencesOperation(
+	declared *declarativeEntityTypeSource,
+) engine.Operation {
+	return newEntityTypeReferenceOperation(withDeclaredEntityTypes(
+		declared, idpEntityTypeReferencesOperationConfig(
+			migrateIDPEntityTypeReferencesOperationID,
+			"Replace entity type names with handles in identity provider configuration",
+			entityTypeReferenceForward,
+		)))
 }
 
-func newRollbackIDPEntityTypeReferencesOperation() engine.RollbackOperation {
-	return newRollbackEntityTypeReferenceOperation(idpEntityTypeReferencesOperationConfig(
-		"2.0.0/configdb/45_migrate_idp_entity_type_references_rollback",
-		"Restore entity type names in identity provider configuration",
-		entityTypeReferenceRollback,
-	), migrateIDPEntityTypeReferencesOperationID)
+func newRollbackIDPEntityTypeReferencesOperation(
+	declared *declarativeEntityTypeSource,
+) engine.RollbackOperation {
+	return newRollbackEntityTypeReferenceOperation(withDeclaredEntityTypes(
+		declared, idpEntityTypeReferencesOperationConfig(
+			"2.0.0/configdb/45_migrate_idp_entity_type_references_rollback",
+			"Restore entity type names in identity provider configuration",
+			entityTypeReferenceRollback,
+		)), migrateIDPEntityTypeReferencesOperationID)
 }
 
 func idpEntityTypeReferencesOperationConfig(

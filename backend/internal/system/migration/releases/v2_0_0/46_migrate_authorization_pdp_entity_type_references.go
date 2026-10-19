@@ -31,20 +31,26 @@ var (
 	}
 )
 
-func newMigrateAuthorizationPDPEntityTypeReferencesOperation() engine.Operation {
-	return newEntityTypeReferenceOperation(authorizationPDPEntityTypeReferencesOperationConfig(
-		migrateAuthorizationPDPEntityTypeReferencesOperationID,
-		"Replace entity type names with handles in authorization PDP configuration",
-		entityTypeReferenceForward,
-	))
+func newMigrateAuthorizationPDPEntityTypeReferencesOperation(
+	declared *declarativeEntityTypeSource,
+) engine.Operation {
+	return newEntityTypeReferenceOperation(withDeclaredEntityTypes(
+		declared, authorizationPDPEntityTypeReferencesOperationConfig(
+			migrateAuthorizationPDPEntityTypeReferencesOperationID,
+			"Replace entity type names with handles in authorization PDP configuration",
+			entityTypeReferenceForward,
+		)))
 }
 
-func newRollbackAuthorizationPDPEntityTypeReferencesOperation() engine.RollbackOperation {
-	return newRollbackEntityTypeReferenceOperation(authorizationPDPEntityTypeReferencesOperationConfig(
-		"2.0.0/configdb/46_migrate_authorization_pdp_entity_type_references_rollback",
-		"Restore entity type names in authorization PDP configuration",
-		entityTypeReferenceRollback,
-	), migrateAuthorizationPDPEntityTypeReferencesOperationID)
+func newRollbackAuthorizationPDPEntityTypeReferencesOperation(
+	declared *declarativeEntityTypeSource,
+) engine.RollbackOperation {
+	return newRollbackEntityTypeReferenceOperation(withDeclaredEntityTypes(
+		declared, authorizationPDPEntityTypeReferencesOperationConfig(
+			"2.0.0/configdb/46_migrate_authorization_pdp_entity_type_references_rollback",
+			"Restore entity type names in authorization PDP configuration",
+			entityTypeReferenceRollback,
+		)), migrateAuthorizationPDPEntityTypeReferencesOperationID)
 }
 
 func authorizationPDPEntityTypeReferencesOperationConfig(

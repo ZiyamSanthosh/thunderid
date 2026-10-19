@@ -26,10 +26,18 @@ type onlinePrimaryKeyConfig struct {
 	indexName     string
 	queryPrefix   string
 	references    []primaryKeyReference
-	sourceSummary string
-	targetSummary string
-	findingCode   string
-	remediation   string
+	// droppedReferences are legacy foreign keys onto the legacy primary key that are removed, not
+	// re-created, because the target schema does not define them.
+	droppedReferences []droppedPrimaryKeyReference
+	sourceSummary     string
+	targetSummary     string
+	findingCode       string
+	remediation       string
+}
+
+type droppedPrimaryKeyReference struct {
+	table   string
+	columns []string
 }
 
 type primaryKeyReference struct {
@@ -62,6 +70,7 @@ type onlinePrimaryKeyOperation struct {
 	lockTimeoutQuery         dbmodel.DBQuery
 	finalizeQuery            dbmodel.DBQuery
 	referenceQueries         []primaryKeyReferenceQueries
+	droppedReferenceQuery    dbmodel.DBQuery
 }
 
 type onlinePrimaryKeyInspection struct {
@@ -168,6 +177,26 @@ func newOnlinePrimaryKeyOperation(config onlinePrimaryKeyConfig) (*onlinePrimary
 			ID: config.queryPrefix + "-11",
 			PostgresQuery: fmt.Sprintf(`DROP INDEX CONCURRENTLY %s`,
 				quotePrimaryKeyIdentifier(legacyIndexName)),
+		},
+		droppedReferenceQuery: dbmodel.DBQuery{
+			ID: config.queryPrefix + "-12",
+			PostgresQuery: `SELECT c.conname AS constraint_name,
+				(SELECT string_agg(UPPER(a.attname), ',' ORDER BY key_position.ordinality)
+				 FROM unnest(c.conkey) WITH ORDINALITY AS key_position(attnum, ordinality)
+				 INNER JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = key_position.attnum)
+					AS child_columns,
+				(SELECT string_agg(UPPER(a.attname), ',' ORDER BY key_position.ordinality)
+				 FROM unnest(c.confkey) WITH ORDINALITY AS key_position(attnum, ordinality)
+				 INNER JOIN pg_attribute a ON a.attrelid = c.confrelid AND a.attnum = key_position.attnum)
+					AS parent_columns
+				FROM pg_constraint c
+				INNER JOIN pg_class child ON child.oid = c.conrelid
+				INNER JOIN pg_namespace child_namespace ON child_namespace.oid = child.relnamespace
+				INNER JOIN pg_class parent ON parent.oid = c.confrelid
+				INNER JOIN pg_namespace parent_namespace ON parent_namespace.oid = parent.relnamespace
+				WHERE c.contype = 'f' AND child_namespace.nspname = CURRENT_SCHEMA()
+					AND parent_namespace.nspname = CURRENT_SCHEMA()
+					AND child.relname = $1 AND parent.relname = $2`,
 		},
 		lockTimeoutQuery: dbmodel.DBQuery{
 			ID:            config.queryPrefix + "-07",
@@ -278,6 +307,18 @@ func validateOnlinePrimaryKeyConfig(config onlinePrimaryKeyConfig) error {
 	if strings.TrimSpace(config.queryPrefix) == "" {
 		return fmt.Errorf("create online primary-key operation %q: query prefix is required",
 			config.definition.ID)
+	}
+	for _, dropped := range config.droppedReferences {
+		if !primaryKeyTablePattern.MatchString(dropped.table) || len(dropped.columns) == 0 {
+			return fmt.Errorf("create online primary-key operation %q: invalid dropped reference %q",
+				config.definition.ID, dropped.table)
+		}
+		for _, column := range dropped.columns {
+			if !primaryKeyTablePattern.MatchString(column) {
+				return fmt.Errorf("create online primary-key operation %q: invalid dropped reference column %q",
+					config.definition.ID, column)
+			}
+		}
 	}
 	for _, reference := range config.references {
 		if !primaryKeyTablePattern.MatchString(reference.table) {
@@ -452,8 +493,48 @@ func (o *onlinePrimaryKeyOperation) Finalize(
 			return fmt.Errorf("drop %s legacy foreign key: %w", reference.table, err)
 		}
 	}
+	if err := o.dropLegacyReferences(ctx, access); err != nil {
+		return err
+	}
 	if _, err := access.Execute(ctx, o.config.definition.StoreID, o.finalizeQuery); err != nil {
 		return fmt.Errorf("replace %s primary key: %w", o.config.table, err)
+	}
+	return nil
+}
+
+// dropLegacyReferences removes foreign keys onto the legacy primary key that the target schema no
+// longer defines. A foreign key that is already gone (for example after an interrupted attempt) is
+// skipped, so the step is safe to repeat.
+func (o *onlinePrimaryKeyOperation) dropLegacyReferences(
+	ctx context.Context,
+	access engine.ExecutionAccess,
+) error {
+	for _, dropped := range o.config.droppedReferences {
+		rows, err := access.Query(ctx, o.config.definition.StoreID, o.droppedReferenceQuery,
+			dropped.table, o.config.table)
+		if err != nil {
+			return fmt.Errorf("inspect %s foreign keys to %s: %w", dropped.table, o.config.table, err)
+		}
+		for _, row := range rows {
+			name, nameErr := row.String("constraint_name")
+			childColumns, childErr := row.String("child_columns")
+			parentColumns, parentErr := row.String("parent_columns")
+			if err := errorsJoin(nameErr, childErr, parentErr); err != nil {
+				return err
+			}
+			if childColumns != strings.Join(dropped.columns, ",") ||
+				parentColumns != strings.Join(o.config.legacyColumns, ",") {
+				continue
+			}
+			dropQuery := dbmodel.DBQuery{
+				ID: o.config.queryPrefix + "-13",
+				PostgresQuery: fmt.Sprintf(`ALTER TABLE %s DROP CONSTRAINT %s`,
+					quotePrimaryKeyIdentifier(dropped.table), quoteDiscoveredPrimaryKeyIdentifier(name)),
+			}
+			if _, err := access.Execute(ctx, o.config.definition.StoreID, dropQuery); err != nil {
+				return fmt.Errorf("drop %s legacy foreign key: %w", dropped.table, err)
+			}
+		}
 	}
 	return nil
 }

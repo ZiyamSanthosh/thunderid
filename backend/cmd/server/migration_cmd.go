@@ -124,7 +124,9 @@ func runMigrationCommand(
 		return nil, fmt.Errorf("run migration %s: database provider is required", args[1])
 	}
 
-	releaseDefinition, err := current.DefinitionWithDependencies(current.Dependencies{})
+	releaseDefinition, err := current.DefinitionWithDependencies(current.Dependencies{
+		DeclarativeEntityTypes: newDeclarativeEntityTypesProvider(cfg),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("run migration %s: %w", args[1], err)
 	}

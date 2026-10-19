@@ -14,5 +14,7 @@ func newExpandThemePrimaryKeyOperation() (engine.Operation, error) {
 		},
 		table: "THEME", legacyColumns: []string{"ID"}, targetColumns: []string{"DEPLOYMENT_ID", "ID"},
 		indexName: "idx_theme_deployment_primary_key", queryPrefix: "MIG-CONFIG-PK-25",
+		// 2.0.0 defines no foreign key from INBOUND_CLIENT.THEME_ID, so the legacy one is dropped.
+		droppedReferences: []droppedPrimaryKeyReference{{table: "INBOUND_CLIENT", columns: []string{"THEME_ID"}}},
 	})
 }

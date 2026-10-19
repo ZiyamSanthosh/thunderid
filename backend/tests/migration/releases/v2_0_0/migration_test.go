@@ -40,6 +40,7 @@ func runPostgresMigrationSuite(t *testing.T, configFile string) {
 	verifyBackfillEntityTypeHandle(t, environment)
 	verifyAddEntityTypeHandleUniqueness(t, environment)
 	verifyMigrateEntityTypeReferences(t, environment)
+	verifyMigrateAgentNames(t, environment)
 	verifyResumeAfterFinalizationFailure(t, environment)
 	verifyResumeAbandonedRun(t, environment)
 	verifyConcurrentMigrationRejected(t, environment)

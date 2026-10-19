@@ -10,6 +10,15 @@ The release retains an empty, release-specific `Dependencies` structure and the 
 
 The feasibility proof is preserved on the local `migration-service-injection-poc` branch at commit `6c12842aa`.
 
+## First service-backed dependency
+
+`Dependencies.DeclarativeEntityTypes` in `backend/internal/system/migration/releases/v2_0_0/release.go`
+is the first real use of this seam. It gives the entity-type reference operations the read-only entity
+types defined in declarative resource files, which have no `ENTITY_TYPES` row. `cmd/server` builds it
+lazily from the real entity type service over the declarative store (no routes, no database reads) and
+adapts it to a narrow interface. See `MIGRATION-TEST-CHANGES.md`, section 1.3, for the design and the
+pitfalls found (for example `IsReadOnly` is only set by the composite store).
+
 ## Stable extension seam
 
 The default construction path is:

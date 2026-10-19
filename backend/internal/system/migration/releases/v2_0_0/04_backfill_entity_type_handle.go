@@ -46,7 +46,9 @@ var (
 	}
 )
 
-type backfillEntityTypeHandleOperation struct{}
+type backfillEntityTypeHandleOperation struct {
+	declared *declarativeEntityTypeSource
+}
 
 type entityTypeHandleCheckpoint struct {
 	LastID string `json:"lastID"`
@@ -60,8 +62,27 @@ type entityTypeHandleRecord struct {
 	deploymentID string
 }
 
-func newBackfillEntityTypeHandleOperation() engine.Operation {
-	return &backfillEntityTypeHandleOperation{}
+func newBackfillEntityTypeHandleOperation(declared *declarativeEntityTypeSource) engine.Operation {
+	return &backfillEntityTypeHandleOperation{declared: declared}
+}
+
+// reservedHandles returns the handles of the declarative entity types, keyed by category. Declarative
+// types have no ENTITY_TYPES row and are not tied to a deployment, so their handles are reserved in
+// every deployment: the server refuses to start when a database entity type uses one of them.
+func (o *backfillEntityTypeHandleOperation) reservedHandles(ctx context.Context) (map[string]struct{}, error) {
+	declared, err := o.declared.list(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read declarative entity types: %w", err)
+	}
+	reserved := make(map[string]struct{}, len(declared))
+	for _, entityType := range declared {
+		reserved[reservedEntityTypeHandleKey(entityType.Category, entityType.Handle)] = struct{}{}
+	}
+	return reserved, nil
+}
+
+func reservedEntityTypeHandleKey(category string, handle string) string {
+	return category + "\x00" + handle
 }
 
 func (*backfillEntityTypeHandleOperation) Definition() engine.OperationDefinition {
@@ -89,7 +110,7 @@ func (*backfillEntityTypeHandleOperation) ResolveTargets(
 	return []engine.ExecutionTarget{{}}, nil
 }
 
-func (*backfillEntityTypeHandleOperation) CheckReadiness(
+func (o *backfillEntityTypeHandleOperation) CheckReadiness(
 	ctx context.Context,
 	access engine.ReadAccess,
 	_ engine.PlanContext,
@@ -116,7 +137,11 @@ func (*backfillEntityTypeHandleOperation) CheckReadiness(
 			"The entity-type handle column has an unexpected definition"), nil
 	}
 
-	verification, err := verifyEntityTypeHandleBackfill(ctx, access, "")
+	reserved, err := o.reservedHandles(ctx)
+	if err != nil {
+		return engine.ReadinessResult{}, err
+	}
+	verification, err := verifyEntityTypeHandleBackfill(ctx, access, "", reserved)
 	if err != nil {
 		return engine.ReadinessResult{}, err
 	}
@@ -135,15 +160,19 @@ func (*backfillEntityTypeHandleOperation) CheckReadiness(
 	}, nil
 }
 
-func (*backfillEntityTypeHandleOperation) PreVerify(
+func (o *backfillEntityTypeHandleOperation) PreVerify(
 	ctx context.Context,
 	access engine.ReadAccess,
 	target engine.ExecutionTarget,
 ) (engine.VerificationResult, error) {
-	return verifyEntityTypeHandleBackfill(ctx, access, target.DeploymentID)
+	reserved, err := o.reservedHandles(ctx)
+	if err != nil {
+		return engine.VerificationResult{}, err
+	}
+	return verifyEntityTypeHandleBackfill(ctx, access, target.DeploymentID, reserved)
 }
 
-func (*backfillEntityTypeHandleOperation) ExecuteBatch(
+func (o *backfillEntityTypeHandleOperation) ExecuteBatch(
 	ctx context.Context,
 	execution engine.OperationExecution,
 	checkpointData json.RawMessage,
@@ -157,6 +186,10 @@ func (*backfillEntityTypeHandleOperation) ExecuteBatch(
 
 	usedHandles, err := readExistingEntityTypeHandles(
 		ctx, execution.Access(), execution.Target().DeploymentID)
+	if err != nil {
+		return engine.ResumableBatchResult{}, err
+	}
+	reserved, err := o.reservedHandles(ctx)
 	if err != nil {
 		return engine.ResumableBatchResult{}, err
 	}
@@ -176,7 +209,7 @@ func (*backfillEntityTypeHandleOperation) ExecuteBatch(
 		}
 		baseHandle := convertEntityTypeNameToHandle(record.name)
 		handle, err := nextAvailableEntityTypeHandle(
-			baseHandle, record.deploymentID, record.category, usedHandles)
+			baseHandle, record.deploymentID, record.category, usedHandles, reserved)
 		if err != nil {
 			return engine.ResumableBatchResult{}, fmt.Errorf(
 				"resolve entity type %q handle collision: %w", record.id, err)
@@ -192,18 +225,23 @@ func (*backfillEntityTypeHandleOperation) ExecuteBatch(
 	return entityTypeHandleBatchResult(checkpoint, len(rows) < entityTypeHandleBatchSize)
 }
 
-func (*backfillEntityTypeHandleOperation) PostVerify(
+func (o *backfillEntityTypeHandleOperation) PostVerify(
 	ctx context.Context,
 	access engine.ReadAccess,
 	target engine.ExecutionTarget,
 ) (engine.VerificationResult, error) {
-	return verifyEntityTypeHandleBackfill(ctx, access, target.DeploymentID)
+	reserved, err := o.reservedHandles(ctx)
+	if err != nil {
+		return engine.VerificationResult{}, err
+	}
+	return verifyEntityTypeHandleBackfill(ctx, access, target.DeploymentID, reserved)
 }
 
 func verifyEntityTypeHandleBackfill(
 	ctx context.Context,
 	access engine.ReadAccess,
 	deploymentID string,
+	reserved map[string]struct{},
 ) (engine.VerificationResult, error) {
 	records, err := readEntityTypeHandleRecords(ctx, access, deploymentID)
 	if err != nil {
@@ -224,6 +262,11 @@ func verifyEntityTypeHandleBackfill(
 		if !systemutils.IsValidHandle(record.handle) {
 			return invalidEntityTypeHandleBackfill(fmt.Sprintf(
 				"Entity type %q has invalid handle %q", record.id, record.handle)), nil
+		}
+		if _, exists := reserved[reservedEntityTypeHandleKey(record.category, record.handle)]; exists {
+			return invalidEntityTypeHandleBackfill(fmt.Sprintf(
+				"Entity type %q has handle %q, which is also the handle of a declarative entity type",
+				record.id, record.handle)), nil
 		}
 		key := entityTypeHandleKey(record.deploymentID, record.category, record.handle)
 		if _, exists := usedHandles[key]; exists {
@@ -363,8 +406,16 @@ func nextAvailableEntityTypeHandle(
 	deploymentID string,
 	category string,
 	usedHandles map[string]struct{},
+	reserved map[string]struct{},
 ) (string, error) {
-	if _, exists := usedHandles[entityTypeHandleKey(deploymentID, category, baseHandle)]; !exists {
+	taken := func(handle string) bool {
+		if _, exists := usedHandles[entityTypeHandleKey(deploymentID, category, handle)]; exists {
+			return true
+		}
+		_, exists := reserved[reservedEntityTypeHandleKey(category, handle)]
+		return exists
+	}
+	if !taken(baseHandle) {
 		return baseHandle, nil
 	}
 	for suffixNumber := 1; ; suffixNumber++ {
@@ -381,7 +432,7 @@ func nextAvailableEntityTypeHandle(
 		if !systemutils.IsValidHandle(candidate) {
 			return "", fmt.Errorf("converted handle %q is invalid", candidate)
 		}
-		if _, exists := usedHandles[entityTypeHandleKey(deploymentID, category, candidate)]; !exists {
+		if !taken(candidate) {
 			return candidate, nil
 		}
 	}

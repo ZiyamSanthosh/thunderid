@@ -16,6 +16,7 @@ RUN apk add --no-cache ca-certificates
 WORKDIR /opt/thunderid
 COPY --from=builder /out/thunderid ./thunderid
 COPY cmd/server/config ./config
+COPY tests/migration/resources ./config/resources
 COPY tests/migration/deployment.yaml ./deployment.yaml
 COPY tests/migration/scripts/run-migration.sh ./run-migration.sh
 RUN chmod +x thunderid run-migration.sh

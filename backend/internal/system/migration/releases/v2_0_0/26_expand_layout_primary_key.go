@@ -14,5 +14,7 @@ func newExpandLayoutPrimaryKeyOperation() (engine.Operation, error) {
 		},
 		table: "LAYOUT", legacyColumns: []string{"ID"}, targetColumns: []string{"DEPLOYMENT_ID", "ID"},
 		indexName: "idx_layout_deployment_primary_key", queryPrefix: "MIG-CONFIG-PK-26",
+		// 2.0.0 defines no foreign key from INBOUND_CLIENT.LAYOUT_ID, so the legacy one is dropped.
+		droppedReferences: []droppedPrimaryKeyReference{{table: "INBOUND_CLIENT", columns: []string{"LAYOUT_ID"}}},
 	})
 }

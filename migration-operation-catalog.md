@@ -20,8 +20,8 @@ verification, rollback, or compatibility behavior changes.
 - Contract operations are irreversible boundaries. They run only after source instances are
   drained and rollback authorization has ended.
 - For this release, source instances may serve only through Expand. Stop source traffic before
-  Migrate because operations 43 through 47 replace legacy entity-type names with handles and the
-  source and target binaries do not provide a dual-read representation. Keep the service offline
+  Migrate because operations 43 through 49 replace entity-type and agent-name representations and
+  the source and target binaries do not provide dual-read behavior. Keep the service offline
   through Contract, then start the target binary after final verification.
 - The current migration implementation supports PostgreSQL only.
 
@@ -74,6 +74,8 @@ verification, rollback, or compatibility behavior changes.
 | Migrate | 45 | `configdb` | Replace identity-provider entity-type names with handles | Data, resumable | Operation 45 rollback | Implemented |
 | Migrate | 46 | `configdb` | Replace authorization PDP entity-type names with handles | Data, resumable | Operation 46 rollback | Implemented |
 | Migrate | 47 | `configdb` | Replace flow entity-type names with handles | Data, resumable | Operation 47 rollback | Implemented |
+| Migrate | 48 | `configdb` | Add name to the default agent type schema | Data, atomic | Operation 48 rollback | Implemented |
+| Migrate | 49 | `entitydb` | Move agent names into schema attributes | Data, resumable | Operation 49 rollback | Implemented |
 | Contract | 06 | `configdb` | Finalize entity-type handles | Schema, atomic | None | Implemented |
 | Contract | 10 | `entitydb` | Remove legacy `ENTITY.STATE` | Schema, atomic | None | Implemented |
 
@@ -579,11 +581,17 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
 - **Purpose:** Change `THEME` from primary key `(ID)` to `(DEPLOYMENT_ID, ID)`.
 - **Source state and readiness:** Requires the ordinary table, non-null key columns, the legacy key,
   and no conflicting migration index. Exact target and recoverable interrupted-index states pass.
-- **Execution and verification:** Concurrently prepares the target index, performs the bounded
-  transactional key swap, and verifies the ordered target key with no leftover migration index.
-- **Compatibility:** The change only relaxes global identifier uniqueness by deployment.
+- **Execution and verification:** Concurrently prepares the target index. During the bounded
+  transactional key swap it discovers and drops the legacy
+  `INBOUND_CLIENT(THEME_ID) -> THEME(ID)` foreign key because the target schema has no replacement,
+  then verifies the ordered target key. PostgreSQL integration coverage also verifies that the exact
+  legacy reference is absent and existing values are preserved.
+- **Compatibility:** Ordinary source reads and writes remain valid. Theme deletion no longer obtains
+  the source schema's database-level `SET NULL` side effect after the cutover.
 - **Rollback:** Conditional on `ID` remaining globally unique. No automatic rollback is registered.
-- **Pending concerns:** Measure the final cutover lock under representative load.
+- **Pending concerns:** Measure the final cutover lock under representative load. If source serving
+  can delete themes during Expand, drain or restrict that management action around the cutover unless
+  the source application is confirmed not to rely on database-level `SET NULL`.
 
 ### 26: Scope LAYOUT primary key by deployment
 
@@ -592,11 +600,16 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
 - **Purpose:** Change `LAYOUT` from primary key `(ID)` to `(DEPLOYMENT_ID, ID)`.
 - **Source state and readiness:** Requires non-null key columns and the exact legacy or target key;
   an invalid interrupted target index is recoverable, while other schema shapes are blocked.
-- **Execution and verification:** Uses concurrent index preparation followed by the short
-  transactional key swap and exact catalog verification.
-- **Compatibility:** Existing deployment-scoped reads and writes remain valid.
+- **Execution and verification:** Uses concurrent index preparation. During the short transactional
+  key swap it discovers and drops the legacy `INBOUND_CLIENT(LAYOUT_ID) -> LAYOUT(ID)` foreign key
+  because the target schema has no replacement, then performs exact key verification. PostgreSQL
+  integration coverage also verifies that the legacy reference is absent and values are preserved.
+- **Compatibility:** Ordinary deployment-scoped source reads and writes remain valid. Layout deletion
+  no longer obtains the source schema's database-level `SET NULL` side effect after the cutover.
 - **Rollback:** Conditional on global `ID` uniqueness. No automatic rollback is registered.
-- **Pending concerns:** Measure the final cutover lock under representative load.
+- **Pending concerns:** Measure the final cutover lock under representative load. If source serving
+  can delete layouts during Expand, drain or restrict that management action around the cutover
+  unless the source application is confirmed not to rely on database-level `SET NULL`.
 
 ### 27: Scope INBOUND_CLIENT primary key by deployment
 
@@ -915,13 +928,61 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
 - **Rollback:** Restores legacy names in every affected flow version.
 - **Pending concerns:** None specific to this operation.
 
+### 48: Migrate the default agent name schema
+
+- **ID:** `2.0.0/configdb/48_migrate_default_agent_name_schema`
+- **Definition:**
+  [`48_migrate_default_agent_name_schema.go`](backend/internal/system/migration/releases/v2_0_0/48_migrate_default_agent_name_schema.go)
+- **Purpose:** Add the required, unique string `name` property to the default agent type and select
+  it as the display attribute for an existing deployment.
+- **Source state:** The deployment's default agent type has no `name` schema property and no
+  configured display attribute.
+- **Readiness:** Deferred until entity-type handles are available. A conflicting `name` property or
+  display attribute blocks execution.
+- **Execution:** Update the default agent type identified by deployment, agent category, and
+  `default` handle in one transaction while preserving every unrelated schema field.
+- **Verification:** The target requires `name` to be a required, unique string with display name
+  `Name`, and requires `systemAttributes.display` to equal `name`.
+- **Compatibility:** Requires the release Migrate downtime boundary. The source agent API does not
+  write the name into schema attributes.
+- **Rollback:** Remove only the name property and display setting introduced by the operation.
+- **Pending concerns:** Custom agent types are not modified automatically. Operation 49 blocks if
+  an existing agent uses a custom type that does not declare a string `name` attribute.
+
+### 49: Migrate agent names to schema attributes
+
+- **ID:** `2.0.0/entitydb/49_migrate_agent_names_to_attributes`
+- **Definition:**
+  [`49_migrate_agent_names_to_attributes.go`](backend/internal/system/migration/releases/v2_0_0/49_migrate_agent_names_to_attributes.go)
+- **Purpose:** Move every existing agent name from `SYSTEM_ATTRIBUTES.name` to `ATTRIBUTES.name` and
+  align its identifier projection with the target representation.
+- **Source state:** Each agent has one non-empty string name in system attributes, no name in schema
+  attributes, and no unexpected name identifier values.
+- **Readiness:** Deferred until operation 48. Database-backed and declarative agent types must
+  declare `name` as a string. Conflicting or missing names, incompatible custom agent types,
+  unexpected identifier rows, and name collisions involving at least one agent block execution.
+  Duplicate names belonging only to non-agent entities do not block this agent-only migration.
+- **Execution:** Process agents in batches of 100 ordered by deployment and entity ID. Preserve all
+  unrelated JSON fields, move the name, and upsert the matching identifier with source `attribute`
+  in the same batch transaction.
+- **Verification:** Every agent has one schema-attribute name, no system-attribute name, and exactly
+  one matching attribute-sourced name identifier.
+- **Compatibility:** Requires downtime. The target generic uniqueness lookup is deployment-scoped
+  but not category-scoped, so readiness enforces the target's deployment-wide collision behavior.
+- **Rollback:** Move names back to system attributes and change their identifier source back to
+  `system` before operation 48 restores the default schema.
+- **Pending concerns:** The agent schema declares `name` unique, but the product's generic uniqueness
+  lookup does not retain the entity category supplied by schema validation. Until that product-level
+  scope is clarified or corrected, an agent name must not match any entity name in the same
+  deployment. The readiness guard prevents migration from creating data the target cannot validate.
+
 ## Cross-operation pending work
 
 1. Implement and validate the operation 07 array-aware fallback lookup. Identifier
    resynchronization is deliberately not part of the current migration plan.
 2. Complete production controls for resumable data work, including configurable batch sizing,
    pacing, resource limits, and operational observability.
-3. Enforce the release-level downtime procedure for operations 43 through 47. Source serving ends
+3. Enforce the release-level downtime procedure for operations 43 through 49. Source serving ends
    before Migrate, no application writes are allowed through Migrate and Contract, and the target
    starts only after final verification. Migration-specific capability restrictions remain useful
    for future releases that retain a mixed-version serving window.

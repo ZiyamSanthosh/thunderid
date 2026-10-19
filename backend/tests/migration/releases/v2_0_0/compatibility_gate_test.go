@@ -23,8 +23,11 @@ func verifyCompatibilityGate(t *testing.T, environment migrationharness.Environm
 		require.Contains(t, startupOutput,
 			"ThunderID cannot start because its databases are not compatible with this release")
 
+		verifyLegacyThemeLayoutForeignKeys(t, environment)
 		environment.RunMigrationCommand(t, "check")
-		environment.RunMigrationCommand(t, "apply")
+		environment.RunMigrationCommand(t, "apply expand")
+		preparePostExpandMigrationSource(t, environment)
+		verifyAgentNameCollisionGuard(t, environment)
 
 		statusOutput = environment.RunMigrationCommand(t, "status")
 		require.Contains(t, statusOutput, "Overall compatibility: YES",

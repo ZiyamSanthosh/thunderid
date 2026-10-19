@@ -17,7 +17,7 @@ import (
 )
 
 func TestBackfillEntityTypeHandleOperation(t *testing.T) {
-	operation := newBackfillEntityTypeHandleOperation()
+	operation := newBackfillEntityTypeHandleOperation(nil)
 	definition := operation.Definition()
 	assert.Equal(t, engine.OperationID("2.0.0/configdb/04_backfill_entity_type_handle"), definition.ID)
 	assert.Equal(t, engine.OperationKindDataChange, definition.Kind)
@@ -58,7 +58,7 @@ func TestBackfillEntityTypeHandleOperation(t *testing.T) {
 }
 
 func TestBackfillEntityTypeHandleReadiness(t *testing.T) {
-	operation := newBackfillEntityTypeHandleOperation()
+	operation := newBackfillEntityTypeHandleOperation(nil)
 	checker := operation.(engine.ReadinessChecker)
 
 	t.Run("defers until handle column exists", func(t *testing.T) {
@@ -129,7 +129,7 @@ func TestBackfillEntityTypeHandleReadiness(t *testing.T) {
 }
 
 func TestBackfillEntityTypeHandleReadinessPropagatesInspectionFailure(t *testing.T) {
-	operation := newBackfillEntityTypeHandleOperation()
+	operation := newBackfillEntityTypeHandleOperation(nil)
 
 	result, err := operation.(engine.ReadinessChecker).CheckReadiness(
 		context.Background(), authorizationPDPReadAccess{err: errors.New("database unavailable")},
@@ -165,13 +165,14 @@ func TestNextAvailableEntityTypeHandle(t *testing.T) {
 		entityTypeHandleKey("deployment-a", "USER", "apple"):   {},
 		entityTypeHandleKey("deployment-a", "USER", "apple_1"): {},
 	}
-	handle, err := nextAvailableEntityTypeHandle("apple", "deployment-a", "USER", usedHandles)
+	handle, err := nextAvailableEntityTypeHandle("apple", "deployment-a", "USER", usedHandles, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "apple_2", handle)
 
 	longHandle, err := nextAvailableEntityTypeHandle(
 		strings.Repeat("a", 100), "deployment-a", "USER",
 		map[string]struct{}{entityTypeHandleKey("deployment-a", "USER", strings.Repeat("a", 100)): {}},
+		nil,
 	)
 	require.NoError(t, err)
 	assert.True(t, systemutils.IsValidHandle(longHandle))

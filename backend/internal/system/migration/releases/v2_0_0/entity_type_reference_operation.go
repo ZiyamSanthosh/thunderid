@@ -30,6 +30,10 @@ type entityTypeReferenceCursor struct {
 type entityTypeReferenceMapping struct {
 	byName   map[string]string
 	byHandle map[string]string
+	// declaredByName and declaredByHandle hold the read-only entity types from declarative resource
+	// files, keyed by category and value only. They are not scoped to a deployment.
+	declaredByName   map[string]string
+	declaredByHandle map[string]string
 }
 
 type entityTypeReferenceTransform func(
@@ -53,6 +57,7 @@ type entityTypeReferenceOperationConfig struct {
 	readCursor      func(engine.QueryRow) (entityTypeReferenceCursor, error)
 	updateArgs      func(string, engine.QueryRow) ([]interface{}, error)
 	transform       entityTypeReferenceTransform
+	declared        *declarativeEntityTypeSource
 	targetSummary   string
 	sourceSummary   string
 	findingCode     string
@@ -145,7 +150,7 @@ func (o *entityTypeReferenceOperation) CheckReadiness(
 			}},
 		}, nil
 	}
-	mapping, complete, err := readEntityTypeReferenceMapping(ctx, access, "")
+	mapping, complete, err := o.readMapping(ctx, access, "")
 	if err != nil {
 		return engine.ReadinessResult{}, err
 	}
@@ -178,7 +183,7 @@ func (o *entityTypeReferenceOperation) PreVerify(
 	access engine.ReadAccess,
 	target engine.ExecutionTarget,
 ) (engine.VerificationResult, error) {
-	mapping, complete, err := readEntityTypeReferenceMapping(ctx, access, target.DeploymentID)
+	mapping, complete, err := o.readMapping(ctx, access, target.DeploymentID)
 	if err != nil {
 		return engine.VerificationResult{}, err
 	}
@@ -199,7 +204,7 @@ func (o *entityTypeReferenceOperation) ExecuteBatch(
 			return engine.ResumableBatchResult{}, fmt.Errorf("decode entity-type reference checkpoint: %w", err)
 		}
 	}
-	mapping, complete, err := readEntityTypeReferenceMapping(
+	mapping, complete, err := o.readMapping(
 		ctx, execution.Access(), execution.Target().DeploymentID)
 	if err != nil {
 		return engine.ResumableBatchResult{}, err
@@ -250,7 +255,7 @@ func (o *entityTypeReferenceOperation) PostVerify(
 	access engine.ReadAccess,
 	target engine.ExecutionTarget,
 ) (engine.VerificationResult, error) {
-	mapping, complete, err := readEntityTypeReferenceMapping(ctx, access, target.DeploymentID)
+	mapping, complete, err := o.readMapping(ctx, access, target.DeploymentID)
 	if err != nil {
 		return engine.VerificationResult{}, err
 	}
@@ -341,6 +346,37 @@ func (o *entityTypeReferenceOperation) invalidVerification(summary string) engin
 	}
 }
 
+// readMapping reads the entity type mapping from the database and adds the declarative entity types.
+func (o *entityTypeReferenceOperation) readMapping(
+	ctx context.Context,
+	access engine.ReadAccess,
+	deploymentID string,
+) (entityTypeReferenceMapping, bool, error) {
+	mapping, complete, err := readEntityTypeReferenceMapping(ctx, access, deploymentID)
+	if err != nil {
+		return entityTypeReferenceMapping{}, false, err
+	}
+	declared, err := o.config.declared.list(ctx)
+	if err != nil {
+		return entityTypeReferenceMapping{}, false, fmt.Errorf("read declarative entity types: %w", err)
+	}
+	mapping.addDeclared(declared)
+	return mapping, complete, nil
+}
+
+func (m *entityTypeReferenceMapping) addDeclared(declared []DeclarativeEntityType) {
+	if len(declared) == 0 {
+		return
+	}
+	m.declaredByName = make(map[string]string, len(declared))
+	m.declaredByHandle = make(map[string]string, len(declared))
+	for _, entityType := range declared {
+		prefix := entityType.Category + "\x00"
+		m.declaredByName[prefix+entityType.DisplayName] = entityType.Handle
+		m.declaredByHandle[prefix+entityType.Handle] = entityType.DisplayName
+	}
+}
+
 func readEntityTypeReferenceMapping(
 	ctx context.Context,
 	access engine.ReadAccess,
@@ -374,20 +410,33 @@ func (m entityTypeReferenceMapping) translate(
 	direction entityTypeReferenceDirection,
 ) (string, bool, error) {
 	keyPrefix := deploymentID + "\x00" + category + "\x00"
-	if direction == entityTypeReferenceForward {
-		if translated, exists := m.byName[keyPrefix+value]; exists {
-			return translated, translated != value, nil
-		}
-		if _, exists := m.byHandle[keyPrefix+value]; exists {
-			return value, false, nil
-		}
-	} else {
-		if translated, exists := m.byHandle[keyPrefix+value]; exists {
-			return translated, translated != value, nil
-		}
-		if _, exists := m.byName[keyPrefix+value]; exists {
-			return value, false, nil
-		}
+	declaredPrefix := category + "\x00"
+	// Forward maps a type name to its handle, rollback maps a handle back to its name.
+	stored, storedOpposite := m.byName, m.byHandle
+	declared, declaredOpposite := m.declaredByName, m.declaredByHandle
+	if direction != entityTypeReferenceForward {
+		stored, storedOpposite = m.byHandle, m.byName
+		declared, declaredOpposite = m.declaredByHandle, m.declaredByName
+	}
+	storedTranslated, inStored := stored[keyPrefix+value]
+	declaredTranslated, inDeclared := declared[declaredPrefix+value]
+	if inStored && inDeclared && storedTranslated != declaredTranslated {
+		return "", false, fmt.Errorf(
+			"entity-type reference %q is defined differently in deployment %q (%q) and in declarative "+
+				"resources (%q) for category %q",
+			value, deploymentID, storedTranslated, declaredTranslated, category)
+	}
+	if inStored {
+		return storedTranslated, storedTranslated != value, nil
+	}
+	if _, exists := storedOpposite[keyPrefix+value]; exists {
+		return value, false, nil
+	}
+	if inDeclared {
+		return declaredTranslated, declaredTranslated != value, nil
+	}
+	if _, exists := declaredOpposite[declaredPrefix+value]; exists {
+		return value, false, nil
 	}
 	return "", false, fmt.Errorf(
 		"entity-type reference %q has no %s mapping in deployment %q for category %q",

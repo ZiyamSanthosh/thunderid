@@ -33,20 +33,26 @@ var (
 	}
 )
 
-func newMigrateFlowEntityTypeReferencesOperation() engine.Operation {
-	return newEntityTypeReferenceOperation(flowEntityTypeReferencesOperationConfig(
-		migrateFlowEntityTypeReferencesOperationID,
-		"Replace entity type names with handles in every flow version",
-		entityTypeReferenceForward,
-	))
+func newMigrateFlowEntityTypeReferencesOperation(
+	declared *declarativeEntityTypeSource,
+) engine.Operation {
+	return newEntityTypeReferenceOperation(withDeclaredEntityTypes(
+		declared, flowEntityTypeReferencesOperationConfig(
+			migrateFlowEntityTypeReferencesOperationID,
+			"Replace entity type names with handles in every flow version",
+			entityTypeReferenceForward,
+		)))
 }
 
-func newRollbackFlowEntityTypeReferencesOperation() engine.RollbackOperation {
-	return newRollbackEntityTypeReferenceOperation(flowEntityTypeReferencesOperationConfig(
-		"2.0.0/configdb/47_migrate_flow_entity_type_references_rollback",
-		"Restore entity type names in every flow version",
-		entityTypeReferenceRollback,
-	), migrateFlowEntityTypeReferencesOperationID)
+func newRollbackFlowEntityTypeReferencesOperation(
+	declared *declarativeEntityTypeSource,
+) engine.RollbackOperation {
+	return newRollbackEntityTypeReferenceOperation(withDeclaredEntityTypes(
+		declared, flowEntityTypeReferencesOperationConfig(
+			"2.0.0/configdb/47_migrate_flow_entity_type_references_rollback",
+			"Restore entity type names in every flow version",
+			entityTypeReferenceRollback,
+		)), migrateFlowEntityTypeReferencesOperationID)
 }
 
 func flowEntityTypeReferencesOperationConfig(

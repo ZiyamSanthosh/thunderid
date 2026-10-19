@@ -2,6 +2,7 @@ server:
   hostname: "migration-runner"
   port: 8090
   http_only: true
+  identifier: "migration-deployment"
 
 database:
   config: &shared_database

@@ -117,6 +117,7 @@ func TestPostgresMigrationPhaseRollback(t *testing.T) {
 	migrationharness.AssertQueryValue(t, entityDB,
 		`SELECT TYPE FROM "ENTITY" WHERE DEPLOYMENT_ID = 'migration-deployment'
 			AND ID = '0199a123-4703-7abc-8def-0123456789ab'`, legacyEntityTypeName)
+	verifyAgentNameSourceRepresentation(t, environment)
 	migrationharness.AssertQueryValue(t, db,
 		`SELECT COMPLETED_LEVEL || ':' || STAGE || ':' || STATUS
 			FROM "MIGRATION_STATE" WHERE STORE_ID = 'configdb'`,
@@ -232,6 +233,7 @@ func TestPostgresMigrationCompleteRollback(t *testing.T) {
 	migrationharness.AssertQueryValue(t, db,
 		`SELECT COUNT(*)::TEXT FROM "MIGRATION_PROGRESS"
 			WHERE TARGET_LEVEL = '2.0.0'`, "0")
+	verifyAgentNameSourceRepresentation(t, environment)
 	for _, database := range []string{"entitydb", "runtime_persistent"} {
 		migrationharness.AssertQueryValue(t, environment.OpenDatabase(t, database),
 			`SELECT COMPLETED_LEVEL || ':' || STAGE || ':' || STATUS
@@ -353,26 +355,30 @@ func prepareFailedCompletedMigrateRun(
 			'2.0.0/configdb/44_migrate_inbound_client_entity_type_references',
 			'2.0.0/configdb/45_migrate_idp_entity_type_references',
 			'2.0.0/configdb/46_migrate_authorization_pdp_entity_type_references',
-			'2.0.0/configdb/47_migrate_flow_entity_type_references'
+			'2.0.0/configdb/47_migrate_flow_entity_type_references',
+			'2.0.0/configdb/48_migrate_default_agent_name_schema'
 		)`, runID)
 	require.NoError(t, err)
 	rowsAffected, err := result.RowsAffected()
 	require.NoError(t, err)
-	require.GreaterOrEqual(t, rowsAffected, int64(6))
+	require.GreaterOrEqual(t, rowsAffected, int64(7))
 
 	entityDB := environment.OpenDatabase(t, "entitydb")
 	result, err = entityDB.Exec(`UPDATE "MIGRATION_PROGRESS" SET RUN_ID = $1, UPDATED_AT = NOW()
-		WHERE OPERATION_ID = '2.0.0/entitydb/43_migrate_entity_type_references'`, runID)
+		WHERE OPERATION_ID IN (
+			'2.0.0/entitydb/43_migrate_entity_type_references',
+			'2.0.0/entitydb/49_migrate_agent_names_to_attributes'
+		)`, runID)
 	require.NoError(t, err)
 	rowsAffected, err = result.RowsAffected()
 	require.NoError(t, err)
-	require.Equal(t, int64(1), rowsAffected)
+	require.GreaterOrEqual(t, rowsAffected, int64(2))
 
 	for _, database := range []string{"configdb", "entitydb"} {
 		db := environment.OpenDatabase(t, database)
-		insertMigrationRun(t, db, runID, "forward", "migrate", "", deploymentIDs, "configdb",
-			"2.0.0/configdb/47_migrate_flow_entity_type_references",
-			"2.0.0/configdb/47_migrate_flow_entity_type_references", "", "forward",
+		insertMigrationRun(t, db, runID, "forward", "migrate", "", deploymentIDs, "entitydb",
+			"2.0.0/entitydb/49_migrate_agent_names_to_attributes",
+			"2.0.0/entitydb/49_migrate_agent_names_to_attributes", "", "forward",
 			"simulated migrate finalization failure")
 		_, err = db.Exec(`UPDATE "MIGRATION_STATE"
 			SET STAGE = 'migrating', STATUS = 'failed', ACTIVE_RUN_ID = $1,
@@ -380,6 +386,35 @@ func prepareFailedCompletedMigrateRun(
 			WHERE STORE_ID = $2`, runID, database)
 		require.NoError(t, err)
 	}
+}
+
+func verifyAgentNameSourceRepresentation(t *testing.T, environment migrationharness.Environment) {
+	t.Helper()
+	configDB := environment.OpenDatabase(t, "configdb")
+	migrationharness.AssertQueryValue(t, configDB,
+		`SELECT COUNT(*)::TEXT FROM "ENTITY_TYPES"
+			WHERE DEPLOYMENT_ID = 'migration-deployment' AND CATEGORY = 'agent'
+			AND NAME = 'Default' AND SCHEMA_DEF ? 'name'`, "0")
+	migrationharness.AssertQueryValue(t, configDB,
+		`SELECT COUNT(*)::TEXT FROM "ENTITY_TYPES"
+			WHERE DEPLOYMENT_ID = 'migration-deployment' AND CATEGORY = 'agent'
+			AND NAME = 'Default' AND SYSTEM_ATTRIBUTES ? 'display'`, "0")
+
+	entityDB := environment.OpenDatabase(t, "entitydb")
+	migrationharness.AssertQueryValue(t, entityDB,
+		`SELECT SYSTEM_ATTRIBUTES ->> 'name' FROM "ENTITY"
+			WHERE DEPLOYMENT_ID = 'migration-deployment'
+			AND ID = '0199a123-4706-7abc-8def-0123456789ab'`, "Calendar Agent")
+	migrationharness.AssertQueryValue(t, entityDB,
+		`SELECT COUNT(*)::TEXT FROM "ENTITY"
+			WHERE DEPLOYMENT_ID = 'migration-deployment'
+			AND ID = '0199a123-4706-7abc-8def-0123456789ab'
+			AND ATTRIBUTES ? 'name'`, "0")
+	migrationharness.AssertQueryValue(t, entityDB,
+		`SELECT SOURCE FROM "ENTITY_IDENTIFIER"
+			WHERE DEPLOYMENT_ID = 'migration-deployment'
+			AND ENTITY_ID = '0199a123-4706-7abc-8def-0123456789ab'
+			AND NAME = 'name' AND VALUE = 'Calendar Agent'`, "system")
 }
 
 func prepareInterruptedRollbackRun(t *testing.T, db *sql.DB) {

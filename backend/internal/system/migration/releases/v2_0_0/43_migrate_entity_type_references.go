@@ -10,6 +10,11 @@ import (
 	"github.com/thunder-id/thunderid/internal/system/migration/engine"
 )
 
+const (
+	entityTypeReferenceCategoryUser  = "user"
+	entityTypeReferenceCategoryAgent = "agent"
+)
+
 const migrateEntityTypeReferencesOperationID engine.OperationID = "2.0.0/entitydb/43_migrate_entity_type_references"
 
 var (
@@ -33,20 +38,26 @@ var (
 	}
 )
 
-func newMigrateEntityTypeReferencesOperation() engine.Operation {
-	return newEntityTypeReferenceOperation(entityTypeReferencesOperationConfig(
-		migrateEntityTypeReferencesOperationID,
-		"Replace entity type names with handles in entity records",
-		entityTypeReferenceForward,
-	))
+func newMigrateEntityTypeReferencesOperation(
+	declared *declarativeEntityTypeSource,
+) engine.Operation {
+	return newEntityTypeReferenceOperation(withDeclaredEntityTypes(
+		declared, entityTypeReferencesOperationConfig(
+			migrateEntityTypeReferencesOperationID,
+			"Replace entity type names with handles in entity records",
+			entityTypeReferenceForward,
+		)))
 }
 
-func newRollbackEntityTypeReferencesOperation() engine.RollbackOperation {
-	return newRollbackEntityTypeReferenceOperation(entityTypeReferencesOperationConfig(
-		"2.0.0/entitydb/43_migrate_entity_type_references_rollback",
-		"Restore entity type names in entity records",
-		entityTypeReferenceRollback,
-	), migrateEntityTypeReferencesOperationID)
+func newRollbackEntityTypeReferencesOperation(
+	declared *declarativeEntityTypeSource,
+) engine.RollbackOperation {
+	return newRollbackEntityTypeReferenceOperation(withDeclaredEntityTypes(
+		declared, entityTypeReferencesOperationConfig(
+			"2.0.0/entitydb/43_migrate_entity_type_references_rollback",
+			"Restore entity type names in entity records",
+			entityTypeReferenceRollback,
+		)), migrateEntityTypeReferencesOperationID)
 }
 
 func entityTypeReferencesOperationConfig(
@@ -85,12 +96,17 @@ func entityTypeReferencesOperationConfig(
 		transform: func(payload string, deploymentID string, row engine.QueryRow, mapping entityTypeReferenceMapping,
 			direction entityTypeReferenceDirection,
 		) (string, bool, error) {
-			if payload == "" {
-				return "", false, fmt.Errorf("ENTITY.TYPE is empty")
-			}
 			category, err := row.String("category")
 			if err != nil {
 				return "", false, err
+			}
+			// Only user and agent entities refer to an entity type. Other categories carry a fixed
+			// TYPE that is not an entity-type reference (app entities always use "application").
+			if category != entityTypeReferenceCategoryUser && category != entityTypeReferenceCategoryAgent {
+				return payload, false, nil
+			}
+			if payload == "" {
+				return "", false, fmt.Errorf("ENTITY.TYPE is empty")
 			}
 			return mapping.translate(deploymentID, category, payload, direction)
 		},
