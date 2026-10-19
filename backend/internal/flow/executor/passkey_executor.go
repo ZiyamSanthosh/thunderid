@@ -13,6 +13,7 @@ import (
 
 	"github.com/thunder-id/thunderid/internal/authn/passkey"
 	"github.com/thunder-id/thunderid/internal/flow/core"
+	"github.com/thunder-id/thunderid/internal/system/featuregate"
 	"github.com/thunder-id/thunderid/internal/system/log"
 	systemutils "github.com/thunder-id/thunderid/internal/system/utils"
 )
@@ -50,6 +51,7 @@ const (
 type passkeyAuthExecutor struct {
 	providers.Executor
 	authnProvider providers.AuthnProviderManager
+	featureGate   *featuregate.Gate
 	logger        *log.Logger
 }
 
@@ -59,6 +61,7 @@ var _ providers.Executor = (*passkeyAuthExecutor)(nil)
 func newPasskeyAuthExecutor(
 	flowFactory core.FlowFactoryInterface,
 	authnProvider providers.AuthnProviderManager,
+	featureGate *featuregate.Gate,
 ) *passkeyAuthExecutor {
 	defaultInputs := []providers.Input{
 		{
@@ -120,6 +123,7 @@ func newPasskeyAuthExecutor(
 	return &passkeyAuthExecutor{
 		Executor:      base,
 		authnProvider: authnProvider,
+		featureGate:   featureGate,
 		logger:        logger,
 	}
 }
@@ -133,6 +137,18 @@ func (p *passkeyAuthExecutor) Execute(ctx *providers.NodeContext) (*providers.Ex
 		AdditionalData: make(map[string]string),
 		RuntimeData:    make(map[string]string),
 		AuthUser:       ctx.AuthUser,
+	}
+	if (ctx.ExecutorMode == passkeyExecutorModeChallenge || ctx.ExecutorMode == passkeyExecutorModeVerify) &&
+		!p.featureGate.IsEnabled(featuregate.PasskeyAuthentication) {
+		execResp.Status = providers.ExecFailure
+		execResp.Error = &ErrPasskeyAuthenticationRestricted
+		return execResp, nil
+	}
+	if (ctx.ExecutorMode == passkeyExecutorModeRegStart || ctx.ExecutorMode == passkeyExecutorModeRegFinish) &&
+		!p.featureGate.IsEnabled(featuregate.CredentialUpdate) {
+		execResp.Status = providers.ExecFailure
+		execResp.Error = &ErrCredentialUpdateRestricted
+		return execResp, nil
 	}
 
 	if !p.ValidatePrerequisites(ctx, execResp, p.authnProvider) {

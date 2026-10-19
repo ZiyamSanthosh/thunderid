@@ -25,6 +25,7 @@ import (
 	"github.com/thunder-id/thunderid/internal/authn/passkey"
 	authnprovidercm "github.com/thunder-id/thunderid/internal/authnprovider/common"
 	"github.com/thunder-id/thunderid/internal/entity"
+	"github.com/thunder-id/thunderid/internal/system/featuregate"
 	"github.com/thunder-id/thunderid/tests/mocks/authn/commonmock"
 	"github.com/thunder-id/thunderid/tests/mocks/authn/magiclinkmock"
 	"github.com/thunder-id/thunderid/tests/mocks/authn/otpmock"
@@ -1700,10 +1701,16 @@ func federatedToken(extra map[string]interface{}) map[string]interface{} {
 func (suite *DefaultAuthnProviderTestSuite) federatedAuthResult(
 	token map[string]interface{},
 ) (*providers.AuthnResult, *tidcommon.ServiceError) {
+	return suite.federatedAuthResultWithGate(token, nil)
+}
+
+func (suite *DefaultAuthnProviderTestSuite) federatedAuthResultWithGate(
+	token map[string]interface{}, gate *featuregate.Gate,
+) (*providers.AuthnResult, *tidcommon.ServiceError) {
 	suite.mockFederated.On("Authenticate", mock.Anything, "idp-a", mock.Anything).
 		Return(&authncommon.AuthnResult{Token: token}, nil)
 	provider := Initialize(suite.mockService, nil, nil, nil, nil,
-		map[providers.IDPType]authncommon.FederatedAuthenticator{providers.IDPTypeOAuth: suite.mockFederated})
+		map[providers.IDPType]authncommon.FederatedAuthenticator{providers.IDPTypeOAuth: suite.mockFederated}, gate)
 
 	credentials := map[string]interface{}{
 		authnprovidercm.CredentialTypeFederated: &authncommon.FederatedAuthCredential{
@@ -1781,6 +1788,41 @@ func (suite *DefaultAuthnProviderTestSuite) TestFederatedToken_NoLinkClaimsLegac
 	suite.Require().Nil(svcErr)
 	suite.Require().NotNil(result.EntityReference)
 	suite.Equal(legacyID, result.EntityReference.EntityID)
+}
+
+func (suite *DefaultAuthnProviderTestSuite) TestFederatedToken_RestrictedResolvesLegacySubjectWithoutClaim() {
+	legacyID := "legacy-user"
+	suite.mockService.On("ResolveLinkedAccounts", mock.Anything, "idp-a", "sub-1").Return([]string{}, nil)
+	suite.mockService.On("SearchEntities", mock.Anything,
+		map[string]interface{}{authnprovidercm.UserAttributeSub: "sub-1"}).
+		Return([]providers.Entity{{ID: legacyID}}, nil)
+	suite.mockService.On("GetEntity", mock.Anything, legacyID).
+		Return(&providers.Entity{ID: legacyID, Category: providers.EntityCategoryUser, Type: "customer"}, nil)
+	token := federatedToken(nil)
+
+	result, svcErr := suite.federatedAuthResultWithGate(token,
+		featuregate.NewGate(featuregate.AccountLinking))
+
+	suite.Require().Nil(svcErr)
+	suite.Require().NotNil(result.EntityReference)
+	suite.Equal(legacyID, result.EntityReference.EntityID)
+	suite.mockService.AssertNotCalled(suite.T(), "ClaimLegacySubject", mock.Anything, mock.Anything, mock.Anything)
+}
+
+func (suite *DefaultAuthnProviderTestSuite) TestFederatedToken_RestrictedWithNoLegacySubjectPassesTokenThrough() {
+	suite.mockService.On("ResolveLinkedAccounts", mock.Anything, "idp-a", "sub-1").Return([]string{}, nil)
+	suite.mockService.On("SearchEntities", mock.Anything,
+		map[string]interface{}{authnprovidercm.UserAttributeSub: "sub-1"}).
+		Return(nil, entity.ErrEntityNotFound)
+	token := federatedToken(nil)
+
+	result, svcErr := suite.federatedAuthResultWithGate(token,
+		featuregate.NewGate(featuregate.AccountLinking))
+
+	suite.Require().Nil(svcErr)
+	suite.Nil(result.EntityReference)
+	suite.Equal(token, result.EntityReferenceToken)
+	suite.mockService.AssertNotCalled(suite.T(), "ClaimLegacySubject", mock.Anything, mock.Anything, mock.Anything)
 }
 
 // A recorded link wins, so the legacy attribute is never consulted for a linked identity.

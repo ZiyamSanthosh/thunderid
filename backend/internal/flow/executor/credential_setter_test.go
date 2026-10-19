@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/suite"
 
 	"github.com/thunder-id/thunderid/internal/entityprovider"
+	"github.com/thunder-id/thunderid/internal/system/featuregate"
 	"github.com/thunder-id/thunderid/tests/mocks/authnprovider/managermock"
 	"github.com/thunder-id/thunderid/tests/mocks/entityprovidermock"
 	"github.com/thunder-id/thunderid/tests/mocks/flow/coremock"
@@ -45,7 +46,8 @@ func (suite *CredentialSetterTestSuite) SetupTest() {
 			},
 		}, mock.Anything).Return(suite.mockBaseExecutor)
 
-	suite.executor = newCredentialSetter(suite.mockFlowFactory, suite.mockEntityProvider, suite.mockAuthnProvider)
+	suite.executor = newCredentialSetter(suite.mockFlowFactory, suite.mockEntityProvider,
+		suite.mockAuthnProvider, nil)
 }
 
 func (suite *CredentialSetterTestSuite) TestExecute_Success() {
@@ -79,6 +81,18 @@ func (suite *CredentialSetterTestSuite) TestExecute_Success() {
 
 	assert.NoError(suite.T(), err)
 	assert.Equal(suite.T(), providers.ExecComplete, resp.Status)
+}
+
+func (suite *CredentialSetterTestSuite) TestExecute_RestrictedUpdateFailsBeforeMutation() {
+	suite.executor.featureGate = featuregate.NewGate(featuregate.CredentialUpdate)
+	ctx := &providers.NodeContext{ExecutionID: "test-flow"}
+
+	resp, err := suite.executor.Execute(ctx)
+
+	assert.NoError(suite.T(), err)
+	assert.Equal(suite.T(), providers.ExecFailure, resp.Status)
+	assert.Equal(suite.T(), ErrCredentialUpdateRestricted.Code, resp.Error.Code)
+	suite.mockEntityProvider.AssertNotCalled(suite.T(), "UpdateCredentials", mock.Anything, mock.Anything)
 }
 
 func (suite *CredentialSetterTestSuite) TestExecute_MissingInput() {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/thunder-id/thunderid/internal/entityprovider"
 	"github.com/thunder-id/thunderid/internal/flow/core"
+	"github.com/thunder-id/thunderid/internal/system/featuregate"
 	"github.com/thunder-id/thunderid/internal/system/log"
 	"github.com/thunder-id/thunderid/pkg/thunderidengine/providers"
 )
@@ -26,6 +27,7 @@ type attributeCollector struct {
 	providers.Executor
 	entityProvider entityprovider.EntityProviderInterface
 	authnProvider  providers.AuthnProviderManager
+	featureGate    *featuregate.Gate
 	logger         *log.Logger
 }
 
@@ -36,6 +38,7 @@ func newAttributeCollector(
 	flowFactory core.FlowFactoryInterface,
 	entityProvider entityprovider.EntityProviderInterface,
 	authnProvider providers.AuthnProviderManager,
+	featureGate *featuregate.Gate,
 ) *attributeCollector {
 	prerequisites := []providers.Input{
 		{
@@ -54,6 +57,7 @@ func newAttributeCollector(
 		Executor:       base,
 		entityProvider: entityProvider,
 		authnProvider:  authnProvider,
+		featureGate:    featureGate,
 		logger:         logger,
 	}
 }
@@ -92,6 +96,11 @@ func (a *attributeCollector) Execute(ctx *providers.NodeContext) (*providers.Exe
 	if !a.HasRequiredInputs(ctx, execResp) {
 		logger.Debug(ctx.Context, "Required inputs for attribute collector is not provided")
 		execResp.Status = providers.ExecUserInputRequired
+		return execResp, nil
+	}
+	if !a.featureGate.IsEnabled(featuregate.UserAttributeUpdate) {
+		execResp.Status = providers.ExecFailure
+		execResp.Error = &ErrUserAttributeUpdateRestricted
 		return execResp, nil
 	}
 

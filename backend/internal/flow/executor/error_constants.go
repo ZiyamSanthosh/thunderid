@@ -1596,6 +1596,62 @@ var (
 			DefaultValue: "Organization unit creation is unavailable while ThunderID is in restricted mode",
 		},
 	}
+
+	// ErrAccountLinkingRestricted is returned when server policy fences account-link writes.
+	ErrAccountLinkingRestricted = tidcommon.ServiceError{
+		Type: tidcommon.ClientErrorType,
+		Code: "FET-1114",
+		Error: tidcommon.I18nMessage{
+			Key:          "flows.executor.errors.account_linking_restricted",
+			DefaultValue: "Account linking temporarily unavailable",
+		},
+		ErrorDescription: tidcommon.I18nMessage{
+			Key:          "flows.executor.errors.account_linking_restricted_desc",
+			DefaultValue: "Account linking is unavailable while ThunderID is in restricted mode",
+		},
+	}
+
+	// ErrUserAttributeUpdateRestricted is returned when server policy fences profile updates.
+	ErrUserAttributeUpdateRestricted = tidcommon.ServiceError{
+		Type: tidcommon.ClientErrorType,
+		Code: "FET-1115",
+		Error: tidcommon.I18nMessage{
+			Key:          "flows.executor.errors.user_attribute_update_restricted",
+			DefaultValue: "Profile update temporarily unavailable",
+		},
+		ErrorDescription: tidcommon.I18nMessage{
+			Key:          "flows.executor.errors.user_attribute_update_restricted_desc",
+			DefaultValue: "Profile updates are unavailable while ThunderID is in restricted mode",
+		},
+	}
+
+	// ErrCredentialUpdateRestricted is returned when server policy fences credential mutations.
+	ErrCredentialUpdateRestricted = tidcommon.ServiceError{
+		Type: tidcommon.ClientErrorType,
+		Code: "FET-1116",
+		Error: tidcommon.I18nMessage{
+			Key:          "flows.executor.errors.credential_update_restricted",
+			DefaultValue: "Credential update temporarily unavailable",
+		},
+		ErrorDescription: tidcommon.I18nMessage{
+			Key:          "flows.executor.errors.credential_update_restricted_desc",
+			DefaultValue: "Credential updates are unavailable while ThunderID is in restricted mode",
+		},
+	}
+
+	// ErrPasskeyAuthenticationRestricted is returned when server policy fences passkey authentication.
+	ErrPasskeyAuthenticationRestricted = tidcommon.ServiceError{
+		Type: tidcommon.ClientErrorType,
+		Code: "FET-1117",
+		Error: tidcommon.I18nMessage{
+			Key:          "flows.executor.errors.passkey_authentication_restricted",
+			DefaultValue: "Passkey authentication temporarily unavailable",
+		},
+		ErrorDescription: tidcommon.I18nMessage{
+			Key:          "flows.executor.errors.passkey_authentication_restricted_desc",
+			DefaultValue: "Passkey authentication is unavailable while ThunderID is in restricted mode",
+		},
+	}
 )
 
 // errForEntityCategory returns a copy of err whose messages name the entity category they are

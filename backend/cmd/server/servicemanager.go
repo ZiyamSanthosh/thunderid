@@ -301,6 +301,22 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 		runtime.Config.Server.Identifier)
 	fatalOnError(ctx, logger, err, "Failed to initialize runtime store")
 
+	// The feature gate centralizes runtime feature availability for the configured operating mode.
+	featureGate := featuregate.NewGate()
+	if runtime.Config.OperatingMode.IsRestricted() {
+		featureGate = featuregate.NewGate(
+			featuregate.UserRegistration,
+			featuregate.AccountRecovery,
+			featuregate.AdministrativeOperations,
+			featuregate.UserProvisioning,
+			featuregate.OrganizationUnitCreation,
+			featuregate.AccountLinking,
+			featuregate.UserAttributeUpdate,
+			featuregate.CredentialUpdate,
+			featuregate.PasskeyAuthentication,
+		)
+	}
+
 	// Initialize passkey service
 	passkeyService := passkey.Initialize(entityService, runtimeStoreProvider)
 
@@ -314,7 +330,7 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 			ouService, runtimeStoreProvider, exporters)
 
 	defaultProvider := defaultprovider.Initialize(entityService, passkeyService,
-		otpCoreService, magicLinkService, openid4vpSvc, federatedAuths)
+		otpCoreService, magicLinkService, openid4vpSvc, federatedAuths, featureGate)
 
 	customProviders := map[string]providers.CustomAuthnProvider{}
 	restCfg := runtime.Config.AuthnProvider.Rest
@@ -377,18 +393,6 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 	csp.InitializeConfigReader(serverConfigService)
 
 	flowConfig := flowconfig.FromServerRuntime()
-
-	// The feature gate centralizes runtime feature availability for the configured operating mode.
-	featureGate := featuregate.NewGate()
-	if runtime.Config.OperatingMode.IsRestricted() {
-		featureGate = featuregate.NewGate(
-			featuregate.UserRegistration,
-			featuregate.AccountRecovery,
-			featuregate.AdministrativeOperations,
-			featuregate.UserProvisioning,
-			featuregate.OrganizationUnitCreation,
-		)
-	}
 
 	revocationEnforcer, revocationSvc, err := revocation.Initialize(oauthCfg, jwtService, observabilitySvc)
 	fatalOnError(ctx, logger, err, "Failed to initialize revocation service")

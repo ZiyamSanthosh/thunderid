@@ -18,6 +18,14 @@ const (
 	UserProvisioning Feature = "user.provisioning"
 	// OrganizationUnitCreation controls organization-unit creation.
 	OrganizationUnitCreation Feature = "organization_unit.creation"
+	// AccountLinking controls recording federated account links and converting legacy subjects.
+	AccountLinking Feature = "account.linking"
+	// UserAttributeUpdate controls profile-attribute updates performed inside flows.
+	UserAttributeUpdate Feature = "user.attribute_update"
+	// CredentialUpdate controls credential-setting and credential-enrollment operations inside flows.
+	CredentialUpdate Feature = "user.credential_update"
+	// PasskeyAuthentication controls passkey authentication, which updates the credential sign counter.
+	PasskeyAuthentication Feature = "authentication.passkey"
 )
 
 // Gate records the product features currently disabled by the server.

@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/suite"
 
 	"github.com/thunder-id/thunderid/internal/entityprovider"
+	"github.com/thunder-id/thunderid/internal/system/featuregate"
 	"github.com/thunder-id/thunderid/tests/mocks/authnprovider/managermock"
 	"github.com/thunder-id/thunderid/tests/mocks/entityprovidermock"
 	"github.com/thunder-id/thunderid/tests/mocks/flow/coremock"
@@ -47,7 +48,7 @@ func (suite *AttributeCollectorTestSuite) SetupTest() {
 		[]providers.Input{}, prerequisites, mock.Anything).Return(mockExec)
 
 	suite.executor = newAttributeCollector(suite.mockFlowFactory, suite.mockEntityProvider,
-		suite.mockAuthnProvider)
+		suite.mockAuthnProvider, nil)
 }
 
 // newAuthenticatedAuthUser creates an AuthUser that returns true for IsAuthenticated().
@@ -209,6 +210,25 @@ func (suite *AttributeCollectorTestSuite) TestExecute_Success() {
 	assert.NotNil(suite.T(), resp)
 	assert.Equal(suite.T(), providers.ExecComplete, resp.Status)
 	suite.mockEntityProvider.AssertExpectations(suite.T())
+}
+
+func (suite *AttributeCollectorTestSuite) TestExecute_RestrictedUpdateFailsBeforeMutation() {
+	suite.executor.featureGate = featuregate.NewGate(featuregate.UserAttributeUpdate)
+	ctx := &providers.NodeContext{
+		ExecutionID: "flow-123",
+		FlowType:    providers.FlowTypeAuthentication,
+		AuthUser:    newAuthenticatedAuthUser(),
+		RuntimeData: map[string]string{userAttributeUserID: testUserID},
+		NodeInputs:  []providers.Input{{Identifier: "email", Type: "string", Required: true}},
+		UserInputs:  map[string]string{"email": "test@example.com"},
+	}
+
+	resp, err := suite.executor.Execute(ctx)
+
+	assert.NoError(suite.T(), err)
+	assert.Equal(suite.T(), providers.ExecFailure, resp.Status)
+	assert.Equal(suite.T(), ErrUserAttributeUpdateRestricted.Code, resp.Error.Code)
+	suite.mockEntityProvider.AssertNotCalled(suite.T(), "UpdateAttributes", mock.Anything, mock.Anything)
 }
 
 func (suite *AttributeCollectorTestSuite) TestExecute_UpdateUserFails() {

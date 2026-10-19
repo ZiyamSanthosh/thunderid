@@ -97,10 +97,17 @@ The current implementation contains:
 - restricted-mode HTTP enforcement that keeps authentication, authorization, token, health,
   discovery and required frontend-support endpoints available while rejecting management surfaces;
 - a generic feature gate that fences registration, user onboarding, recovery, administration, JIT
-  user provisioning and organization-unit creation before mutation, including nested flow-executor
-  paths;
-- unit and end-to-end integration coverage proving that restricted operations are rejected while
-  authentication and token issuance remain available;
+  user provisioning, organization-unit creation, account linking, legacy-subject conversion,
+  profile updates, credential enrollment or replacement and passkey authentication before mutation,
+  including nested flow-executor paths. Restricted federated authentication retains a read-only
+  lookup of the legacy `sub` representation while suppressing its conversion to `linkedIds`.
+  Passkey authentication is fenced because successful verification requires a security-sensitive
+  credential sign-counter update;
+- unit coverage for every feature gate and real-server integration coverage proving that restricted
+  management, registration, recovery, organization-unit creation, profile updates, credential
+  updates and passkey authentication are rejected while password authentication and token issuance
+  remain available. The profile-update test also verifies after restoring full mode that the fenced
+  attribute was not persisted;
 - deployment-selective migrate execution through repeatable `--deployment-id` arguments, with
   deployment-level completion state, independently resumable operation targets and store-wide
   completion of any remaining targets;
@@ -231,7 +238,9 @@ The qualification must also cover serving impact and operational recovery:
 
 - continuously exercise authentication, authorization, token, logout and revocation traffic while
   the standalone migration process runs;
-- prove that restricted-mode feature gates reject fenced mutations before their first write;
+- add real-server federated-flow coverage for JIT provisioning, account linking and read-only
+  legacy-subject resolution. Other restricted-mode feature gates are covered by the operating-mode
+  integration suite;
 - measure request latency and PostgreSQL lock behavior during each schema operation;
 - exercise migration interruption, resume, readiness failure, target-startup failure and explicit
   contract authorization in the integrated topology;
