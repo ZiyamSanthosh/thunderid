@@ -60,7 +60,7 @@ func Start(t *testing.T, configPath string) Environment {
 	runDocker(t, testDirectory, environment, "info")
 	runDocker(t, testDirectory, environment, "compose", "version")
 	t.Cleanup(func() {
-		command := exec.Command("docker", "compose", "down", "--volumes", "--remove-orphans")
+		command := exec.Command("docker", "compose", "down", "--volumes", "--remove-orphans", "--rmi", "local")
 		command.Dir = testDirectory
 		command.Env = environment
 		if output, err := command.CombinedOutput(); err != nil {
