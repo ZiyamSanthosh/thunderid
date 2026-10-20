@@ -24,12 +24,15 @@ func Initialize(
 	cacheManager cache.CacheManagerInterface,
 	ouService oupkg.OrganizationUnitServiceInterface,
 	authzService sysauthz.SystemAuthorizationServiceInterface,
-) (EntityTypeServiceInterface, declarativeresource.ResourceExporter, declarativeresource.ResourceExporter, error) {
+) (
+	EntityTypeServiceInterface, declarativeresource.ResourceExporter, declarativeresource.ResourceExporter,
+	EntityTypeReferenceNormalizer, error,
+) {
 	// Step 1: Determine store mode and initialize store and transactioner
 	storeMode := getEntityTypeStoreMode()
 	entityTypeStore, transactioner, err := initializeStore(storeMode, cacheManager)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 
 	// Step 2: Create service with store
@@ -39,7 +42,7 @@ func Initialize(
 	// Step 3: Load declarative resources into store (if applicable)
 	if storeMode == serverconst.StoreModeComposite || storeMode == serverconst.StoreModeDeclarative {
 		if err := loadDeclarativeResources(entityTypeStore, entityTypeService); err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 	}
 
@@ -54,7 +57,8 @@ func Initialize(
 
 	userTypeExporter := newEntityTypeExporter(entityTypeService, TypeCategoryUser)
 	agentTypeExporter := newEntityTypeExporter(entityTypeService, TypeCategoryAgent)
-	return entityTypeService, userTypeExporter, agentTypeExporter, nil
+	referenceNormalizer := newEntityTypeReferenceNormalizer(entityTypeStore)
+	return entityTypeService, userTypeExporter, agentTypeExporter, referenceNormalizer, nil
 }
 
 // InitializeDeclarativeService builds the entity type service over the declarative (file-based)

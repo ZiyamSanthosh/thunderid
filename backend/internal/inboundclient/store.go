@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/thunder-id/thunderid/internal/entitytype"
 	inboundmodel "github.com/thunder-id/thunderid/internal/inboundclient/model"
 	dbmodel "github.com/thunder-id/thunderid/internal/system/database/model"
 	"github.com/thunder-id/thunderid/internal/system/database/provider"
@@ -57,14 +58,17 @@ type inboundClientStoreInterface interface {
 
 // store implements inboundClientStoreInterface using the configured config database.
 type store struct {
-	dbProvider provider.DBProviderInterface
+	dbProvider           provider.DBProviderInterface
+	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizer
 }
 
 // getDBProvider is a package-level indirection to allow test override.
 var getDBProvider = provider.GetDBProvider
 
 // newStore returns a database-backed inbound client store along with its transactioner.
-func newStore() (inboundClientStoreInterface, providers.Transactioner, error) {
+func newStore(
+	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizer,
+) (inboundClientStoreInterface, providers.Transactioner, error) {
 	dbProvider := getDBProvider()
 	client, err := dbProvider.GetConfigDBClient()
 	if err != nil {
@@ -84,7 +88,8 @@ func newStore() (inboundClientStoreInterface, providers.Transactioner, error) {
 	}
 
 	return &store{
-		dbProvider: dbProvider,
+		dbProvider:           dbProvider,
+		entityTypeNormalizer: entityTypeNormalizer,
 	}, transactioner, nil
 }
 
@@ -199,7 +204,14 @@ func (st *store) GetInboundClientByEntityID(ctx context.Context, entityID string
 	if len(results) == 0 {
 		return nil, ErrInboundClientNotFound
 	}
-	return buildInboundClientFromRow(ctx, results[0])
+	client, err := buildInboundClientFromRow(ctx, results[0])
+	if err != nil {
+		return nil, err
+	}
+	if err := st.normalizeEntityTypeReferences(ctx, []*inboundmodel.InboundClient{client}); err != nil {
+		return nil, err
+	}
+	return client, nil
 }
 
 // GetOAuthProfileByEntityID retrieves an OAuth profile by entity ID.
@@ -231,12 +243,20 @@ func (st *store) GetInboundClientList(ctx context.Context, limit int) ([]provide
 		return nil, fmt.Errorf("failed to execute query: %w", err)
 	}
 
-	clients := make([]inboundmodel.InboundClient, 0, len(results))
+	built := make([]*inboundmodel.InboundClient, 0, len(results))
 	for _, row := range results {
 		c, err := buildInboundClientFromRow(ctx, row)
 		if err != nil {
 			return nil, fmt.Errorf("failed to build inbound client from result row: %w", err)
 		}
+		built = append(built, c)
+	}
+	if err := st.normalizeEntityTypeReferences(ctx, built); err != nil {
+		return nil, err
+	}
+
+	clients := make([]inboundmodel.InboundClient, 0, len(built))
+	for _, c := range built {
 		clients = append(clients, *c)
 	}
 	return clients, nil

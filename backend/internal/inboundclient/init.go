@@ -37,6 +37,7 @@ func Initialize(
 	layoutMgt layoutmgt.LayoutMgtServiceInterface,
 	flowMgt flowmgt.FlowMgtServiceInterface,
 	entityType entitytype.EntityTypeServiceInterface,
+	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizer,
 	cryptoProvider providers.RuntimeCryptoProvider,
 	jweService jwe.JWEServiceInterface,
 	cimdService cimd.CIMDServiceInterface,
@@ -44,7 +45,7 @@ func Initialize(
 	sharedTypes map[providers.EntityCategory]sharing.ResourceType,
 	options ...Option,
 ) (InboundClientServiceInterface, error) {
-	store, transactioner, err := initializeStore(cacheManager)
+	store, transactioner, err := initializeStore(cacheManager, entityTypeNormalizer)
 	if err != nil {
 		return nil, err
 	}
@@ -58,10 +59,12 @@ func Initialize(
 }
 
 // initializeStore always creates a composite store (DB + in-memory file store).
-func initializeStore(cacheManager cache.CacheManagerInterface) (
-	inboundClientStoreInterface, providers.Transactioner, error) {
+func initializeStore(
+	cacheManager cache.CacheManagerInterface,
+	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizer,
+) (inboundClientStoreInterface, providers.Transactioner, error) {
 	fileStore := newFileBasedStore(dre.KeyTypeInboundAuth)
-	dbStore, transactioner, err := newStore()
+	dbStore, transactioner, err := newStore(entityTypeNormalizer)
 	if err != nil {
 		return nil, nil, err
 	}

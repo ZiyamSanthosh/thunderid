@@ -13,6 +13,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/thunder-id/thunderid/internal/entitytype"
 	"github.com/thunder-id/thunderid/internal/flow/core"
 	"github.com/thunder-id/thunderid/internal/flow/graphbuilder"
 	"github.com/thunder-id/thunderid/internal/flow/interceptor"
@@ -41,9 +42,10 @@ func Initialize(
 	serverConfigSvc serverConfigProvider,
 	ouSvc ouProvider,
 	configHandler *FlowConfigHandler,
+	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizer,
 ) (FlowMgtServiceInterface, declarativeresource.ResourceExporter, error) {
 	flowValidator := newFlowValidator(executorRegistry, interceptorRegistry, graphBuilder)
-	store, compositeStore, transactioner, err := initializeStore(cacheManager, flowValidator)
+	store, compositeStore, transactioner, err := initializeStore(cacheManager, flowValidator, entityTypeNormalizer)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -96,7 +98,9 @@ func Initialize(
 //   - Declarative flows cannot be updated or deleted
 func initializeStore(
 	cacheManager cache.CacheManagerInterface,
-	flowValidator FlowValidatorInterface) (flowStoreInterface, *compositeFlowStore, providers.Transactioner, error) {
+	flowValidator FlowValidatorInterface,
+	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizer,
+) (flowStoreInterface, *compositeFlowStore, providers.Transactioner, error) {
 	var compositeStore *compositeFlowStore
 
 	storeMode := getFlowStoreMode()
@@ -107,7 +111,7 @@ func initializeStore(
 	switch storeMode {
 	case serverconst.StoreModeComposite:
 		fileStore, _ := newFileBasedStore()
-		dbStore, transactioner, err := newCacheBackedFlowStore(flowByIDCache, flowByHandleCache)
+		dbStore, transactioner, err := newCacheBackedFlowStore(flowByIDCache, flowByHandleCache, entityTypeNormalizer)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -125,7 +129,7 @@ func initializeStore(
 		return fileStore, nil, transactioner, nil
 
 	default:
-		store, transactioner, err := newCacheBackedFlowStore(flowByIDCache, flowByHandleCache)
+		store, transactioner, err := newCacheBackedFlowStore(flowByIDCache, flowByHandleCache, entityTypeNormalizer)
 		if err != nil {
 			return nil, nil, nil, err
 		}

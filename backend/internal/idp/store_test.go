@@ -61,7 +61,7 @@ func (s *IDPStoreTestSuite) SetupTest() {
 
 // TestNewIDPStore tests store creation
 func (s *IDPStoreTestSuite) TestNewIDPStore() {
-	store, _, err := newIDPStore()
+	store, _, err := newIDPStore(nil)
 	s.NoError(err)
 	s.NotNil(store)
 	s.Implements((*idpStoreInterface)(nil), store)

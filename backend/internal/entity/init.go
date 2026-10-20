@@ -19,9 +19,10 @@ func Initialize(
 	cacheManager cache.CacheManagerInterface,
 	hashService cryptolib.HashServiceInterface,
 	entityTypeService entitytype.EntityTypeServiceInterface,
+	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizer,
 	ouService ou.OrganizationUnitServiceInterface,
 ) (EntityServiceInterface, error) {
-	store, transactioner, err := initializeStore(cacheManager)
+	store, transactioner, err := initializeStore(cacheManager, entityTypeNormalizer)
 	if err != nil {
 		return nil, err
 	}
@@ -31,10 +32,13 @@ func Initialize(
 }
 
 // initializeStore always creates a composite store (DB + in-memory file store).
-func initializeStore(cacheManager cache.CacheManagerInterface) (
+func initializeStore(
+	cacheManager cache.CacheManagerInterface,
+	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizer,
+) (
 	entityStoreInterface, providers.Transactioner, error) {
 	fileStore := newEntityFileBasedStore()
-	dbStore, transactioner, err := newEntityDBStore()
+	dbStore, transactioner, err := newEntityDBStore(entityTypeNormalizer)
 	if err != nil {
 		return nil, nil, err
 	}

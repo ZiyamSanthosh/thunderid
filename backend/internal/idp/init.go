@@ -23,12 +23,13 @@ import (
 func Initialize(
 	cacheManager cache.CacheManagerInterface,
 	entityTypeService entitytype.EntityTypeServiceInterface,
+	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizer,
 	roleService role.RoleServiceInterface,
 	groupService group.GroupServiceInterface,
 	resourceService providers.ResourceServerProvider,
 ) (IDPServiceInterface, error) {
 	// Create store and transactioner based on store mode
-	idpStore, transactioner, err := initializeStore(cacheManager)
+	idpStore, transactioner, err := initializeStore(cacheManager, entityTypeNormalizer)
 	if err != nil {
 		return nil, err
 	}
@@ -68,7 +69,10 @@ func Initialize(
 // Note: the file-based store here is populated by the connection package's declarative loader
 // (backend/internal/connection/declarative_resource.go), not by this package — see
 // ShouldLoadDeclarativeIDPResources.
-func initializeStore(cacheManager cache.CacheManagerInterface) (idpStoreInterface, providers.Transactioner, error) {
+func initializeStore(
+	cacheManager cache.CacheManagerInterface,
+	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizer,
+) (idpStoreInterface, providers.Transactioner, error) {
 	storeMode := getIdentityProviderStoreMode()
 
 	idpByIDCache := cache.GetCache[*providers.IDPDTO](cacheManager, "IDPByIDCache")
@@ -77,7 +81,7 @@ func initializeStore(cacheManager cache.CacheManagerInterface) (idpStoreInterfac
 	switch storeMode {
 	case serverconst.StoreModeComposite:
 		fileStore, _ := newIDPFileBasedStore()
-		dbStore, transactioner, err := newIDPStore()
+		dbStore, transactioner, err := newIDPStore(entityTypeNormalizer)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -89,7 +93,7 @@ func initializeStore(cacheManager cache.CacheManagerInterface) (idpStoreInterfac
 		return newCacheBackedIDPStore(idpByIDCache, idpByPropertyCache, fileStore), transactioner, nil
 
 	default:
-		store, transactioner, err := newIDPStore()
+		store, transactioner, err := newIDPStore(entityTypeNormalizer)
 		if err != nil {
 			return nil, nil, err
 		}

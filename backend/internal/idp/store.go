@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/thunder-id/thunderid/internal/entitytype"
 	"github.com/thunder-id/thunderid/internal/system/cmodels"
 	dbmodel "github.com/thunder-id/thunderid/internal/system/database/model"
 	"github.com/thunder-id/thunderid/internal/system/database/provider"
@@ -32,11 +33,14 @@ type idpStoreInterface interface {
 
 // idpStore is the default implementation of IDPStoreInterface.
 type idpStore struct {
-	dbProvider provider.DBProviderInterface
+	dbProvider           provider.DBProviderInterface
+	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizer
 }
 
 // newIDPStore creates a new instance of IDPStore.
-func newIDPStore() (idpStoreInterface, providers.Transactioner, error) {
+func newIDPStore(
+	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizer,
+) (idpStoreInterface, providers.Transactioner, error) {
 	dbProvider := getDBProvider()
 	client, err := dbProvider.GetConfigDBClient()
 	if err != nil {
@@ -47,7 +51,8 @@ func newIDPStore() (idpStoreInterface, providers.Transactioner, error) {
 		return nil, nil, err
 	}
 	return &idpStore{
-		dbProvider: dbProvider,
+		dbProvider:           dbProvider,
+		entityTypeNormalizer: entityTypeNormalizer,
 	}, transactioner, nil
 }
 
@@ -211,6 +216,14 @@ func (s *idpStore) GetIdentityProvidersByProperty(ctx context.Context,
 			AttributeConfiguration: attributeConfiguration,
 		})
 	}
+
+	configurations := make([]*providers.AttributeConfiguration, 0, len(idps))
+	for i := range idps {
+		configurations = append(configurations, idps[i].AttributeConfiguration)
+	}
+	if err := s.normalizeEntityTypeReferences(ctx, configurations...); err != nil {
+		return nil, err
+	}
 	return idps, nil
 }
 
@@ -272,6 +285,9 @@ func (s *idpStore) getIDP(ctx context.Context, query dbmodel.DBQuery, identifier
 		AttributeConfiguration: attributeConfiguration,
 	}
 
+	if err := s.normalizeEntityTypeReferences(ctx, idp.AttributeConfiguration); err != nil {
+		return nil, err
+	}
 	return idp, nil
 }
 

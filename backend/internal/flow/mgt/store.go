@@ -11,6 +11,7 @@ import (
 
 	"github.com/thunder-id/thunderid/pkg/thunderidengine/providers"
 
+	"github.com/thunder-id/thunderid/internal/entitytype"
 	"github.com/thunder-id/thunderid/internal/system/config"
 	"github.com/thunder-id/thunderid/internal/system/database/provider"
 	"github.com/thunder-id/thunderid/internal/system/deployment"
@@ -56,9 +57,10 @@ type flowStoreInterface interface {
 
 // flowStore is the default implementation of flowStoreInterface.
 type flowStore struct {
-	dbProvider        provider.DBProviderInterface
-	maxVersionHistory int
-	logger            *log.Logger
+	dbProvider           provider.DBProviderInterface
+	maxVersionHistory    int
+	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizer
+	logger               *log.Logger
 }
 
 // scope returns the deployment id this request acts for. The id is put on the context at the
@@ -69,16 +71,19 @@ func (s *flowStore) scope(ctx context.Context) string {
 }
 
 // newFlowStore creates a new instance of flowStore.
-func newFlowStore() (flowStoreInterface, providers.Transactioner, error) {
+func newFlowStore(
+	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizer,
+) (flowStoreInterface, providers.Transactioner, error) {
 	dbProvider := getDBProvider()
 	transactioner, err := dbProvider.GetConfigDBTransactioner()
 	if err != nil {
 		return nil, nil, err
 	}
 	return &flowStore{
-		dbProvider:        dbProvider,
-		maxVersionHistory: getMaxVersionHistory(),
-		logger:            log.GetLogger().With(log.String(log.LoggerKeyComponentName, "FlowStore")),
+		dbProvider:           dbProvider,
+		maxVersionHistory:    getMaxVersionHistory(),
+		entityTypeNormalizer: entityTypeNormalizer,
+		logger:               log.GetLogger().With(log.String(log.LoggerKeyComponentName, "FlowStore")),
 	}, transactioner, nil
 }
 
@@ -158,7 +163,11 @@ func (s *flowStore) ListActiveFlowsWithNodes(ctx context.Context) ([]*providers.
 			flows = append(flows, flow)
 		}
 
-		return nil
+		flowNodes := make([][]providers.NodeDefinition, 0, len(flows))
+		for _, flow := range flows {
+			flowNodes = append(flowNodes, flow.Nodes)
+		}
+		return s.normalizeEntityTypeReferences(ctx, flowNodes...)
 	})
 
 	if err != nil {
@@ -217,6 +226,12 @@ func (s *flowStore) GetFlowByID(ctx context.Context, flowID string) (*providers.
 		}
 
 		flow, err = s.buildCompleteFlowDefinitionFromRow(results[0])
+		if err != nil {
+			return err
+		}
+		if err = s.normalizeEntityTypeReferences(ctx, flow.Nodes); err != nil {
+			flow = nil
+		}
 		return err
 	})
 
@@ -238,6 +253,12 @@ func (s *flowStore) GetFlowByHandle(ctx context.Context, handle string, flowType
 		}
 
 		flow, err = s.buildCompleteFlowDefinitionFromRow(results[0])
+		if err != nil {
+			return err
+		}
+		if err = s.normalizeEntityTypeReferences(ctx, flow.Nodes); err != nil {
+			flow = nil
+		}
 		return err
 	})
 
@@ -370,6 +391,12 @@ func (s *flowStore) GetFlowVersion(ctx context.Context, flowID string, version i
 		}
 
 		flowVersion, err = s.buildFlowVersionFromRow(results[0])
+		if err != nil {
+			return err
+		}
+		if err = s.normalizeEntityTypeReferences(ctx, flowVersion.Nodes); err != nil {
+			flowVersion = nil
+		}
 		return err
 	})
 

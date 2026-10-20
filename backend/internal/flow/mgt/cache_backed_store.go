@@ -9,6 +9,7 @@ import (
 
 	"github.com/thunder-id/thunderid/pkg/thunderidengine/providers"
 
+	"github.com/thunder-id/thunderid/internal/entitytype"
 	"github.com/thunder-id/thunderid/internal/system/cache"
 	"github.com/thunder-id/thunderid/internal/system/log"
 )
@@ -27,8 +28,9 @@ type cacheBackedFlowStore struct {
 func newCacheBackedFlowStore(
 	flowByIDCache cache.CacheInterface[*providers.CompleteFlowDefinition],
 	flowByHandleCache cache.CacheInterface[*providers.CompleteFlowDefinition],
+	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizer,
 ) (flowStoreInterface, providers.Transactioner, error) {
-	store, transactioner, err := newFlowStore()
+	store, transactioner, err := newFlowStore(entityTypeNormalizer)
 	if err != nil {
 		return nil, nil, err
 	}
