@@ -113,6 +113,15 @@ func TestAgentNameOperationsUseExpectedExecutionModes(t *testing.T) {
 	assert.Implements(t, (*engine.ResumableOperation)(nil), nameOperation)
 }
 
+func TestAgentNameUpdateUsesCompareAndSetPredicates(t *testing.T) {
+	assert.Contains(t, queryUpdateAgentNameRepresentation.PostgresQuery,
+		"ATTRIBUTES IS NOT DISTINCT FROM $4")
+	assert.Contains(t, queryUpdateAgentNameRepresentation.PostgresQuery,
+		"SYSTEM_ATTRIBUTES IS NOT DISTINCT FROM $5")
+	assert.Contains(t, queryUpdateAgentNameRepresentation.PostgresQuery,
+		"DEPLOYMENT_ID = $6")
+}
+
 func TestAgentNameReadinessDefersUntilHandleColumnExists(t *testing.T) {
 	operation := newMigrateAgentNamesToAttributesOperation(nil)
 	result, err := operation.(engine.ReadinessChecker).CheckReadiness(

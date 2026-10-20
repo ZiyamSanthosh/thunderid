@@ -959,7 +959,9 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
   Duplicate names belonging only to non-agent entities do not block this agent-only migration.
 - **Execution:** Process agents in batches of 100 ordered by deployment and entity ID. Preserve all
   unrelated JSON fields, move the name, and upsert the matching identifier with source `attribute`
-  in the same batch transaction.
+  in the same batch transaction. The entity update compares both stored JSON payloads with the
+  values read by the batch, so a concurrent change aborts the batch without advancing its
+  checkpoint.
 - **Verification:** Every agent has one schema-attribute name, no system-attribute name, and exactly
   one matching attribute-sourced name identifier.
 - **Compatibility:** The target serves during Migrate and must read the legacy system-attribute name
