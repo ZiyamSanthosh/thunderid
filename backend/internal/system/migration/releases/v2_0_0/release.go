@@ -17,8 +17,8 @@ var manifestData []byte
 // Add narrowly typed providers only when a concrete operation requires them.
 type Dependencies struct {
 	// DeclarativeEntityTypes lazily provides the read-only entity types defined in declarative resource
-	// files, which have no ENTITY_TYPES row. It is used by the entity-type reference operations (43 to
-	// 47). When nil, those operations map entity types from the database alone.
+	// files, which have no ENTITY_TYPES row. It is used by entity-type reference operations 43 to 45
+	// and 47. When nil, those operations map entity types from the database alone.
 	DeclarativeEntityTypes func() (DeclarativeEntityTypes, error)
 }
 
@@ -226,7 +226,6 @@ func migrationPlan(dependencies Dependencies) (engine.MigrationPlan, error) {
 	migrateEntityTypeReferences := newMigrateEntityTypeReferencesOperation(declaredEntityTypes)
 	migrateInboundClientEntityTypeReferences := newMigrateInboundClientEntityTypeReferencesOperation(declaredEntityTypes)
 	migrateIDPEntityTypeReferences := newMigrateIDPEntityTypeReferencesOperation(declaredEntityTypes)
-	migrateAuthorizationPDPEntityTypeReferences := newMigrateAuthorizationPDPEntityTypeReferencesOperation(declaredEntityTypes)
 	migrateFlowEntityTypeReferences := newMigrateFlowEntityTypeReferencesOperation(declaredEntityTypes)
 	migrateDefaultAgentNameSchema := newMigrateDefaultAgentNameSchemaOperation()
 	migrateAgentNamesToAttributes := newMigrateAgentNamesToAttributesOperation(declaredEntityTypes)
@@ -239,7 +238,6 @@ func migrationPlan(dependencies Dependencies) (engine.MigrationPlan, error) {
 	rollbackEntityTypeReferences := newRollbackEntityTypeReferencesOperation(declaredEntityTypes)
 	rollbackInboundClientEntityTypeReferences := newRollbackInboundClientEntityTypeReferencesOperation(declaredEntityTypes)
 	rollbackIDPEntityTypeReferences := newRollbackIDPEntityTypeReferencesOperation(declaredEntityTypes)
-	rollbackAuthorizationPDPEntityTypeReferences := newRollbackAuthorizationPDPEntityTypeReferencesOperation(declaredEntityTypes)
 	rollbackFlowEntityTypeReferences := newRollbackFlowEntityTypeReferencesOperation(declaredEntityTypes)
 	rollbackDefaultAgentNameSchema := newRollbackDefaultAgentNameSchemaOperation()
 	rollbackAgentNamesToAttributes := newRollbackAgentNamesToAttributesOperation(declaredEntityTypes)
@@ -286,14 +284,13 @@ func migrationPlan(dependencies Dependencies) (engine.MigrationPlan, error) {
 			expandCertificateReferenceID,
 			expandRevocationCriterionValue,
 			addSSOSessionParticipantApplicationIndex,
-		},
-		Migrate: []engine.Operation{
 			backfillEntityTypeHandle,
 			addEntityTypeHandleUniqueness,
+		},
+		Migrate: []engine.Operation{
 			migrateEntityTypeReferences,
 			migrateInboundClientEntityTypeReferences,
 			migrateIDPEntityTypeReferences,
-			migrateAuthorizationPDPEntityTypeReferences,
 			migrateFlowEntityTypeReferences,
 			migrateDefaultAgentNameSchema,
 			migrateAgentNamesToAttributes,
@@ -307,7 +304,6 @@ func migrationPlan(dependencies Dependencies) (engine.MigrationPlan, error) {
 			rollbackAgentNamesToAttributes,
 			rollbackDefaultAgentNameSchema,
 			rollbackFlowEntityTypeReferences,
-			rollbackAuthorizationPDPEntityTypeReferences,
 			rollbackIDPEntityTypeReferences,
 			rollbackInboundClientEntityTypeReferences,
 			rollbackEntityTypeReferences,

@@ -26,7 +26,9 @@ func verifyCompatibilityGate(t *testing.T, environment migrationharness.Environm
 		verifyLegacyThemeLayoutForeignKeys(t, environment)
 		environment.RunMigrationCommand(t, "check")
 		environment.RunMigrationCommand(t, "apply expand")
-		preparePostExpandMigrationSource(t, environment)
+		statusOutput = environment.RunMigrationCommand(t, "status")
+		require.Contains(t, statusOutput, "Overall compatibility: YES",
+			"the target was not admitted at the Expanded handoff boundary")
 		verifyAgentNameCollisionGuard(t, environment)
 
 		statusOutput = environment.RunMigrationCommand(t, "status")

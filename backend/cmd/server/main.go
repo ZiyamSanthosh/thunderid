@@ -252,13 +252,13 @@ func logMigrationWorkflow(
 		phaseSuccessful := successful || index < len(result.Phases)-1
 		logMigrationApplication(ctx, logger, phase, phaseSuccessful)
 	}
-	message := "Safe migration workflow completed"
+	message := "Pre-cutover migration workflow completed"
 	if !successful {
-		message = "Safe migration workflow incomplete"
+		message = "Pre-cutover migration workflow incomplete"
 	}
 	logger.Info(ctx, message,
 		log.Int("phases", len(result.Phases)),
-		log.Bool("stoppedBeforeContract", true))
+		log.Bool("stoppedBeforeMigrate", true))
 }
 
 func logMigrationInitialization(

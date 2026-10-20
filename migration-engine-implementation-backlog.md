@@ -181,21 +181,25 @@ Migration implementations remain part of the target ThunderID binary. The migrat
 not depend on a Control Plane upgrade coordinator. Product-native Control Plane coordination is a
 future enhancement above the engine.
 
-The default operational model is a dedicated migration process or job started from the target
-ThunderID binary while source-version instances continue serving. Target-version serving instances
-start only after their required pre-serving phases complete. The migration job does not open an HTTP
-listener and exits after its requested work. A later hosted mode may allow one elected target
-instance to serve traffic and run the background coordinator concurrently, but it is not required
-for the base ZDM guarantee. Both modes use the same plans, metadata and database execution locks.
-Only one coordinator may own a physical database namespace at a time; this restriction does not
-prevent application traffic.
+The default operational model uses a dedicated migration process or job from the target ThunderID
+artifact. Source instances continue serving while Expand establishes a shared compatibility
+boundary. The generic safe apply command now stops after Expand. Target instances can then start in
+restricted mode, every source instance is drained, and Migrate runs while the target continues
+serving. Contract remains explicit until the rollback window ends. The migration job does not open
+an HTTP listener and exits after its requested work. Only one coordinator may own a physical
+database namespace at a time; this restriction does not prevent target application traffic.
+
+The migration engine admits the target at the Expanded boundary but does not implement feature-level
+fallback reads. Each product change that migrates an in-place representation must provide and test
+its own target dual-read behavior before the release can use this topology safely.
 
 ## Restricted operating mode
 
 Restricted mode is a serving-product control, not migration-engine state. Administrators configure
-`operating_mode: restricted` consistently on every applicable source instance and restart those
-instances before running migration work that requires fenced writes. They restore `full` mode after
-the migration reaches the approved boundary. Automated phase-to-mode wiring is not required.
+`operating_mode: restricted` on source instances before Expand when source writes must be fenced,
+and on target instances throughout Migrate when target writes must be fenced. They restore `full`
+mode after the migration reaches the approved boundary. Automated phase-to-mode wiring is not
+required.
 
 The current feature set is a stable baseline. Developers adding new write-capable flows, executors
 or non-HTTP entry points are responsible for adding and enforcing the appropriate feature gate.
@@ -228,16 +232,18 @@ The representative `expand`, `migrate` and `contract` migration, deployment-sele
 rollback lifecycle are implemented. The next increment is integrated in-place qualification proving
 that:
 
-1. a source instance in restricted mode continues authentication, authorization and token traffic;
-2. the standalone target migration process executes and resumes the pre-serving phases;
-3. target readiness is reached only after migration verification;
-4. contract remains explicit until source instances are drained; and
-5. the resulting target instance serves successfully.
+1. a source instance in restricted mode continues authentication, authorization and token traffic
+   while Expand runs;
+2. target startup succeeds at Expanded only when the affected product features can read legacy data;
+3. every source instance is drained before Migrate starts;
+4. the target continues serving while resumable Migrate operations execute and resume;
+5. compare-and-set updates reject concurrent changes instead of overwriting them; and
+6. contract remains explicit until the rollback window ends.
 
 The qualification must also cover serving impact and operational recovery:
 
-- continuously exercise authentication, authorization, token, logout and revocation traffic while
-  the standalone migration process runs;
+- continuously exercise authentication, authorization, token, logout and revocation traffic across
+  source-serving Expand, target handoff and target-serving Migrate;
 - add real-server federated-flow coverage for JIT provisioning, account linking and read-only
   legacy-subject resolution. Other restricted-mode feature gates are covered by the operating-mode
   integration suite;
@@ -248,7 +254,7 @@ The qualification must also cover serving impact and operational recovery:
 - verify the supported source and target artifact pair rather than only loading the source schema.
 
 Before production qualification, add configurable backfill batch sizing, pacing or throttling and
-resource limits so operators can bound migration load while source instances continue serving.
+resource limits so operators can bound migration load while the target serves.
 
 Publish an operator runbook covering prerequisites, backups, restricted-mode activation, migration
 commands, monitoring, deployment-selective execution, source draining, contract authorization,
@@ -261,9 +267,8 @@ them:
 
 - an engine-managed `contract_ready` boundary for stores with contract-only plans; the current safe
   workflow rejects such plans because no pre-contract phase can establish target-serving readiness;
-- optional target serving during `migrate`; the base implementation intentionally waits for
-  migration, catch-up and verification, while a future hosted mode requires verified dual-read or
-  partial-data compatibility;
+- product-owned dual-read compatibility for each in-place representation migration. This is a
+  release prerequisite, not generic migration-engine behavior;
 - standalone service-enabled execution only after a real migration operation requires a ThunderID
   business service; the dependency-injection seam is already present and no speculative operation
   should be added;

@@ -29,7 +29,7 @@ var (
 	queryUpdateFlowEntityTypeReferences = dbmodel.DBQuery{
 		ID: "MIG-CFG_MGT-35",
 		PostgresQuery: `UPDATE "FLOW_VERSION" SET NODES = $1
-			WHERE FLOW_ID = $2 AND VERSION = $3 AND DEPLOYMENT_ID = $4`,
+			WHERE FLOW_ID = $2 AND VERSION = $3 AND NODES = $4 AND DEPLOYMENT_ID = $5`,
 	}
 )
 
@@ -76,7 +76,7 @@ func flowEntityTypeReferencesOperationConfig(
 		payloadColumn: "nodes",
 		batchArgs:     flowEntityTypeReferenceBatchArgs,
 		readCursor:    flowEntityTypeReferenceCursor,
-		updateArgs: func(updated string, row engine.QueryRow) ([]interface{}, error) {
+		updateArgs: func(updated string, original string, row engine.QueryRow) ([]interface{}, error) {
 			id, err := row.String("id")
 			if err != nil {
 				return nil, err
@@ -89,7 +89,7 @@ func flowEntityTypeReferencesOperationConfig(
 			if err != nil {
 				return nil, err
 			}
-			return []interface{}{updated, id, version, deploymentID}, nil
+			return []interface{}{updated, id, version, original, deploymentID}, nil
 		},
 		transform: func(payload string, deploymentID string, _ engine.QueryRow,
 			mapping entityTypeReferenceMapping, direction entityTypeReferenceDirection,

@@ -27,10 +27,8 @@ const (
 	CompatibilityReasonMigrationIncomplete CompatibilityReason = "migration_incomplete"
 	// CompatibilityReasonTargetNotReady means that the target representation is not ready to serve.
 	CompatibilityReasonTargetNotReady CompatibilityReason = "target_not_ready"
-	// CompatibilityReasonSourceRetired means that contract has started and the source binary must not serve.
+	// CompatibilityReasonSourceRetired means that migrate has started and the source binary must not serve.
 	CompatibilityReasonSourceRetired CompatibilityReason = "source_retired"
-	// CompatibilityReasonRollbackInProgress means that the target binary must not serve during rollback.
-	CompatibilityReasonRollbackInProgress CompatibilityReason = "rollback_in_progress"
 	// CompatibilityReasonLevelMismatch means that the completed and required store levels differ.
 	CompatibilityReasonLevelMismatch CompatibilityReason = "level_mismatch"
 	// CompatibilityReasonUnsupportedProvider means that no migration adapter can inspect the store.
@@ -243,10 +241,10 @@ func servingCompatibilityReason(requirement StoreRequirement, state State) Compa
 		state.TargetLevel != requirement.RequiredLevel
 	if servingAsSource {
 		switch state.Stage {
-		case MigrationStageExpanding, MigrationStageExpanded,
-			MigrationStageMigrating, MigrationStageContractReady, MigrationStageRollingBack:
+		case MigrationStageExpanding, MigrationStageExpanded:
 			return CompatibilityReasonNone
-		case MigrationStageContracting:
+		case MigrationStageMigrating, MigrationStageContractReady,
+			MigrationStageContracting, MigrationStageRollingBack:
 			return CompatibilityReasonSourceRetired
 		default:
 			return CompatibilityReasonMigrationIncomplete
@@ -257,11 +255,10 @@ func servingCompatibilityReason(requirement StoreRequirement, state State) Compa
 		state.TargetLevel == requirement.RequiredLevel
 	if servingAsTarget {
 		switch state.Stage {
-		case MigrationStageContractReady, MigrationStageContracting:
+		case MigrationStageExpanded, MigrationStageMigrating, MigrationStageContractReady,
+			MigrationStageContracting, MigrationStageRollingBack:
 			return CompatibilityReasonNone
-		case MigrationStageRollingBack:
-			return CompatibilityReasonRollbackInProgress
-		case MigrationStageExpanding, MigrationStageExpanded, MigrationStageMigrating:
+		case MigrationStageExpanding:
 			return CompatibilityReasonTargetNotReady
 		default:
 			return CompatibilityReasonMigrationIncomplete

@@ -95,48 +95,6 @@ func transformIDPEntityTypeReferences(
 	})
 }
 
-func transformAuthorizationPDPEntityTypeReferences(
-	payload string,
-	deploymentID string,
-	mapping entityTypeReferenceMapping,
-	direction entityTypeReferenceDirection,
-) (string, bool, error) {
-	return transformJSONObject(payload, func(object map[string]interface{}) (bool, error) {
-		rawMappings, exists := object["subjectAttributeMappings"]
-		if !exists || rawMappings == nil {
-			return false, nil
-		}
-		mappings, ok := rawMappings.([]interface{})
-		if !ok {
-			return false, fmt.Errorf("AuthZEN subjectAttributeMappings must be an array")
-		}
-		changed := false
-		for index, rawMapping := range mappings {
-			item, ok := rawMapping.(map[string]interface{})
-			if !ok {
-				return false, fmt.Errorf("AuthZEN subjectAttributeMappings[%d] must be an object", index)
-			}
-			rawValue, exists := item["entityType"]
-			if !exists || rawValue == nil {
-				continue
-			}
-			value, ok := rawValue.(string)
-			if !ok {
-				return false, fmt.Errorf("AuthZEN subjectAttributeMappings[%d].entityType must be a string", index)
-			}
-			translated, valueChanged, err := mapping.translateAnyCategory(deploymentID, value, direction)
-			if err != nil {
-				return false, err
-			}
-			if valueChanged {
-				item["entityType"] = translated
-				changed = true
-			}
-		}
-		return changed, nil
-	})
-}
-
 func transformFlowEntityTypeReferences(
 	payload string,
 	deploymentID string,

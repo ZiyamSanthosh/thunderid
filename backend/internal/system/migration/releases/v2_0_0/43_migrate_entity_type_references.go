@@ -34,7 +34,7 @@ var (
 	queryUpdateEntityTypeReference = dbmodel.DBQuery{
 		ID: "MIG-ENT_MGT-10",
 		PostgresQuery: `UPDATE "ENTITY" SET TYPE = $1
-			WHERE ID = $2 AND DEPLOYMENT_ID = $3`,
+			WHERE ID = $2 AND TYPE = $3 AND DEPLOYMENT_ID = $4`,
 	}
 )
 
@@ -82,7 +82,7 @@ func entityTypeReferencesOperationConfig(
 		payloadColumn: "type",
 		batchArgs:     simpleEntityTypeReferenceBatchArgs,
 		readCursor:    simpleEntityTypeReferenceCursor,
-		updateArgs: func(updated string, row engine.QueryRow) ([]interface{}, error) {
+		updateArgs: func(updated string, original string, row engine.QueryRow) ([]interface{}, error) {
 			id, err := row.String("id")
 			if err != nil {
 				return nil, err
@@ -91,7 +91,7 @@ func entityTypeReferencesOperationConfig(
 			if err != nil {
 				return nil, err
 			}
-			return []interface{}{updated, id, deploymentID}, nil
+			return []interface{}{updated, id, original, deploymentID}, nil
 		},
 		transform: func(payload string, deploymentID string, row engine.QueryRow, mapping entityTypeReferenceMapping,
 			direction entityTypeReferenceDirection,

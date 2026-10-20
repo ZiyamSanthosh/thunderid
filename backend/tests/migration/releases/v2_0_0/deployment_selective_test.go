@@ -32,7 +32,7 @@ func TestPostgresDeploymentSelectiveMigration(t *testing.T) {
 			WHERE DEPLOYMENT_ID = 'deployment-a' AND HANDLE IS NOT NULL`, "1")
 	migrationharness.AssertQueryValue(t, db,
 		`SELECT COUNT(*)::TEXT FROM "ENTITY_TYPES"
-			WHERE DEPLOYMENT_ID = 'deployment-b' AND HANDLE IS NULL`, "1")
+			WHERE DEPLOYMENT_ID = 'deployment-b' AND HANDLE IS NOT NULL`, "1")
 	migrationharness.AssertQueryValue(t, db,
 		`SELECT COMPLETED_LEVEL FROM "MIGRATION_DEPLOYMENT_STATE" WHERE DEPLOYMENT_ID = 'deployment-a'`,
 		"2.0.0")

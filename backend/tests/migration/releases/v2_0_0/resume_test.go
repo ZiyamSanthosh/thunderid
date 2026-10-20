@@ -52,7 +52,6 @@ func verifyResumeAfterFinalizationFailure(t *testing.T, environment migrationhar
 				'2.0.0/configdb/05_add_entity_type_handle_uniqueness',
 				'2.0.0/configdb/44_migrate_inbound_client_entity_type_references',
 				'2.0.0/configdb/45_migrate_idp_entity_type_references',
-				'2.0.0/configdb/46_migrate_authorization_pdp_entity_type_references',
 				'2.0.0/configdb/47_migrate_flow_entity_type_references',
 				'2.0.0/configdb/48_migrate_default_agent_name_schema'
 			)`)

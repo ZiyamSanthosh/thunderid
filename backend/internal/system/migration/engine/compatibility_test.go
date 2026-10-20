@@ -56,13 +56,7 @@ func TestCompatibilityGateAcceptsMigratedDeploymentAtExpandedBoundary(t *testing
 			row["stage"] = string(MigrationStageExpanded)
 			row["status"] = string(StatusCompleted)
 			dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(requirement.ID)).
-				Return([]map[string]interface{}{row}, nil).Twice()
-			dbClient.On("QueryContext", mock.Anything, queryGetDeploymentMigrationState,
-				"deployment-a", testStateID).Return([]map[string]interface{}{{
-				"id": testProgressID, "migration_state_id": testStateID,
-				"deployment_id": "deployment-a", "completed_level": requirement.RequiredLevel,
-				"updated_at": row["updated_at"],
-			}}, nil).Once()
+				Return([]map[string]interface{}{row}, nil).Once()
 		} else {
 			dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(requirement.ID)).
 				Return([]map[string]interface{}{row}, nil).Once()
@@ -77,8 +71,12 @@ func TestCompatibilityGateAcceptsMigratedDeploymentAtExpandedBoundary(t *testing
 	assert.True(t, report.Compatible())
 }
 
-func TestCompatibilityGateKeepsSourceCompatibleDuringMigrateFailure(t *testing.T) {
+func TestCompatibilityGateKeepsTargetCompatibleDuringMigrateFailure(t *testing.T) {
 	manifest := validTestManifest()
+	manifest.ReleaseVersion = "2.0.0"
+	manifest.Stores[0].AcceptedSourceLevel = "1.0.0"
+	manifest.Stores[0].RequiredLevel = "2.0.0"
+	manifest.Stores[0].Changed = true
 	dbClient := providermock.NewDBClientInterfaceMock(t)
 	expectReadySchema(dbClient)
 	row := compatibilityStateRow(StoreIDConfigDB, "1.0.0")
@@ -180,28 +178,28 @@ func TestServingCompatibilityAcrossMigrationStages(t *testing.T) {
 			expected: CompatibilityReasonNone,
 		},
 		{
-			name: "target waits at expanded boundary", requirement: targetRequirement,
+			name: "target serves at expanded boundary", requirement: targetRequirement,
 			state: migrationCompatibilityState(
 				"1.0.0", "2.0.0", MigrationStageExpanded, StatusCompleted),
-			expected: CompatibilityReasonTargetNotReady,
+			expected: CompatibilityReasonNone,
 		},
 		{
-			name: "source serves after migrate failure", requirement: sourceRequirement,
+			name: "source is retired after migrate failure", requirement: sourceRequirement,
+			state: migrationCompatibilityState(
+				"1.0.0", "2.0.0", MigrationStageMigrating, StatusFailed),
+			expected: CompatibilityReasonSourceRetired,
+		},
+		{
+			name: "target serves after migrate failure", requirement: targetRequirement,
 			state: migrationCompatibilityState(
 				"1.0.0", "2.0.0", MigrationStageMigrating, StatusFailed),
 			expected: CompatibilityReasonNone,
 		},
 		{
-			name: "target waits after migrate failure", requirement: targetRequirement,
-			state: migrationCompatibilityState(
-				"1.0.0", "2.0.0", MigrationStageMigrating, StatusFailed),
-			expected: CompatibilityReasonTargetNotReady,
-		},
-		{
-			name: "source serves at contract-ready boundary", requirement: sourceRequirement,
+			name: "source is retired at contract-ready boundary", requirement: sourceRequirement,
 			state: migrationCompatibilityState(
 				"1.0.0", "2.0.0", MigrationStageContractReady, StatusCompleted),
-			expected: CompatibilityReasonNone,
+			expected: CompatibilityReasonSourceRetired,
 		},
 		{
 			name: "target serves at contract-ready boundary", requirement: targetRequirement,
@@ -228,16 +226,16 @@ func TestServingCompatibilityAcrossMigrationStages(t *testing.T) {
 			expected: CompatibilityReasonNone,
 		},
 		{
-			name: "source serves during rollback", requirement: sourceRequirement,
+			name: "source remains retired during rollback", requirement: sourceRequirement,
+			state: migrationCompatibilityState(
+				"1.0.0", "2.0.0", MigrationStageRollingBack, StatusInProgress),
+			expected: CompatibilityReasonSourceRetired,
+		},
+		{
+			name: "target serves during rollback", requirement: targetRequirement,
 			state: migrationCompatibilityState(
 				"1.0.0", "2.0.0", MigrationStageRollingBack, StatusInProgress),
 			expected: CompatibilityReasonNone,
-		},
-		{
-			name: "target stops during rollback", requirement: targetRequirement,
-			state: migrationCompatibilityState(
-				"1.0.0", "2.0.0", MigrationStageRollingBack, StatusInProgress),
-			expected: CompatibilityReasonRollbackInProgress,
 		},
 	}
 

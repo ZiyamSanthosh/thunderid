@@ -216,7 +216,8 @@ const (
 	MigrationStageExpanding MigrationStage = "expanding"
 	// MigrationStageExpanded means that expansion completed and migration has not started.
 	MigrationStageExpanded MigrationStage = "expanded"
-	// MigrationStageMigrating means that data transformation and catch-up are running.
+	// MigrationStageMigrating means that the source is retired and target-serving data transformation
+	// and catch-up are running.
 	MigrationStageMigrating MigrationStage = "migrating"
 	// MigrationStageContractReady means that target serving is ready and contract awaits explicit execution.
 	MigrationStageContractReady MigrationStage = "contract_ready"

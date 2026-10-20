@@ -19,10 +19,13 @@ verification, rollback, or compatibility behavior changes.
   operations process bounded batches and persist checkpoints.
 - Contract operations are irreversible boundaries. They run only after source instances are
   drained and rollback authorization has ended.
-- For this release, source instances may serve only through Expand. Stop source traffic before
-  Migrate because operations 43 through 49 replace entity-type and agent-name representations and
-  the source and target binaries do not provide dual-read behavior. Keep the service offline
-  through Contract, then start the target binary after final verification.
+- For this release, source instances serve through Expand. The target may start in restricted mode
+  after Expand, provided each affected product feature supplies its required legacy-read behavior.
+  Drain every source instance before Migrate. The target remains the serving binary while Migrate
+  rewrites data, then continues serving through the rollback window and Contract.
+- Resumable in-place rewrites use compare-and-set updates. Each update succeeds only while the
+  stored payload still equals the value read by the migration batch. A concurrent change aborts
+  the batch without advancing its checkpoint, allowing a later retry to read the newer value.
 - The current migration implementation supports PostgreSQL only.
 
 ## Release plan at a glance
@@ -67,21 +70,21 @@ verification, rollback, or compatibility behavior changes.
 | Expand | 40 | `configdb` | Expand `CERTIFICATE.REF_ID` to 2048 characters | Schema, atomic | None | Implemented |
 | Expand | 41 | `runtime_persistent` | Expand revocation criterion values to 2048 characters | Schema, atomic | None | Implemented |
 | Expand | 42 | `runtime_persistent` | Add SSO participant application lookup index | Schema, online | None | Implemented |
-| Migrate | 04 | `configdb` | Backfill entity-type handles | Data, resumable | Operation 04 rollback | Implemented |
-| Migrate | 05 | `configdb` | Add entity-type handle uniqueness | Schema, online | None | Implemented |
+| Expand | 04 | `configdb` | Backfill entity-type handles | Data, resumable | Operation 04 rollback | Implemented |
+| Expand | 05 | `configdb` | Add entity-type handle uniqueness | Schema, online | None | Implemented |
 | Migrate | 43 | `entitydb` | Replace entity record type names with handles | Data, resumable | Operation 43 rollback | Implemented |
 | Migrate | 44 | `configdb` | Replace inbound-client entity-type names with handles | Data, resumable | Operation 44 rollback | Implemented |
 | Migrate | 45 | `configdb` | Replace identity-provider entity-type names with handles | Data, resumable | Operation 45 rollback | Implemented |
-| Migrate | 46 | `configdb` | Replace authorization PDP entity-type names with handles | Data, resumable | Operation 46 rollback | Implemented |
 | Migrate | 47 | `configdb` | Replace flow entity-type names with handles | Data, resumable | Operation 47 rollback | Implemented |
 | Migrate | 48 | `configdb` | Add name to the default agent type schema | Data, atomic | Operation 48 rollback | Implemented |
 | Migrate | 49 | `entitydb` | Move agent names into schema attributes | Data, resumable | Operation 49 rollback | Implemented |
 | Contract | 06 | `configdb` | Finalize entity-type handles | Schema, atomic | None | Implemented |
 | Contract | 10 | `entitydb` | Remove legacy `ENTITY.STATE` | Schema, atomic | None | Implemented |
 
-Operation numbers are contiguous identifiers, but they do not define phase ordering. The release
-plan in [`release.go`](backend/internal/system/migration/releases/v2_0_0/release.go) defines execution
-order.
+Operation numbers are stable identifiers and do not define phase ordering. Gaps are allowed.
+Operation 46 was removed because authorization PDP references are not part of this migration plan.
+The release plan in
+[`release.go`](backend/internal/system/migration/releases/v2_0_0/release.go) defines execution order.
 
 ## Operation records
 
@@ -149,8 +152,8 @@ order.
 - **Readiness:** Deferred until operation 02 when `HANDLE` is absent. Ready when the accepted schema
   exists and current data is valid. Invalid or duplicate populated handles block execution.
 - **Execution:** Process at most 100 null-handle rows per batch. Generate normalized handles,
-  resolve collisions deterministically, update rows, and checkpoint the last processed ID. The
-  operation can run for selected deployments or for all deployments.
+  resolve collisions deterministically, update rows, and checkpoint the last processed ID. Expand
+  executes this operation store-wide before target startup.
 - **Verification:** Target requires every entity type in scope to have a valid unique handle. An
   empty scope is already target. A partial valid backfill remains source and is resumable.
 - **Compatibility:** The legacy name representation and uniqueness remain in place through the
@@ -159,8 +162,8 @@ order.
 - **Dependencies:** Operation 02 must provide the column. Operation 05 follows the completed
   backfill.
 - **Pending concerns:** Batch size and pacing are fixed. Production resource limits and configurable
-  pacing remain migration-engine backlog items. Relevant entity-type writes must not race the
-  backfill.
+  pacing remain migration-engine backlog items. Relevant entity-type mutations are fenced during
+  Expand so the handle mapping is stable before target startup.
 
 ### 04 rollback: Remove entity-type handle representation
 
@@ -855,12 +858,15 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
   references block execution.
 - **Execution:** Read the persisted `(DEPLOYMENT_ID, CATEGORY, NAME, HANDLE)` mapping from `configdb`,
   update `entitydb` in batches of 100 ordered by deployment and entity ID, and persist a cursor.
+  Each write compares the stored type with the value read by the batch before replacing it.
 - **Verification:** The target requires every entity type value to resolve as a persisted handle.
-- **Compatibility:** Requires downtime. The source binary must not serve after this operation
-  begins, and the target starts only after the complete migration is verified.
+- **Compatibility:** The source is drained before this operation begins. The target serves in
+  restricted mode during Migrate and must retain product-owned fallback reads for legacy names
+  until the operation is complete.
 - **Rollback:** The paired rollback restores names before operation 04 clears the handle column
   values.
-- **Pending concerns:** None specific to this operation.
+- **Pending concerns:** Target legacy-name fallback is a product implementation dependency owned by
+  the entity-type feature, not by the migration engine.
 
 ### 44: Migrate inbound-client entity-type references
 
@@ -872,9 +878,11 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
 - **Readiness:** Deferred until operation 04 has produced a complete mapping. Invalid JSON,
   unexpected field shapes, unknown names, and translated duplicate map keys block execution.
 - **Execution:** Rewrite only the affected JSON fields in batches of 100 and checkpoint by
-  deployment and entity ID.
+  deployment and entity ID. Each update includes the original JSON payload in its predicate so a
+  concurrent target write aborts the batch instead of being overwritten.
 - **Verification:** Every affected value and map key must resolve as a persisted handle.
-- **Compatibility:** Requires the same downtime boundary as operation 43.
+- **Compatibility:** Uses the same target-serving Migrate boundary and product-owned legacy-read
+  dependency as operation 43.
 - **Rollback:** Restores legacy names using the persisted reverse mapping.
 - **Pending concerns:** None specific to this operation.
 
@@ -888,28 +896,13 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
   `userTypeAttributeMappings[].userType` value.
 - **Readiness:** Deferred until operation 04. Invalid JSON, unexpected structures, or unknown user
   types block execution.
-- **Execution:** Rewrite affected JSON fields in resumable batches of 100.
+- **Execution:** Rewrite affected JSON fields in resumable batches of 100. Each update succeeds only
+  if the stored JSON still equals the value read by that batch.
 - **Verification:** Every affected value must resolve as a persisted user-type handle.
-- **Compatibility:** Requires the same downtime boundary as operation 43.
+- **Compatibility:** Uses the same target-serving Migrate boundary and product-owned legacy-read
+  dependency as operation 43.
 - **Rollback:** Restores legacy user-type names from the persisted mapping.
 - **Pending concerns:** None specific to this operation.
-
-### 46: Migrate authorization PDP entity-type references
-
-- **ID:** `2.0.0/configdb/46_migrate_authorization_pdp_entity_type_references`
-- **Definition:**
-  [`46_migrate_authorization_pdp_entity_type_references.go`](backend/internal/system/migration/releases/v2_0_0/46_migrate_authorization_pdp_entity_type_references.go)
-- **Purpose:** Replace every
-  `AUTHORIZATION_PDP_CONNECTION.PROPERTIES.subjectAttributeMappings[].entityType` name with its
-  persisted handle.
-- **Readiness:** Deferred until operation 04. Invalid JSON, unexpected structures, unknown names,
-  or a reference that resolves differently in user and agent categories blocks execution.
-- **Execution:** Rewrite affected JSON values in resumable batches of 100.
-- **Verification:** Every affected value must resolve as one unambiguous persisted handle.
-- **Compatibility:** Requires the same downtime boundary as operation 43.
-- **Rollback:** Restores the corresponding legacy names.
-- **Pending concerns:** References do not carry a category. A value shared by user and agent
-  categories is accepted only when both categories translate to the same value.
 
 ### 47: Migrate flow entity-type references
 
@@ -922,9 +915,11 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
 - **Readiness:** Deferred until operation 04. Invalid node JSON, unexpected affected field shapes,
   or unknown entity types block execution.
 - **Execution:** Process every `FLOW_VERSION`, including inactive versions, in batches of 100 and
-  checkpoint by deployment, flow ID, and version.
+  checkpoint by deployment, flow ID, and version. Each update includes the original node payload in
+  its predicate so a concurrent target write aborts the batch instead of being overwritten.
 - **Verification:** Every affected resolver value must resolve as a persisted handle.
-- **Compatibility:** Requires the same downtime boundary as operation 43.
+- **Compatibility:** Uses the same target-serving Migrate boundary and product-owned legacy-read
+  dependency as operation 43.
 - **Rollback:** Restores legacy names in every affected flow version.
 - **Pending concerns:** None specific to this operation.
 
@@ -943,8 +938,8 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
   `default` handle in one transaction while preserving every unrelated schema field.
 - **Verification:** The target requires `name` to be a required, unique string with display name
   `Name`, and requires `systemAttributes.display` to equal `name`.
-- **Compatibility:** Requires the release Migrate downtime boundary. The source agent API does not
-  write the name into schema attributes.
+- **Compatibility:** The source is drained before Migrate. The target serves in restricted mode and
+  requires product-owned compatibility for agents that still use the legacy name representation.
 - **Rollback:** Remove only the name property and display setting introduced by the operation.
 - **Pending concerns:** Custom agent types are not modified automatically. Operation 49 blocks if
   an existing agent uses a custom type that does not declare a string `name` attribute.
@@ -967,8 +962,9 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
   in the same batch transaction.
 - **Verification:** Every agent has one schema-attribute name, no system-attribute name, and exactly
   one matching attribute-sourced name identifier.
-- **Compatibility:** Requires downtime. The target generic uniqueness lookup is deployment-scoped
-  but not category-scoped, so readiness enforces the target's deployment-wide collision behavior.
+- **Compatibility:** The target serves during Migrate and must read the legacy system-attribute name
+  until each agent is converted. The target generic uniqueness lookup is deployment-scoped but not
+  category-scoped, so readiness enforces the target's deployment-wide collision behavior.
 - **Rollback:** Move names back to system attributes and change their identifier source back to
   `system` before operation 48 restores the default schema.
 - **Pending concerns:** The agent schema declares `name` unique, but the product's generic uniqueness
@@ -982,10 +978,10 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
    resynchronization is deliberately not part of the current migration plan.
 2. Complete production controls for resumable data work, including configurable batch sizing,
    pacing, resource limits, and operational observability.
-3. Enforce the release-level downtime procedure for operations 43 through 49. Source serving ends
-   before Migrate, no application writes are allowed through Migrate and Contract, and the target
-   starts only after final verification. Migration-specific capability restrictions remain useful
-   for future releases that retain a mixed-version serving window.
+3. Complete and qualify the product-owned dual-read behavior required by operations 43 through 45,
+   47, 48 and 49. The migration system now exposes the Expanded handoff boundary, retires the source
+   before Migrate, admits the target during Migrate, and protects JSON rewrites with compare-and-set.
+   It does not implement the product fallback reads.
 4. Keep the daily main-branch deployment mapping described in
    [`saas-continuous-deployment-migration-model.md`](saas-continuous-deployment-migration-model.md)
    aligned with immutable operation IDs and release-plan ordering.

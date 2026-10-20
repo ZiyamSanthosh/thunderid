@@ -27,7 +27,7 @@ var (
 	queryUpdateIDPEntityTypeReferences = dbmodel.DBQuery{
 		ID: "MIG-CFG_MGT-29",
 		PostgresQuery: `UPDATE "IDP" SET ATTRIBUTE_CONFIGURATION = $1
-			WHERE ID = $2 AND DEPLOYMENT_ID = $3`,
+			WHERE ID = $2 AND ATTRIBUTE_CONFIGURATION = $3 AND DEPLOYMENT_ID = $4`,
 	}
 )
 

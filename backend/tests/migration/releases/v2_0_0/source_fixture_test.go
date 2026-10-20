@@ -31,13 +31,13 @@ func prepareEntityTypeMigrationSource(t *testing.T, environment migrationharness
 		VALUES
 			('migration-deployment', '0199a123-4701-7abc-8def-0123456789ab', 'user', $1,
 				'0199a123-4702-7abc-8def-0123456789ab', FALSE, '{}'::jsonb),
-			('migration-deployment', '0199a123-4704-7abc-8def-0123456789ab', 'user', 'legacy-person',
+			('migration-deployment', '0199a123-4704-7abc-8def-0123456789ab', 'user', 'Legacy-Person',
 				'0199a123-4702-7abc-8def-0123456789ab', FALSE, '{}'::jsonb),
 			('migration-deployment', '0199a123-4705-7abc-8def-0123456789ab', 'agent', 'Default',
 				'0199a123-4702-7abc-8def-0123456789ab', FALSE,
 				'{"modelProvider":{"type":"string","required":false}}'::jsonb),
 			('migration-deployment', '0199a123-4707-7abc-8def-0123456789ab', 'user',
-				'declarative-customer', '0199a123-4702-7abc-8def-0123456789ab', FALSE,
+				'Declarative-Customer', '0199a123-4702-7abc-8def-0123456789ab', FALSE,
 				'{}'::jsonb)`, legacyEntityTypeName)
 	require.NoError(t, err)
 	for index := 0; index < entityTypeBackfillFixtureCount-2; index++ {
@@ -157,20 +157,4 @@ func prepareEntityTypeMigrationSource(t *testing.T, environment migrationharness
 			'0199a123-4795-7abc-8def-0123456789ab', NULL, NOW(), NOW())`)
 	require.NoError(t, err)
 	t.Log("prepared: legacy entity-type and entity rows for migration verification")
-}
-
-func preparePostExpandMigrationSource(t *testing.T, environment migrationharness.Environment) {
-	t.Helper()
-	configDB := environment.OpenDatabase(t, "configdb")
-	_, err := configDB.Exec(`INSERT INTO "AUTHORIZATION_PDP_CONNECTION"
-		(DEPLOYMENT_ID, ID, NAME, TYPE, PROPERTIES)
-		VALUES ('migration-deployment', '0199a123-4782-7abc-8def-0123456789ab',
-			'Migration PDP', 'authzen-pdp', $1::jsonb)`, fmt.Sprintf(`{
-			"endpoint":"https://pdp.example.test",
-			"subjectAttributeMappings":[
-				{"entityType":%q,"attributes":[]},
-				{"entityType":%q,"attributes":[]}
-			]
-		}`, legacyEntityTypeName, declarativeEntityTypeName))
-	require.NoError(t, err)
 }
