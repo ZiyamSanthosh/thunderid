@@ -17,6 +17,7 @@ const (
 var restrictedModeExactPaths = map[string]struct{}{
 	"/.well-known/oauth-authorization-server": {},
 	"/.well-known/openid-configuration":       {},
+	"/console":                                {},
 	"/design/resolve":                         {},
 	"/flow/execute":                           {},
 	"/flow/meta":                              {},
@@ -36,9 +37,28 @@ var restrictedModeExactPaths = map[string]struct{}{
 }
 
 var restrictedModePathPrefixes = []string{
+	"/console/",
 	"/gate/",
 	"/health/",
 	"/openid4vp/",
+}
+
+// restrictedModeReadOnlyPathPrefixes are the management resources that stay readable in restricted mode,
+// so that their data can be inspected while a migration is in progress. Only read methods are allowed on
+// them, and everything else on these paths is still unavailable.
+var restrictedModeReadOnlyPathPrefixes = []string{
+	"/agent-types",
+	"/agents",
+	"/applications",
+	"/connections",
+	"/flows",
+	"/gateways",
+	"/groups",
+	"/organization-units",
+	"/resource-servers",
+	"/roles",
+	"/user-types",
+	"/users",
 }
 
 // RestrictedModeMiddleware restricts the HTTP surface to the endpoints allowed in restricted mode.
@@ -49,7 +69,7 @@ func RestrictedModeMiddleware(enabled bool) func(http.Handler) http.Handler {
 		}
 
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if isRestrictedModePathAllowed(r.URL.Path) {
+			if isRestrictedModePathAllowed(r.URL.Path) || isRestrictedModeReadAllowed(r.Method, r.URL.Path) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -71,6 +91,24 @@ func isRestrictedModePathAllowed(path string) bool {
 	}
 
 	return isTranslationResolvePath(path)
+}
+
+// isRestrictedModeReadAllowed reports whether the request reads one of the management resources that stay
+// readable in restricted mode. OPTIONS is allowed so that browser clients can complete CORS preflight.
+func isRestrictedModeReadAllowed(method, path string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+	default:
+		return false
+	}
+
+	for _, prefix := range restrictedModeReadOnlyPathPrefixes {
+		if path == prefix || strings.HasPrefix(path, prefix+"/") {
+			return true
+		}
+	}
+
+	return false
 }
 
 func isTranslationResolvePath(path string) bool {

@@ -105,6 +105,32 @@ func TestCreateHTTPServer_RestrictedModeRestrictsManagementAPI(t *testing.T) {
 
 	managementHandlerCalled := false
 	mux := http.NewServeMux()
+	mux.HandleFunc("POST /applications", func(w http.ResponseWriter, _ *http.Request) {
+		managementHandlerCalled = true
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	server := createHTTPServer(context.Background(), logger, cfg, mux, nil, nil)
+	recorder := httptest.NewRecorder()
+	server.Handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/applications", nil))
+
+	assert.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+	assert.False(t, managementHandlerCalled)
+}
+
+func TestCreateHTTPServer_RestrictedModeLeavesManagementReadsToSecurity(t *testing.T) {
+	logger := log.GetLogger()
+	cfg := &config.Config{
+		Server: engineconfig.ServerConfig{
+			Hostname: "localhost",
+			Port:     0,
+			HTTPOnly: true,
+		},
+		OperatingMode: config.OperatingModeRestricted,
+	}
+
+	managementHandlerCalled := false
+	mux := http.NewServeMux()
 	mux.HandleFunc("GET /applications", func(w http.ResponseWriter, _ *http.Request) {
 		managementHandlerCalled = true
 		w.WriteHeader(http.StatusNoContent)
@@ -114,7 +140,8 @@ func TestCreateHTTPServer_RestrictedModeRestrictsManagementAPI(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	server.Handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/applications", nil))
 
-	assert.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+	// The read passes restricted mode and is then stopped by the security middleware for lack of credentials.
+	assert.Equal(t, http.StatusUnauthorized, recorder.Code)
 	assert.False(t, managementHandlerCalled)
 }
 
