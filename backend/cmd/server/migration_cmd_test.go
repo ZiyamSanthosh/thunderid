@@ -148,8 +148,8 @@ func TestRunMigrationStatusReportsDirectMigrationRoute(t *testing.T) {
 	require.ErrorIs(t, err, errMigrationStatusIncompatible)
 	require.NotNil(t, result)
 	require.NotNil(t, result.compatibility)
-	assert.Equal(t, "2.0.0", result.compatibility.NextMigrationRelease)
-	assert.Equal(t, []string{"2.0.0"}, result.compatibility.MigrationRoute)
+	assert.Equal(t, "2.0.0-m1-pidp", result.compatibility.NextMigrationRelease)
+	assert.Equal(t, []string{"2.0.0-m1-pidp"}, result.compatibility.MigrationRoute)
 	assert.NoError(t, result.compatibility.RouteErr)
 }
 
@@ -231,7 +231,7 @@ func TestRunStartupCompatibilityCheckAcceptsContractReadyTarget(t *testing.T) {
 		row := testMigrationStateRow(storeID)
 		if storeID == engine.StoreIDConfigDB || storeID == engine.StoreIDRuntimePersistent {
 			row["completed_level"] = "1.0.0"
-			row["target_level"] = "2.0.0"
+			row["target_level"] = "2.0.0-m1-pidp"
 			row["stage"] = string(engine.MigrationStageContractReady)
 			row["status"] = string(engine.StatusCompleted)
 		}
@@ -270,7 +270,7 @@ func TestRunStartupCompatibilityCheckAcceptsExpandedTarget(t *testing.T) {
 		row := testMigrationStateRow(storeID)
 		if storeID == engine.StoreIDConfigDB || storeID == engine.StoreIDRuntimePersistent {
 			row["completed_level"] = "1.0.0"
-			row["target_level"] = "2.0.0"
+			row["target_level"] = "2.0.0-m1-pidp"
 			row["stage"] = string(engine.MigrationStageExpanded)
 			row["status"] = string(engine.StatusCompleted)
 		}
@@ -665,7 +665,7 @@ func TestParseMigrationCommandOptionsRejectsConflictingRollbackScopes(t *testing
 func testMigrationStateRow(storeID engine.StoreID) map[string]interface{} {
 	completedLevel := "1.0.0"
 	if storeID != engine.StoreIDRuntimeTransient {
-		completedLevel = "2.0.0"
+		completedLevel = "2.0.0-m1-pidp"
 	}
 	return map[string]interface{}{
 		"id":               "0199a123-4567-7abc-8def-0123456789ab",

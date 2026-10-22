@@ -234,10 +234,10 @@ func newResumableBackfillCoordinator(
 ) *engine.MigrationCoordinator {
 	t.Helper()
 	storeLevels := map[engine.StoreID]string{
-		engine.StoreIDConfigDB:          "2.0.0",
-		engine.StoreIDEntityDB:          "2.0.0",
+		engine.StoreIDConfigDB:          "2.0.0-m1-pidp",
+		engine.StoreIDEntityDB:          "2.0.0-m1-pidp",
 		engine.StoreIDRuntimeTransient:  "1.0.0",
-		engine.StoreIDRuntimePersistent: "2.0.0",
+		engine.StoreIDRuntimePersistent: "2.0.0-m1-pidp",
 	}
 	manifest := engine.ReleaseManifest{
 		ManifestVersion: 1, ReleaseVersion: "2.1.0", MigrationMetadataVersion: 2,

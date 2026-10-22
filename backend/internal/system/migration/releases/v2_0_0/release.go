@@ -252,7 +252,7 @@ func migrationPlan(dependencies Dependencies) (engine.MigrationPlan, error) {
 	rollbackDefaultAgentNameSchema := newRollbackDefaultAgentNameSchemaOperation()
 	rollbackAgentNamesToAttributes := newRollbackAgentNamesToAttributesOperation(declaredEntityTypes)
 	return engine.MigrationPlan{
-		TargetVersion: "2.0.0",
+		TargetVersion: "2.0.0-m1-pidp",
 		Expand: []engine.Operation{
 			createAuthorizationPDPConnection,
 			addEntityTypeHandle,

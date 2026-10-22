@@ -145,7 +145,7 @@ func TestDefinitionMatchesProductVersion(t *testing.T) {
 		if store.ID == "runtime_persistent" || store.ID == "configdb" || store.ID == "entitydb" {
 			assert.True(t, store.Changed)
 			assert.Equal(t, "1.0.0", store.AcceptedSourceLevel)
-			assert.Equal(t, "2.0.0", store.RequiredLevel)
+			assert.Equal(t, expectedVersion, store.RequiredLevel)
 		}
 	}
 }
