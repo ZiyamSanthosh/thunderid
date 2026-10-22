@@ -64,26 +64,25 @@ func (l declarativeEntityTypeLister) ListDeclarativeEntityTypes(
 			if svcErr != nil {
 				return nil, fmt.Errorf("list %s entity types: %s", category, svcErr.ErrorDescription)
 			}
-			// The service is built over the declarative store only, so every entry is declarative.
-			// IsReadOnly is not set here: only the composite store populates it.
 			for _, item := range page.Types {
-				supportsNameAttribute := false
-				if category == entitytype.TypeCategoryAgent {
-					entityType, svcErr := l.service.GetEntityTypeSchema(runtimeCtx, category, item.Handle)
-					if svcErr != nil {
-						return nil, fmt.Errorf("read declarative %s entity type %q: %s",
-							category, item.Handle, svcErr.ErrorDescription)
-					}
-					var err error
-					supportsNameAttribute, err = declarativeEntityTypeSupportsName(entityType.Schema)
-					if err != nil {
-						return nil, fmt.Errorf("inspect declarative %s entity type %q: %w",
-							category, item.Handle, err)
-					}
+				entityType, svcErr := l.service.GetEntityTypeSchema(runtimeCtx, category, item.Handle)
+				if svcErr != nil {
+					return nil, fmt.Errorf("read declarative %s entity type %q: %s",
+						category, item.Handle, svcErr.ErrorDescription)
 				}
+				attributes, err := declarativeEntityTypeAttributes(entityType.Schema)
+				if err != nil {
+					return nil, fmt.Errorf("inspect declarative %s entity type %q: %w",
+						category, item.Handle, err)
+				}
+				// The service is built over the declarative store only, so every entry is declarative.
+				// IsReadOnly is not set here: only the composite store populates it.
+				_, declaresSub := attributes["sub"]
 				result = append(result, current.DeclarativeEntityType{
 					Category: string(category), Handle: item.Handle, DisplayName: item.DisplayName,
-					SupportsNameAttribute: supportsNameAttribute,
+					SupportsNameAttribute: category == entitytype.TypeCategoryAgent &&
+						attributes["name"].Type == "string",
+					DeclaresSubAttribute: declaresSub,
 				})
 			}
 			if len(page.Types) < serverconst.MaxPageSize {
@@ -94,13 +93,19 @@ func (l declarativeEntityTypeLister) ListDeclarativeEntityTypes(
 	return result, nil
 }
 
-func declarativeEntityTypeSupportsName(schema json.RawMessage) (bool, error) {
+// declarativeEntityTypeAttributes returns the attributes a schema declares, by name. An entity type without a
+// schema declares none.
+func declarativeEntityTypeAttributes(schema json.RawMessage) (map[string]struct {
+	Type string `json:"type"`
+}, error) {
+	if len(schema) == 0 {
+		return nil, nil
+	}
 	var attributes map[string]struct {
 		Type string `json:"type"`
 	}
 	if err := json.Unmarshal(schema, &attributes); err != nil {
-		return false, err
+		return nil, err
 	}
-	name, exists := attributes["name"]
-	return exists && name.Type == "string", nil
+	return attributes, nil
 }

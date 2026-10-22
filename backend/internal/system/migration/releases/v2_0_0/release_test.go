@@ -25,10 +25,10 @@ func TestDefinitionMatchesProductVersion(t *testing.T) {
 	assert.Equal(t, expectedVersion, definition.Manifest.ReleaseVersion)
 	assert.Equal(t, expectedVersion, definition.Plan.TargetVersion)
 	assert.Len(t, definition.Manifest.Stores, 4)
-	require.Len(t, definition.Plan.Expand, 37)
-	require.Len(t, definition.Plan.Migrate, 6)
-	require.Len(t, definition.Plan.Contract, 18)
-	require.Len(t, definition.Plan.Rollback, 7)
+	require.Len(t, definition.Plan.Expand, 38)
+	require.Len(t, definition.Plan.Migrate, 7)
+	require.Len(t, definition.Plan.Contract, 19)
+	require.Len(t, definition.Plan.Rollback, 8)
 	expectedExpandIDs := []string{
 		"2.0.0/configdb/01_create_authorization_pdp_connection",
 		"2.0.0/configdb/02_add_entity_type_handle",
@@ -67,6 +67,7 @@ func TestDefinitionMatchesProductVersion(t *testing.T) {
 		"2.0.0/runtime_persistent/42_add_sso_session_participant_application_index",
 		"2.0.0/configdb/04_backfill_entity_type_handle",
 		"2.0.0/configdb/05_add_entity_type_handle_uniqueness",
+		"2.0.0/entitydb/50_link_legacy_federated_subjects",
 	}
 	for index, expectedID := range expectedExpandIDs {
 		assert.Equal(t, expectedID, string(definition.Plan.Expand[index].Definition().ID))
@@ -77,15 +78,19 @@ func TestDefinitionMatchesProductVersion(t *testing.T) {
 		"2.0.0/configdb/45_migrate_idp_entity_type_references",
 		"2.0.0/configdb/47_migrate_flow_entity_type_references",
 	}
+	assert.Equal(t, "2.0.0/entitydb/51_link_legacy_federated_subjects_catch_up",
+		string(definition.Plan.Migrate[0].Definition().ID))
 	for index, expectedID := range expectedReferenceMigrationIDs {
-		assert.Equal(t, expectedID, string(definition.Plan.Migrate[index].Definition().ID))
+		assert.Equal(t, expectedID, string(definition.Plan.Migrate[index+1].Definition().ID))
 	}
 	assert.Equal(t, "2.0.0/configdb/48_migrate_default_agent_name_schema",
-		string(definition.Plan.Migrate[4].Definition().ID))
-	assert.Equal(t, "2.0.0/entitydb/49_migrate_agent_names_to_attributes",
 		string(definition.Plan.Migrate[5].Definition().ID))
+	assert.Equal(t, "2.0.0/entitydb/49_migrate_agent_names_to_attributes",
+		string(definition.Plan.Migrate[6].Definition().ID))
 	assert.Equal(t, "2.0.0/configdb/06_finalize_entity_type_handle",
 		string(definition.Plan.Contract[0].Definition().ID))
+	assert.Equal(t, "2.0.0/entitydb/52_remove_legacy_subject_attribute",
+		string(definition.Plan.Contract[1].Definition().ID))
 	expectedPrimaryKeyContractIDs := []string{
 		"2.0.0/configdb/23_finalize_entity_types_primary_key",
 		"2.0.0/configdb/24_finalize_role_primary_key",
@@ -106,7 +111,7 @@ func TestDefinitionMatchesProductVersion(t *testing.T) {
 		"2.0.0/entitydb/39_finalize_group_primary_key",
 	}
 	for index, expectedID := range expectedPrimaryKeyContractIDs {
-		assert.Equal(t, expectedID, string(definition.Plan.Contract[index+1].Definition().ID))
+		assert.Equal(t, expectedID, string(definition.Plan.Contract[index+2].Definition().ID))
 	}
 	expectedRollbackIDs := []string{
 		"2.0.0/entitydb/49_migrate_agent_names_to_attributes_rollback",
@@ -115,6 +120,7 @@ func TestDefinitionMatchesProductVersion(t *testing.T) {
 		"2.0.0/configdb/45_migrate_idp_entity_type_references_rollback",
 		"2.0.0/configdb/44_migrate_inbound_client_entity_type_references_rollback",
 		"2.0.0/entitydb/43_migrate_entity_type_references_rollback",
+		"2.0.0/entitydb/50_link_legacy_federated_subjects_rollback",
 		"2.0.0/configdb/04_backfill_entity_type_handle_rollback",
 	}
 	expectedRollbackForwardIDs := []string{
@@ -124,6 +130,7 @@ func TestDefinitionMatchesProductVersion(t *testing.T) {
 		"2.0.0/configdb/45_migrate_idp_entity_type_references",
 		"2.0.0/configdb/44_migrate_inbound_client_entity_type_references",
 		"2.0.0/entitydb/43_migrate_entity_type_references",
+		"2.0.0/entitydb/50_link_legacy_federated_subjects",
 		"2.0.0/configdb/04_backfill_entity_type_handle",
 	}
 	for index, expectedID := range expectedRollbackIDs {

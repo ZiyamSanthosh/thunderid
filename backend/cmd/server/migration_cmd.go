@@ -126,6 +126,7 @@ func runMigrationCommand(
 
 	releaseDefinition, err := current.DefinitionWithDependencies(current.Dependencies{
 		DeclarativeEntityTypes: newDeclarativeEntityTypesProvider(cfg),
+		DeclarativeConnections: newDeclarativeConnectionsProvider(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("run migration %s: %w", args[1], err)

@@ -72,6 +72,8 @@ verification, rollback, or compatibility behavior changes.
 | Expand | 42 | `runtime_persistent` | Add SSO participant application lookup index | Schema, online | None | Implemented |
 | Expand | 04 | `configdb` | Backfill entity-type handles | Data, resumable | Operation 04 rollback | Implemented |
 | Expand | 05 | `configdb` | Add entity-type handle uniqueness | Schema, online | None | Implemented |
+| Expand | 50 | `entitydb` | Link users holding a legacy federated subject | Data, resumable | Operation 50 rollback | Implemented |
+| Migrate | 51 | `entitydb` | Link users who gained a legacy federated subject after Expand | Data, resumable | Operation 50 rollback | Implemented |
 | Migrate | 43 | `entitydb` | Replace entity record type names with handles | Data, resumable | Operation 43 rollback | Implemented |
 | Migrate | 44 | `configdb` | Replace inbound-client entity-type names with handles | Data, resumable | Operation 44 rollback | Implemented |
 | Migrate | 45 | `configdb` | Replace identity-provider entity-type names with handles | Data, resumable | Operation 45 rollback | Implemented |
@@ -79,6 +81,7 @@ verification, rollback, or compatibility behavior changes.
 | Migrate | 48 | `configdb` | Add name to the default agent type schema | Data, atomic | Operation 48 rollback | Implemented |
 | Migrate | 49 | `entitydb` | Move agent names into schema attributes | Data, resumable | Operation 49 rollback | Implemented |
 | Contract | 06 | `configdb` | Finalize entity-type handles | Schema, atomic | None | Implemented |
+| Contract | 52 | `entitydb` | Remove the legacy `sub` attribute from users whose user type no longer declares it | Data, resumable | None | Implemented |
 | Contract | 10 | `entitydb` | Remove legacy `ENTITY.STATE` | Schema, atomic | None | Implemented |
 
 Operation numbers are stable identifiers and do not define phase ordering. Gaps are allowed.
@@ -973,6 +976,101 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
   lookup does not retain the entity category supplied by schema validation. Until that product-level
   scope is clarified or corrected, an agent name must not match any entity name in the same
   deployment. The readiness guard prevents migration from creating data the target cannot validate.
+
+### 50: Link legacy federated subjects
+
+- **ID:** `2.0.0/entitydb/50_link_legacy_federated_subjects`
+- **Definition:**
+  [`50_link_legacy_federated_subjects.go`](backend/internal/system/migration/releases/v2_0_0/50_link_legacy_federated_subjects.go)
+- **Purpose:** Give every user whose federated identity is stored only as the `sub` attribute the recorded
+  link that the target release resolves a federated sign-in through. The target no longer reads `sub`.
+- **Scope:** Deployment specific. The deployment has exactly two federated connections, Google and GitHub,
+  both defined in declarative resource files. The connection of each user is inferred from the form of
+  the subject, because the legacy data does not name it.
+- **Source state:** A user holds `ATTRIBUTES.sub` as a string and lacks the link in
+  `SYSTEM_ATTRIBUTES.linkedIds.<connectionId>.<sub>` or its `ENTITY_IDENTIFIER` row.
+- **Classification:** `^[0-9]{20,}$` selects the Google connection. `^[1-9][0-9]{0,18}$` that also parses as an
+  `int64` selects the GitHub connection. The two ranges do not overlap. Anything else, including a `sub`
+  that is not a string, is invalid and is never linked.
+- **Connections:** Resolved from the declarative `connection` resources by type, with the same precedence the
+  server uses to load them. Exactly one connection must exist for each provider a user needs. A deployment
+  without a user of one provider does not need that connection.
+- **Readiness:** Reads every user holding `sub` and applies the verification below. An unclassifiable
+  subject, a missing or ambiguous connection, or an unreadable `linkedIds` value blocks execution, with a
+  finding that names the user and never prints the subject.
+- **Execution:** Process users in batches of 100 ordered by deployment and entity ID. Add the link to the
+  system attributes with a compare-and-set update, so a concurrent change aborts the batch without
+  advancing its checkpoint. Insert the `linkedIds.<connectionId>` identifier row with source `system`
+  in the same batch transaction. The insert names no conflict target, so it works with the three column
+  identifier key of the source and the four column key of operation 07.
+- **Verification:** Target requires, for every user holding `sub`, the link in the system attributes and
+  the identifier row. No such user is already target. A user missing either part leaves the operation at
+  source and resumable.
+- **Compatibility:** Additive. `sub` and its `ENTITY_IDENTIFIER` row stay, so the source keeps identifying
+  these users. The source ignores the added system attribute key and identifier rows.
+- **Rollback:** Paired with `50_link_legacy_federated_subjects_rollback`.
+- **Pending concerns:** The source rewrites identifier rows on some updates. `UpdateEntity` replaces all of a
+  user's identifier rows and `UpdateSystemAttributes` replaces the system sourced ones, so a source write
+  after this operation can remove the identifier row while the link stays in the system attributes. The
+  same applies to users the source creates after the first pass. Operation 51 repeats this operation after
+  the source is drained. Removing `sub` is deferred to a contract operation that depends on the user type
+  schema.
+
+### 50 rollback: Remove recorded links for legacy federated subjects
+
+- **ID:** `2.0.0/entitydb/50_link_legacy_federated_subjects_rollback`
+- **Definition:**
+  [`50_link_legacy_federated_subjects.go`](backend/internal/system/migration/releases/v2_0_0/50_link_legacy_federated_subjects.go)
+- **Purpose:** Return users to the source representation, which identifies a federated user by `sub` only.
+- **Execution:** For each user holding `sub`, remove the link the forward operation derives from it, together
+  with the objects the removal leaves empty, and delete the matching identifier row of source `system`.
+  Uses the same batching and compare-and-set update as the forward operation.
+- **Verification:** Target requires that no user holding `sub` has the link or its identifier row.
+- **Scope:** Covers the links written by operation 51 as well, since it derives them the same way. It
+  removes a link for the same connection and subject even when something other than this release recorded it.
+- **Availability:** Allowed only before contract authorization.
+
+### 51: Link legacy federated subjects added after Expand
+
+- **ID:** `2.0.0/entitydb/51_link_legacy_federated_subjects_catch_up`
+- **Definition:**
+  [`50_link_legacy_federated_subjects.go`](backend/internal/system/migration/releases/v2_0_0/50_link_legacy_federated_subjects.go)
+- **Purpose:** Link the users the source created or changed after operation 50, and restore identifier rows
+  the source removed. It is the same implementation as operation 50, registered at the start of Migrate.
+- **Execution and verification:** Identical to operation 50. When nothing remains, verification is already
+  target and the operation is skipped.
+- **Compatibility:** The target runs in restricted mode and rejects entity writes, so no new user can
+  appear while this operation runs.
+- **Rollback:** Covered by `50_link_legacy_federated_subjects_rollback`.
+
+### 52: Remove the legacy subject attribute
+
+- **ID:** `2.0.0/entitydb/52_remove_legacy_subject_attribute`
+- **Definition:**
+  [`52_remove_legacy_subject_attribute.go`](backend/internal/system/migration/releases/v2_0_0/52_remove_legacy_subject_attribute.go)
+- **Purpose:** Remove the `sub` attribute, and the identifier row that indexed it, from users whose user type
+  no longer declares `sub`. The target validates user attributes against the user type schema and rejects an
+  attribute the schema does not declare, so a user that still holds `sub` could not be updated.
+- **Scope:** Deployment specific, like operations 50 and 51.
+- **Source state:** A user holds `ATTRIBUTES.sub`, the user's type is known, and that type's schema does not
+  declare `sub`. Types are read from `ENTITY_TYPES` and from the declarative entity types, by handle and by name,
+  and a handle wins over a name that equals it.
+- **Retained users:** A user whose type declares `sub` keeps it as an ordinary attribute. A user whose type
+  cannot be found keeps it too, because the removal cannot be undone and the schema is unknown.
+- **Readiness:** Deferred until the entity-type handle column and the handle backfill exist. Deferred until
+  operations 50 and 51 when a removable user lacks the recorded link or its identifier row. Blocked, with a
+  finding, for a subject that cannot be classified or an unreadable `linkedIds` value.
+- **Execution:** Process users in batches of 100 ordered by deployment and entity ID. For each removable user,
+  require the recorded link in the system attributes and its identifier row, remove `sub` with a
+  compare-and-set update, and delete the identifier row named `sub` with source `attribute`. A user without the
+  link aborts the batch, since removing `sub` would leave the user without a federated identity.
+- **Verification:** Target requires that no user holds a `sub` that its type does not declare. A removable user
+  without the link is invalid, not source.
+- **Compatibility:** Irreversible. It runs in Contract, after the source is drained and rollback authorization
+  has ended. The target does not read `sub`.
+- **Rollback:** None. Contract operations are not a path back.
+- **Pending concerns:** A user type that is not declared in the database or in the declarative resources leaves
+  its users' `sub` in place and is not reported.
 
 ## Cross-operation pending work
 

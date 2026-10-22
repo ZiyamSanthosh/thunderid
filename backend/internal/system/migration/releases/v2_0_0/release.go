@@ -20,6 +20,10 @@ type Dependencies struct {
 	// files, which have no ENTITY_TYPES row. It is used by entity-type reference operations 43 to 45
 	// and 47. When nil, those operations map entity types from the database alone.
 	DeclarativeEntityTypes func() (DeclarativeEntityTypes, error)
+	// DeclarativeConnections lazily provides the connections defined in declarative resource files. It is
+	// used by operation 50 and 51 to find the connection that issued each legacy federated subject. When
+	// nil, those operations cannot link a user and report the missing connection.
+	DeclarativeConnections func() (DeclarativeConnections, error)
 }
 
 // Definition returns the manifest and plan owned by ThunderID 2.0.0.
@@ -38,6 +42,7 @@ func DefinitionWithDependencies(dependencies Dependencies) (*engine.ReleaseDefin
 
 func migrationPlan(dependencies Dependencies) (engine.MigrationPlan, error) {
 	declaredEntityTypes := newDeclarativeEntityTypeSource(dependencies.DeclarativeEntityTypes)
+	declaredConnections := newDeclarativeConnectionSource(dependencies.DeclarativeConnections)
 	createAuthorizationPDPConnection, err := newCreateAuthorizationPDPConnectionOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
@@ -223,6 +228,10 @@ func migrationPlan(dependencies Dependencies) (engine.MigrationPlan, error) {
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
+	linkLegacyFederatedSubjects := newLinkLegacyFederatedSubjectsOperation(declaredConnections)
+	linkLegacyFederatedSubjectsCatchUp := newLinkLegacyFederatedSubjectsCatchUpOperation(declaredConnections)
+	removeLegacySubjectAttribute := newRemoveLegacySubjectAttributeOperation(
+		declaredConnections, declaredEntityTypes)
 	migrateEntityTypeReferences := newMigrateEntityTypeReferencesOperation(declaredEntityTypes)
 	migrateInboundClientEntityTypeReferences := newMigrateInboundClientEntityTypeReferencesOperation(declaredEntityTypes)
 	migrateIDPEntityTypeReferences := newMigrateIDPEntityTypeReferencesOperation(declaredEntityTypes)
@@ -235,6 +244,7 @@ func migrationPlan(dependencies Dependencies) (engine.MigrationPlan, error) {
 	// 	return engine.MigrationPlan{}, err
 	// }
 	rollbackEntityTypeHandleBackfill := newRollbackEntityTypeHandleBackfillOperation()
+	rollbackLinkLegacyFederatedSubjects := newRollbackLinkLegacyFederatedSubjectsOperation(declaredConnections)
 	rollbackEntityTypeReferences := newRollbackEntityTypeReferencesOperation(declaredEntityTypes)
 	rollbackInboundClientEntityTypeReferences := newRollbackInboundClientEntityTypeReferencesOperation(declaredEntityTypes)
 	rollbackIDPEntityTypeReferences := newRollbackIDPEntityTypeReferencesOperation(declaredEntityTypes)
@@ -286,8 +296,10 @@ func migrationPlan(dependencies Dependencies) (engine.MigrationPlan, error) {
 			addSSOSessionParticipantApplicationIndex,
 			backfillEntityTypeHandle,
 			addEntityTypeHandleUniqueness,
+			linkLegacyFederatedSubjects,
 		},
 		Migrate: []engine.Operation{
+			linkLegacyFederatedSubjectsCatchUp,
 			migrateEntityTypeReferences,
 			migrateInboundClientEntityTypeReferences,
 			migrateIDPEntityTypeReferences,
@@ -297,6 +309,7 @@ func migrationPlan(dependencies Dependencies) (engine.MigrationPlan, error) {
 		},
 		Contract: append([]engine.Operation{
 			finalizeEntityTypeHandle,
+			removeLegacySubjectAttribute,
 			// Enable operation 10 with operations 08 and 09 after the product change is merged.
 			// removeEntityState,
 		}, primaryKeyContractOperations...),
@@ -307,6 +320,7 @@ func migrationPlan(dependencies Dependencies) (engine.MigrationPlan, error) {
 			rollbackIDPEntityTypeReferences,
 			rollbackInboundClientEntityTypeReferences,
 			rollbackEntityTypeReferences,
+			rollbackLinkLegacyFederatedSubjects,
 			rollbackEntityTypeHandleBackfill,
 		},
 	}, nil

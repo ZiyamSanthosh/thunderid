@@ -18,6 +18,12 @@ type DeclarativeEntityTypes = release.DeclarativeEntityTypes
 // DeclarativeEntityType is an entity type defined in a declarative resource file.
 type DeclarativeEntityType = release.DeclarativeEntityType
 
+// DeclarativeConnections lists the connections defined in declarative resource files.
+type DeclarativeConnections = release.DeclarativeConnections
+
+// DeclarativeConnection is a connection defined in a declarative resource file.
+type DeclarativeConnection = release.DeclarativeConnection
+
 // Definition returns the release definition selected for the current binary.
 func Definition() (*engine.ReleaseDefinition, error) {
 	return DefinitionWithDependencies(Dependencies{})
