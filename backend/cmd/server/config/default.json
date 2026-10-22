@@ -21,6 +21,9 @@
     }
   },
   "operating_mode": "full",
+  "migration": {
+    "startup_compatibility_check": false
+  },
   "gate_client": {
     "path": "/gate"
   },

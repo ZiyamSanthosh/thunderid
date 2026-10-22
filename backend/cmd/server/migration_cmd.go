@@ -12,6 +12,7 @@ import (
 
 	"github.com/thunder-id/thunderid/internal/system/config"
 	dbprovider "github.com/thunder-id/thunderid/internal/system/database/provider"
+	"github.com/thunder-id/thunderid/internal/system/log"
 	"github.com/thunder-id/thunderid/internal/system/migration/current"
 	"github.com/thunder-id/thunderid/internal/system/migration/engine"
 	"github.com/thunder-id/thunderid/pkg/thunderidengine/providers"
@@ -444,6 +445,33 @@ func migrationExecutionNamespaces(
 		})
 	}
 	return executionNamespaces, nil
+}
+
+// checkStartupCompatibility runs the startup compatibility gate when it is enabled and reports whether the server
+// may start. A disabled gate does not read the databases.
+func checkStartupCompatibility(
+	ctx context.Context,
+	logger *log.Logger,
+	cfg *config.Config,
+	dbProvider dbprovider.DBProviderInterface,
+) (bool, error) {
+	if cfg == nil {
+		return false, errors.New("check startup migration compatibility: configuration is required")
+	}
+	if !cfg.Migration.StartupCompatibilityCheck {
+		logger.Info(ctx, "Migration compatibility startup gate is disabled")
+		return true, nil
+	}
+	report, err := runStartupCompatibilityCheck(ctx, cfg, dbProvider)
+	if err != nil {
+		return false, err
+	}
+	if report == nil {
+		logger.Warn(ctx, "Migration compatibility startup gate is not available for the configured database providers")
+		return true, nil
+	}
+	logMigrationCompatibility(ctx, logger, *report)
+	return report.Compatible(), nil
 }
 
 func runStartupCompatibilityCheck(

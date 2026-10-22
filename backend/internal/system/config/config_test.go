@@ -4,6 +4,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"reflect"
@@ -1924,4 +1925,33 @@ func (suite *ConfigTestSuite) TestMergeConfigs_RejectPrivateAddressesCanBeTurned
 	assert.False(suite.T(), base.OAuth.Logout.Backchannel.RejectsPrivateAddresses())
 	var unset engineconfig.BackchannelLogoutConfig
 	assert.True(suite.T(), unset.RejectsPrivateAddresses(), "unset fails safe")
+}
+
+func TestMigrationStartupCompatibilityCheckIsDisabledByDefault(t *testing.T) {
+	assert.False(t, (&Config{}).Migration.StartupCompatibilityCheck)
+}
+
+func TestMergeEnablesTheMigrationStartupCompatibilityCheck(t *testing.T) {
+	base := &Config{}
+	mergeConfigs(base, &Config{Migration: MigrationConfig{StartupCompatibilityCheck: true}})
+	assert.True(t, base.Migration.StartupCompatibilityCheck)
+
+	disabled := &Config{}
+	mergeConfigs(disabled, &Config{})
+	assert.False(t, disabled.Migration.StartupCompatibilityCheck)
+}
+
+func TestShippedDefaultsDisableTheMigrationStartupCompatibilityCheck(t *testing.T) {
+	data, err := os.ReadFile("../../../cmd/server/config/default.json")
+	assert.NoError(t, err)
+
+	var shipped Config
+	assert.NoError(t, json.Unmarshal(data, &shipped))
+	assert.False(t, shipped.Migration.StartupCompatibilityCheck)
+
+	var raw struct {
+		Migration map[string]interface{} `json:"migration"`
+	}
+	assert.NoError(t, json.Unmarshal(data, &raw))
+	assert.Contains(t, raw.Migration, "startup_compatibility_check")
 }

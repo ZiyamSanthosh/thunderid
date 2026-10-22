@@ -86,6 +86,14 @@ Inside flows, the server refuses the following operations:
 
 The Control Plane does not start in restricted mode. It stops at startup with an error when `operating_mode` is `restricted`.
 
+## Migration
+
+Controls how the <ProductName /> server relates to the migration state of its databases.
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `migration.startup_compatibility_check` | `false` | When `true`, the server reads the migration metadata of each database before it starts and refuses to start unless every database is at the level this release requires. Leave it `false` for a database created from this release's schema scripts, because such a database carries no migration metadata. Set it to `true` for a database that you migrate between releases. |
+
 ## Gate Client Configuration
 
 Configures the connection to <ProductName /> Gate (the login UI). Every setting is optional. By default, the `gate_client` settings are derived from `server.public_url`, so you only need to configure this section when Gate is hosted separately from the server.
