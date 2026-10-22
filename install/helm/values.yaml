@@ -133,6 +133,11 @@ httproute:
 
 # ThunderID specific configurations
 configuration:
+  # Operating mode. "full" serves every feature. "restricted" serves sign in, token issuance and
+  # read-only management access, and refuses operations that write data. Use "restricted" only for a
+  # migration window, after the source release is drained and stopped. The Control Plane does not
+  # start in restricted mode.
+  operatingMode: full
   # Server configuration
   server:
     port: 8090

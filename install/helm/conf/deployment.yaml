@@ -48,6 +48,8 @@ server:
     {{- end }}
   {{- end }}
 
+operating_mode: {{ .Values.configuration.operatingMode | default "full" | quote }}
+
 gate_client:
   # hostname/port/scheme default to the server's public URL. Required only when Gate is hosted separately.
   {{- if .Values.configuration.gateClient.hostname }}

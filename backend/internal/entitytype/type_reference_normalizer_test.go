@@ -8,18 +8,25 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	serverconst "github.com/thunder-id/thunderid/internal/system/constants"
 	"github.com/thunder-id/thunderid/internal/system/declarative_resource/entity"
+	"github.com/thunder-id/thunderid/tests/mocks/cachemock"
 )
+
+// newSnapshotCache returns a cache that keeps snapshots in memory for the test.
+func newSnapshotCache(t *testing.T) *cachemock.CacheInterfaceMock[*entityTypeReferenceSnapshot] {
+	snapshotCache := cachemock.NewCacheInterfaceMock[*entityTypeReferenceSnapshot](t)
+	setupCacheMock(snapshotCache, map[string]*entityTypeReferenceSnapshot{})
+	return snapshotCache
+}
 
 // newCompositeTypeReferenceNormalizer builds a normalizer over a real composite store whose database side
 // is a mock, so declarative types are resolved through the same list the product uses.
 func newCompositeTypeReferenceNormalizer(
 	t *testing.T, declarative []EntityType, dbItems []EntityTypeListItem,
-) EntityTypeReferenceNormalizer {
+) EntityTypeReferenceNormalizerInterface {
 	ctx := context.Background()
 
 	require.NoError(t, entity.GetInstance().Clear())
@@ -31,14 +38,10 @@ func newCompositeTypeReferenceNormalizer(
 	}
 
 	dbStore := newEntityTypeStoreInterfaceMock(t)
-	dbStore.On("GetEntityTypeByHandle", ctx, TypeCategoryUser, "Customer").
-		Return(EntityType{}, ErrEntityTypeNotFound).Maybe()
-	dbStore.On("GetEntityTypeByHandle", ctx, TypeCategoryUser, "customer").
-		Return(EntityType{}, ErrEntityTypeNotFound).Maybe()
 	dbStore.On("GetEntityTypeListCount", ctx, TypeCategoryUser).Return(len(dbItems), nil).Maybe()
 	dbStore.On("GetEntityTypeList", ctx, TypeCategoryUser, len(dbItems), 0).Return(dbItems, nil).Maybe()
 
-	return newEntityTypeReferenceNormalizer(newCompositeEntityTypeStore(fileStore, dbStore))
+	return newEntityTypeReferenceNormalizer(newCompositeEntityTypeStore(fileStore, dbStore), newSnapshotCache(t))
 }
 
 func TestNormalizeEntityTypeReferencesResolvesLegacyNameOfDeclarativeType(t *testing.T) {
@@ -78,11 +81,11 @@ func TestNormalizeEntityTypeReferencesLeavesLegacyNameSharedByDeclarativeAndData
 func TestNormalizeEntityTypeReferencesKeepsHandles(t *testing.T) {
 	storeMock := newEntityTypeStoreInterfaceMock(t)
 	storeMock.
-		On("GetEntityTypeByHandle", context.Background(), TypeCategoryUser, "customer").
-		Return(EntityType{Handle: "customer"}, nil).
+		On("GetEntityTypeList", context.Background(), TypeCategoryUser, serverconst.MaxPageSize, 0).
+		Return([]EntityTypeListItem{{Handle: "customer", DisplayName: "Customer"}}, nil).
 		Once()
 
-	normalizer := newEntityTypeReferenceNormalizer(storeMock)
+	normalizer := newEntityTypeReferenceNormalizer(storeMock, newSnapshotCache(t))
 
 	resolved, err := normalizer.NormalizeEntityTypeReferences(
 		context.Background(), TypeCategoryUser, []string{"customer", "customer"})
@@ -94,10 +97,6 @@ func TestNormalizeEntityTypeReferencesKeepsHandles(t *testing.T) {
 func TestNormalizeEntityTypeReferencesMapsLegacyNamesToHandles(t *testing.T) {
 	storeMock := newEntityTypeStoreInterfaceMock(t)
 	storeMock.
-		On("GetEntityTypeByHandle", context.Background(), TypeCategoryUser, "Customer").
-		Return(EntityType{}, ErrEntityTypeNotFound).
-		Once()
-	storeMock.
 		On("GetEntityTypeList", context.Background(), TypeCategoryUser, serverconst.MaxPageSize, 0).
 		Return([]EntityTypeListItem{
 			{Handle: "customer", DisplayName: "Customer"},
@@ -105,7 +104,7 @@ func TestNormalizeEntityTypeReferencesMapsLegacyNamesToHandles(t *testing.T) {
 		}, nil).
 		Once()
 
-	normalizer := newEntityTypeReferenceNormalizer(storeMock)
+	normalizer := newEntityTypeReferenceNormalizer(storeMock, newSnapshotCache(t))
 
 	resolved, err := normalizer.NormalizeEntityTypeReferences(
 		context.Background(), TypeCategoryUser, []string{"Customer"})
@@ -117,10 +116,6 @@ func TestNormalizeEntityTypeReferencesMapsLegacyNamesToHandles(t *testing.T) {
 func TestNormalizeEntityTypeReferencesLeavesUnknownAndAmbiguousValuesOut(t *testing.T) {
 	storeMock := newEntityTypeStoreInterfaceMock(t)
 	storeMock.
-		On("GetEntityTypeByHandle", context.Background(), TypeCategoryUser, mock.Anything).
-		Return(EntityType{}, ErrEntityTypeNotFound).
-		Twice()
-	storeMock.
 		On("GetEntityTypeList", context.Background(), TypeCategoryUser, serverconst.MaxPageSize, 0).
 		Return([]EntityTypeListItem{
 			{Handle: "retail", DisplayName: "Customer"},
@@ -128,7 +123,7 @@ func TestNormalizeEntityTypeReferencesLeavesUnknownAndAmbiguousValuesOut(t *test
 		}, nil).
 		Once()
 
-	normalizer := newEntityTypeReferenceNormalizer(storeMock)
+	normalizer := newEntityTypeReferenceNormalizer(storeMock, newSnapshotCache(t))
 
 	resolved, err := normalizer.NormalizeEntityTypeReferences(
 		context.Background(), TypeCategoryUser, []string{"Customer", "Missing"})
@@ -140,15 +135,11 @@ func TestNormalizeEntityTypeReferencesLeavesUnknownAndAmbiguousValuesOut(t *test
 func TestNormalizeEntityTypeReferencesIgnoresTypesWithoutHandle(t *testing.T) {
 	storeMock := newEntityTypeStoreInterfaceMock(t)
 	storeMock.
-		On("GetEntityTypeByHandle", context.Background(), TypeCategoryUser, "Partner").
-		Return(EntityType{}, ErrEntityTypeNotFound).
-		Once()
-	storeMock.
 		On("GetEntityTypeList", context.Background(), TypeCategoryUser, serverconst.MaxPageSize, 0).
 		Return([]EntityTypeListItem{{Handle: "", DisplayName: "Partner"}}, nil).
 		Once()
 
-	normalizer := newEntityTypeReferenceNormalizer(storeMock)
+	normalizer := newEntityTypeReferenceNormalizer(storeMock, newSnapshotCache(t))
 
 	resolved, err := normalizer.NormalizeEntityTypeReferences(
 		context.Background(), TypeCategoryUser, []string{"Partner"})
@@ -157,34 +148,14 @@ func TestNormalizeEntityTypeReferencesIgnoresTypesWithoutHandle(t *testing.T) {
 	require.Empty(t, resolved)
 }
 
-func TestNormalizeEntityTypeReferencesReturnsErrorOnLookupFailure(t *testing.T) {
-	storeMock := newEntityTypeStoreInterfaceMock(t)
-	storeMock.
-		On("GetEntityTypeByHandle", context.Background(), TypeCategoryUser, "customer").
-		Return(EntityType{}, errors.New("db failure")).
-		Once()
-
-	normalizer := newEntityTypeReferenceNormalizer(storeMock)
-
-	resolved, err := normalizer.NormalizeEntityTypeReferences(
-		context.Background(), TypeCategoryUser, []string{"customer"})
-
-	require.Error(t, err)
-	require.Nil(t, resolved)
-}
-
 func TestNormalizeEntityTypeReferencesReturnsErrorOnListFailure(t *testing.T) {
 	storeMock := newEntityTypeStoreInterfaceMock(t)
-	storeMock.
-		On("GetEntityTypeByHandle", context.Background(), TypeCategoryUser, "Customer").
-		Return(EntityType{}, ErrEntityTypeNotFound).
-		Once()
 	storeMock.
 		On("GetEntityTypeList", context.Background(), TypeCategoryUser, serverconst.MaxPageSize, 0).
 		Return(nil, errors.New("db failure")).
 		Once()
 
-	normalizer := newEntityTypeReferenceNormalizer(storeMock)
+	normalizer := newEntityTypeReferenceNormalizer(storeMock, newSnapshotCache(t))
 
 	resolved, err := normalizer.NormalizeEntityTypeReferences(
 		context.Background(), TypeCategoryUser, []string{"Customer"})
@@ -194,10 +165,76 @@ func TestNormalizeEntityTypeReferencesReturnsErrorOnListFailure(t *testing.T) {
 }
 
 func TestNormalizeEntityTypeReferencesRejectsInvalidCategory(t *testing.T) {
-	normalizer := newEntityTypeReferenceNormalizer(newEntityTypeStoreInterfaceMock(t))
+	normalizer := newEntityTypeReferenceNormalizer(newEntityTypeStoreInterfaceMock(t), newSnapshotCache(t))
 
 	resolved, err := normalizer.NormalizeEntityTypeReferences(context.Background(), TypeCategory("app"), []string{"x"})
 
 	require.Error(t, err)
 	require.Nil(t, resolved)
+}
+
+// The snapshot is cached, so repeated calls, including ones for values that match no type, read the store
+// once.
+func TestNormalizeEntityTypeReferencesReadsTheStoreOncePerCategory(t *testing.T) {
+	storeMock := newEntityTypeStoreInterfaceMock(t)
+	storeMock.
+		On("GetEntityTypeList", context.Background(), TypeCategoryUser, serverconst.MaxPageSize, 0).
+		Return([]EntityTypeListItem{{Handle: "customer", DisplayName: "Customer"}}, nil).
+		Once()
+
+	normalizer := newEntityTypeReferenceNormalizer(storeMock, newSnapshotCache(t))
+
+	for i := 0; i < 3; i++ {
+		resolved, err := normalizer.NormalizeEntityTypeReferences(
+			context.Background(), TypeCategoryUser, []string{"Customer", "Missing"})
+		require.NoError(t, err)
+		require.Equal(t, map[string]string{"Customer": "customer"}, resolved)
+	}
+}
+
+func TestNormalizeEntityTypeReferencesWithoutValuesSkipsTheStore(t *testing.T) {
+	normalizer := newEntityTypeReferenceNormalizer(newEntityTypeStoreInterfaceMock(t), newSnapshotCache(t))
+
+	resolved, err := normalizer.NormalizeEntityTypeReferences(context.Background(), TypeCategoryUser, nil)
+
+	require.NoError(t, err)
+	require.Empty(t, resolved)
+}
+
+func TestReplaceWithHandles(t *testing.T) {
+	require.Nil(t, ReplaceWithHandles(nil, map[string]string{"a": "b"}))
+	require.Equal(t, []string{"x", "customer", "y"},
+		ReplaceWithHandles([]string{"x", "Customer", "customer", "y", "x"}, map[string]string{"Customer": "customer"}))
+	require.Equal(t, []string{"Customer"}, ReplaceWithHandles([]string{"Customer"}, nil))
+}
+
+func TestResolveReferences(t *testing.T) {
+	storeMock := newEntityTypeStoreInterfaceMock(t)
+	storeMock.
+		On("GetEntityTypeList", context.Background(), TypeCategoryUser, serverconst.MaxPageSize, 0).
+		Return([]EntityTypeListItem{{Handle: "customer", DisplayName: "Customer"}}, nil).
+		Once()
+	normalizer := newEntityTypeReferenceNormalizer(storeMock, newSnapshotCache(t))
+
+	handles, err := ResolveReferences(context.Background(), normalizer, TypeCategoryUser, nil)
+	require.NoError(t, err)
+	require.Nil(t, handles)
+
+	handles, err = ResolveReferences(context.Background(), normalizer, TypeCategoryUser, []string{"Customer"})
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{"Customer": "customer"}, handles)
+}
+
+func TestResolveReferencesWrapsNormalizerError(t *testing.T) {
+	storeMock := newEntityTypeStoreInterfaceMock(t)
+	storeMock.
+		On("GetEntityTypeList", context.Background(), TypeCategoryUser, serverconst.MaxPageSize, 0).
+		Return(nil, errors.New("db failure")).
+		Once()
+	normalizer := newEntityTypeReferenceNormalizer(storeMock, newSnapshotCache(t))
+
+	handles, err := ResolveReferences(context.Background(), normalizer, TypeCategoryUser, []string{"Customer"})
+
+	require.ErrorContains(t, err, "failed to normalize entity type references")
+	require.Nil(t, handles)
 }

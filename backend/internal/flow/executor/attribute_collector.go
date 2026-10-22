@@ -19,6 +19,8 @@ const (
 	attrCollectLoggerComponentName = "AttributeCollector"
 )
 
+var errAttributeUpdateRestricted = errors.New("user attribute update is restricted")
+
 // TODO: Need to handle complex attributes and nested structures in the user profile.
 //  Currently executor only takes string inputs.
 
@@ -98,13 +100,13 @@ func (a *attributeCollector) Execute(ctx *providers.NodeContext) (*providers.Exe
 		execResp.Status = providers.ExecUserInputRequired
 		return execResp, nil
 	}
-	if !a.featureGate.IsEnabled(featuregate.UserAttributeUpdate) {
-		execResp.Status = providers.ExecFailure
-		execResp.Error = &ErrUserAttributeUpdateRestricted
-		return execResp, nil
-	}
 
 	if err := a.updateUserInStore(ctx, execResp); err != nil {
+		if errors.Is(err, errAttributeUpdateRestricted) {
+			execResp.Status = providers.ExecFailure
+			execResp.Error = &ErrUserAttributeUpdateRestricted
+			return execResp, nil
+		}
 		logger.Error(ctx.Context, "Failed to update user attributes", log.Error(err))
 		execResp.Status = providers.ExecFailure
 		execResp.Error = &ErrAttributeCollectFailed
@@ -286,6 +288,9 @@ func (a *attributeCollector) updateUserInStore(ctx *providers.NodeContext, execR
 	if updatedUser == nil {
 		return errors.New("failed to create updated user object")
 	}
+	if !a.featureGate.IsEnabled(featuregate.UserAttributeUpdate) {
+		return errAttributeUpdateRestricted
+	}
 
 	if err := a.entityProvider.UpdateAttributes(userID, updatedUser.Attributes); err != nil {
 		return fmt.Errorf("failed to update user attributes: %s", err.Message)
@@ -344,8 +349,16 @@ func (a *attributeCollector) getUpdatedUserObject(ctx *providers.NodeContext,
 	}
 
 	// Merge attributes
+	changed := false
 	for k, v := range newAttrs {
+		if !attributeValueEquals(existingAttrs[k], v) {
+			changed = true
+		}
 		existingAttrs[k] = v
+	}
+	if !changed {
+		logger.Debug(ctx.Context, "Provided attributes match the existing user attributes, returning existing user")
+		return false, userData, nil
 	}
 
 	// Marshal the merged attributes back to JSON
@@ -359,6 +372,19 @@ func (a *attributeCollector) getUpdatedUserObject(ctx *providers.NodeContext,
 	}
 
 	return true, updatedUser, nil
+}
+
+// attributeValueEquals reports whether two attribute values serialize to the same JSON.
+func attributeValueEquals(existing, updated interface{}) bool {
+	existingJSON, err := json.Marshal(existing)
+	if err != nil {
+		return false
+	}
+	updatedJSON, err := json.Marshal(updated)
+	if err != nil {
+		return false
+	}
+	return string(existingJSON) == string(updatedJSON)
 }
 
 // getInputAttributes retrieves the input attributes from the context. Values are converted from the

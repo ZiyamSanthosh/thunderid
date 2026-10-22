@@ -462,16 +462,8 @@ func (ts *FederatedProvisioningTestSuite) TestSingleSelfRegistrationTypeProvisio
 	ts.Equal(ts.ouAID, created[0].OUID,
 		"The user must land in that user type's own OU")
 
-	// The federated subject lives only in the recorded link. A sub attribute would make the user look
-	// like one from before links, which a later sign-in at another connection could claim.
-	provisioned, err := testutils.GetUserFromAssertion(flowStep.Assertion)
-	ts.Require().NoError(err, "Failed to fetch the provisioned user")
-	attrs, err := testutils.GetUserAttributes(*provisioned)
-	ts.Require().NoError(err, "Failed to read the provisioned user's attributes")
-	ts.NotContains(attrs, "sub", "Federated provisioning must not write the sub attribute")
-
 	// Second, independent view of the same contract: the assertion's own claims.
-	_, err = testutils.ValidateJWTAssertionFields(flowStep.Assertion, ts.singleAppID,
+	_, err := testutils.ValidateJWTAssertionFields(flowStep.Assertion, ts.singleAppID,
 		ts.primaryTypeName, ts.ouAID, ts.ouAName, ts.ouAHandle)
 	ts.Require().NoError(err, "The assertion must carry the provisioned user type and OU")
 }

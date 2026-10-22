@@ -59,7 +59,7 @@ type inboundClientStoreInterface interface {
 // store implements inboundClientStoreInterface using the configured config database.
 type store struct {
 	dbProvider           provider.DBProviderInterface
-	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizer
+	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizerInterface
 }
 
 // getDBProvider is a package-level indirection to allow test override.
@@ -67,7 +67,7 @@ var getDBProvider = provider.GetDBProvider
 
 // newStore returns a database-backed inbound client store along with its transactioner.
 func newStore(
-	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizer,
+	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizerInterface,
 ) (inboundClientStoreInterface, providers.Transactioner, error) {
 	dbProvider := getDBProvider()
 	client, err := dbProvider.GetConfigDBClient()

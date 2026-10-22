@@ -41,7 +41,7 @@ func flowRow(nodes string) map[string]interface{} {
 }
 
 func (s *FlowStoreTestSuite) expectResolverNormalization() {
-	normalizer := entitytypemock.NewEntityTypeReferenceNormalizerMock(s.T())
+	normalizer := entitytypemock.NewEntityTypeReferenceNormalizerInterfaceMock(s.T())
 	normalizer.On("NormalizeEntityTypeReferences", mock.Anything, entitytype.TypeCategoryUser,
 		[]string{"Customer", "customer", "Gone"}).
 		Return(map[string]string{"Customer": "customer", "customer": "customer"}, nil).Once()
@@ -98,7 +98,7 @@ func (s *FlowStoreTestSuite) TestGetFlowVersion_NormalizesEntityTypeReferences()
 }
 
 func (s *FlowStoreTestSuite) TestListActiveFlowsWithNodes_NormalizesAllFlowsWithOneLookupPerCategory() {
-	normalizer := entitytypemock.NewEntityTypeReferenceNormalizerMock(s.T())
+	normalizer := entitytypemock.NewEntityTypeReferenceNormalizerInterfaceMock(s.T())
 	normalizer.On("NormalizeEntityTypeReferences", mock.Anything, entitytype.TypeCategoryUser,
 		[]string{"Customer", "Employee"}).
 		Return(map[string]string{"Customer": "customer", "Employee": "employee"}, nil).Once()
@@ -120,7 +120,7 @@ func (s *FlowStoreTestSuite) TestListActiveFlowsWithNodes_NormalizesAllFlowsWith
 }
 
 func (s *FlowStoreTestSuite) TestGetFlowByID_SkipsNormalizerWithoutResolverNodes() {
-	s.store.entityTypeNormalizer = entitytypemock.NewEntityTypeReferenceNormalizerMock(s.T())
+	s.store.entityTypeNormalizer = entitytypemock.NewEntityTypeReferenceNormalizerInterfaceMock(s.T())
 	s.mockDBProvider.EXPECT().GetConfigDBClient().Return(s.mockDBClient, nil)
 	s.mockDBClient.EXPECT().QueryContext(mock.Anything, queryGetFlow, "flow-123", "test-deployment").
 		Return([]map[string]interface{}{flowRow(`[{"id":"START","type":"START"}]`)}, nil).Once()
@@ -132,7 +132,7 @@ func (s *FlowStoreTestSuite) TestGetFlowByID_SkipsNormalizerWithoutResolverNodes
 }
 
 func (s *FlowStoreTestSuite) TestGetFlowByID_ReturnsNormalizerError() {
-	normalizer := entitytypemock.NewEntityTypeReferenceNormalizerMock(s.T())
+	normalizer := entitytypemock.NewEntityTypeReferenceNormalizerInterfaceMock(s.T())
 	normalizer.On("NormalizeEntityTypeReferences", mock.Anything, entitytype.TypeCategoryUser,
 		mock.Anything).Return(nil, errors.New("lookup failed")).Once()
 	s.store.entityTypeNormalizer = normalizer

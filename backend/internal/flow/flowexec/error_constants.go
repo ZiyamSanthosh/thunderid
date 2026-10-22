@@ -294,6 +294,6 @@ var ErrorFlowFeatureDisabled = tidcommon.ServiceError{
 	},
 	ErrorDescription: tidcommon.I18nMessage{
 		Key:          "error.flowexecservice.feature_disabled_description",
-		DefaultValue: "This operation is unavailable while ThunderID is in restricted mode",
+		DefaultValue: "This operation is unavailable while the server is in restricted mode",
 	},
 }

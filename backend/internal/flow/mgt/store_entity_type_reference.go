@@ -1,21 +1,22 @@
 // Copyright 2026 The ThunderID Authors
 // SPDX-License-Identifier: Apache-2.0
 
+// This file is temporary compatibility code for references that still hold entity type names. It is
+// removed together with the entity type reference normalizer in a later release.
+
 package flowmgt
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/thunder-id/thunderid/internal/entitytype"
+	"github.com/thunder-id/thunderid/internal/flow/executormeta"
 	"github.com/thunder-id/thunderid/pkg/thunderidengine/providers"
 )
 
 const (
-	userTypeResolverExecutorName  = "UserTypeResolver"
-	agentTypeResolverExecutorName = "AgentTypeResolver"
-	allowedUserTypesProperty      = "allowedUserTypes"
-	allowedAgentTypesProperty     = "allowedAgentTypes"
+	allowedUserTypesProperty  = "allowedUserTypes"
+	allowedAgentTypesProperty = "allowedAgentTypes"
 )
 
 // normalizeEntityTypeReferences rewrites the allowed user and agent types on the type resolver nodes to
@@ -38,11 +39,11 @@ func (s *flowStore) normalizeEntityTypeReferences(ctx context.Context, flowNodes
 		}
 	}
 
-	userHandles, err := s.normalizeReferences(ctx, entitytype.TypeCategoryUser, userTypes)
+	userHandles, err := entitytype.ResolveReferences(ctx, s.entityTypeNormalizer, entitytype.TypeCategoryUser, userTypes)
 	if err != nil {
 		return err
 	}
-	agentHandles, err := s.normalizeReferences(ctx, entitytype.TypeCategoryAgent, agentTypes)
+	agentHandles, err := entitytype.ResolveReferences(ctx, s.entityTypeNormalizer, entitytype.TypeCategoryAgent, agentTypes)
 	if err != nil {
 		return err
 	}
@@ -60,19 +61,6 @@ func (s *flowStore) normalizeEntityTypeReferences(ctx context.Context, flowNodes
 	return nil
 }
 
-func (s *flowStore) normalizeReferences(
-	ctx context.Context, category entitytype.TypeCategory, stored []string,
-) (map[string]string, error) {
-	if len(stored) == 0 {
-		return nil, nil
-	}
-	handles, err := s.entityTypeNormalizer.NormalizeEntityTypeReferences(ctx, category, stored)
-	if err != nil {
-		return nil, fmt.Errorf("failed to normalize entity type references: %w", err)
-	}
-	return handles, nil
-}
-
 // resolverProperty returns the node property that lists the allowed entity types, or an empty string
 // when the node is not a type resolver.
 func resolverProperty(node providers.NodeDefinition) string {
@@ -80,9 +68,9 @@ func resolverProperty(node providers.NodeDefinition) string {
 		return ""
 	}
 	switch node.Executor.Name {
-	case userTypeResolverExecutorName:
+	case executormeta.ExecutorNameUserTypeResolver:
 		return allowedUserTypesProperty
-	case agentTypeResolverExecutorName:
+	case executormeta.ExecutorNameAgentTypeResolver:
 		return allowedAgentTypesProperty
 	}
 	return ""
@@ -100,27 +88,25 @@ func allowedTypes(node providers.NodeDefinition, property string) []string {
 }
 
 // replaceAllowedTypes swaps each listed type for its handle when one is known and drops the duplicates
-// that result, keeping the original order. Entries that are not strings are left in place.
+// that result, keeping the original order. Entries that are not strings are kept after the types.
 func replaceAllowedTypes(node providers.NodeDefinition, property string, handles map[string]string) {
 	items, ok := node.Properties[property].([]interface{})
 	if !ok || len(items) == 0 {
 		return
 	}
-	replaced := make([]interface{}, 0, len(items))
-	seen := make(map[string]bool, len(items))
+	types := make([]string, 0, len(items))
+	var others []interface{}
 	for _, item := range items {
-		value, isString := item.(string)
-		if !isString {
-			replaced = append(replaced, item)
-			continue
-		}
-		if handle, found := handles[value]; found {
-			value = handle
-		}
-		if !seen[value] {
-			seen[value] = true
-			replaced = append(replaced, value)
+		if value, isString := item.(string); isString {
+			types = append(types, value)
+		} else {
+			others = append(others, item)
 		}
 	}
-	node.Properties[property] = replaced
+
+	replaced := make([]interface{}, 0, len(items))
+	for _, value := range entitytype.ReplaceWithHandles(types, handles) {
+		replaced = append(replaced, value)
+	}
+	node.Properties[property] = append(replaced, others...)
 }

@@ -79,14 +79,14 @@ var getDBProvider = provider.GetDBProvider
 type entityDBStore struct {
 	indexedAttributes    map[string]bool
 	dbProvider           provider.DBProviderInterface
-	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizer
+	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizerInterface
 	logger               *log.Logger
 }
 
 // newEntityDBStore creates a new instance of entityDBStore.
 // Indexed attributes start empty; consumers must call LoadIndexedAttributes after init.
 func newEntityDBStore(
-	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizer,
+	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizerInterface,
 ) (entityStoreInterface, providers.Transactioner, error) {
 	dbProvider := getDBProvider()
 	client, err := dbProvider.GetEntityDBClient()

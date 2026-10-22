@@ -45,6 +45,47 @@ One registered gateway is the default gateway, marked `isDefault` in the Gateway
 
 When `server.public_url` is set, the `gate_client` settings below default to the corresponding hostname, port, and protocol from that URL. Most deployments only need to configure the server section.
 
+## Operating Mode
+
+Controls which features the <ProductName /> server exposes. Use restricted mode only while a migration runs.
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `operating_mode` | `full` | `full` serves every configured feature. `restricted` serves sign-in and token endpoints and read-only management access, and refuses operations that write data. An empty value is treated as `full`. Any other value stops the server from starting. |
+
+For a Helm deployment, set `configuration.operatingMode` in `values.yaml`.
+
+:::warning
+Stop the source release and let its traffic drain before you start a server in restricted mode. Caches are not disabled in restricted mode, so a change made by another release while the server runs can stay hidden until the cache entry expires.
+:::
+
+### Restricted Mode Behavior
+
+In restricted mode, the server serves the following:
+
+- Sign-in flows, <ProductName /> Gate, and the Console.
+- The OAuth and OpenID Connect endpoints for authorization, token issuance, including the OU-qualified token endpoint, token introspection and revocation, user information, JWKS, logout, pushed authorization requests, and backchannel authentication.
+- The discovery documents, the health endpoints, and the wallet-facing OpenID4VP endpoints.
+- Read access (`GET`, `HEAD`, and `OPTIONS`) to these management resources: agent types, agents, applications, connections, flows, gateways, groups, organization units, resource servers, roles, user types, and users.
+
+Every other request returns `503` with the error code `SSE-5030`.
+
+Inside flows, the server refuses the following operations:
+
+| Operation | Behavior in restricted mode |
+|-----------|-----------------------------|
+| Registration and user onboarding flows | Refused |
+| Recovery flows | Refused |
+| Administration flows | Refused |
+| Provisioning an entity, such as a user or an agent, during authentication | Refused |
+| Creating an organization unit in a flow | Refused |
+| Profile attribute updates in a flow | Refused when the update changes the profile. Flows that need no change continue. |
+| Credential updates and passkey enrollment in a flow | Refused |
+| Linking a federated account in a flow | Refused |
+| Recording the passkey sign count | Skipped. Passkey sign-in works. The stored count catches up on the next sign-in after the server returns to `full` mode. |
+
+The Control Plane does not start in restricted mode. It stops at startup with an error when `operating_mode` is `restricted`.
+
 ## Gate Client Configuration
 
 Configures the connection to <ProductName /> Gate (the login UI). Every setting is optional. By default, the `gate_client` settings are derived from `server.public_url`, so you only need to configure this section when Gate is hosted separately from the server.

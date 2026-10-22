@@ -138,12 +138,6 @@ func (p *passkeyAuthExecutor) Execute(ctx *providers.NodeContext) (*providers.Ex
 		RuntimeData:    make(map[string]string),
 		AuthUser:       ctx.AuthUser,
 	}
-	if (ctx.ExecutorMode == passkeyExecutorModeChallenge || ctx.ExecutorMode == passkeyExecutorModeVerify) &&
-		!p.featureGate.IsEnabled(featuregate.PasskeyAuthentication) {
-		execResp.Status = providers.ExecFailure
-		execResp.Error = &ErrPasskeyAuthenticationRestricted
-		return execResp, nil
-	}
 	if (ctx.ExecutorMode == passkeyExecutorModeRegStart || ctx.ExecutorMode == passkeyExecutorModeRegFinish) &&
 		!p.featureGate.IsEnabled(featuregate.CredentialUpdate) {
 		execResp.Status = providers.ExecFailure

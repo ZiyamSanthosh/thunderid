@@ -4,6 +4,7 @@
 package security
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -207,4 +208,23 @@ func TestCompileAPIPermissions(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPathMatcher(t *testing.T) {
+	matcher, err := NewPathMatcher("/ou/*/oauth2/token", "/gate/**")
+	assert.NoError(t, err)
+
+	assert.True(t, matcher.Matches("/ou/child/oauth2/token"))
+	assert.True(t, matcher.Matches("/gate"))
+	assert.True(t, matcher.Matches("/gate/assets/main.js"))
+	assert.False(t, matcher.Matches("/ou/a/b/oauth2/token"))
+	assert.False(t, matcher.Matches("/oauth2/token"))
+	assert.False(t, matcher.Matches("/"+strings.Repeat("a", maxPublicPathLength)))
+}
+
+func TestNewPathMatcher_InvalidPattern(t *testing.T) {
+	matcher, err := NewPathMatcher("/a/**/b")
+	assert.Error(t, err)
+	assert.Nil(t, matcher)
+	assert.Panics(t, func() { MustNewPathMatcher("/a/**/b") })
 }

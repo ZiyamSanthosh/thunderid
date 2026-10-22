@@ -103,7 +103,6 @@ func (suite *ProvisioningExecutorTestSuite) expectSchemaForProvisioning() {
 			{Attribute: "username", Required: false},
 			{Attribute: attributeEmail, Required: false},
 			{Attribute: "sub", Required: false},
-			{Attribute: "employee_id", Required: false},
 		}, nil).Maybe()
 }
 
@@ -188,7 +187,7 @@ func (suite *ProvisioningExecutorTestSuite) TestExecute_NonRegistrationFlow() {
 }
 
 func (suite *ProvisioningExecutorTestSuite) TestExecute_RestrictedModeAllowsAuthenticationWithoutJIT() {
-	suite.executor.featureGate = featuregate.NewGate(featuregate.UserProvisioning)
+	suite.executor.featureGate = featuregate.NewGate(featuregate.EntityProvisioning)
 	ctx := &providers.NodeContext{
 		ExecutionID: "flow-123",
 		FlowType:    providers.FlowTypeAuthentication,
@@ -201,7 +200,7 @@ func (suite *ProvisioningExecutorTestSuite) TestExecute_RestrictedModeAllowsAuth
 }
 
 func (suite *ProvisioningExecutorTestSuite) TestExecute_RestrictedModeRejectsJITBeforeMutation() {
-	suite.executor.featureGate = featuregate.NewGate(featuregate.UserProvisioning)
+	suite.executor.featureGate = featuregate.NewGate(featuregate.EntityProvisioning)
 	ctx := &providers.NodeContext{
 		ExecutionID: "flow-123",
 		FlowType:    providers.FlowTypeAuthentication,
@@ -216,6 +215,22 @@ func (suite *ProvisioningExecutorTestSuite) TestExecute_RestrictedModeRejectsJIT
 	assert.Equal(suite.T(), providers.ExecFailure, resp.Status)
 	assert.Equal(suite.T(), ErrJITProvisionRestricted.Code, resp.Error.Code)
 	suite.mockUserMgtProvider.AssertNotCalled(suite.T(), "CreateUser", mock.Anything, mock.Anything)
+}
+
+func (suite *ProvisioningExecutorTestSuite) TestExecute_RestrictedModeRejectsAgentProvisioningInAuthentication() {
+	suite.executor.featureGate = featuregate.NewGate(featuregate.EntityProvisioning)
+	ctx := &providers.NodeContext{
+		ExecutionID:    "flow-123",
+		FlowType:       providers.FlowTypeAuthentication,
+		NodeProperties: map[string]interface{}{propertyKeyProvisioningMode: "agent"},
+	}
+
+	resp, err := suite.executor.Execute(ctx)
+
+	assert.NoError(suite.T(), err)
+	assert.Equal(suite.T(), providers.ExecFailure, resp.Status)
+	assert.Equal(suite.T(), ErrJITProvisionRestricted.Code, resp.Error.Code)
+	suite.mockAgentMgtProvider.AssertNotCalled(suite.T(), "CreateAgent", mock.Anything, mock.Anything)
 }
 
 func (suite *ProvisioningExecutorTestSuite) TestExecute_Success() {
@@ -557,47 +572,6 @@ func (suite *ProvisioningExecutorTestSuite) TestGetAttributesForProvisioning_Ext
 	assert.NoError(suite.T(), err)
 	assert.Equal(suite.T(), "claimed", identifying["username"])
 	assert.Empty(suite.T(), credentials)
-}
-
-// A federated sign-in claims a user holding a matching sub, so a client cannot set sub through flow
-// inputs or runtime data. A verified credential's subject, which OpenID4VP sets as a claim, still fills it.
-func (suite *ProvisioningExecutorTestSuite) TestGetAttributesForProvisioning_SubOnlyFromExternalClaim() {
-	schema := []model.AttributeInfo{
-		{Attribute: "username", Type: model.TypeString, Required: true},
-		{Attribute: "sub", Type: model.TypeString},
-	}
-	filter := model.AttributeFilter{AllowCredential: true, AllowNonCredential: true}
-
-	suite.Run("client supplied", func() {
-		suite.mockEntityTypeService.On("GetAttributes", mock.Anything, mock.Anything, testUserType, filter).
-			Return(schema, nil).Once()
-		ctx := &providers.NodeContext{
-			UserInputs:  map[string]string{"username": "u1", "sub": "victim-sub"},
-			RuntimeData: map[string]string{categoryTypeKey: testUserType, "sub": "victim-sub"},
-		}
-
-		identifying, _, err := suite.executor.getAttributesForProvisioning(ctx, entitytype.TypeCategoryUser)
-		suite.NoError(err)
-		suite.Equal("u1", identifying["username"])
-		suite.NotContains(identifying, "sub")
-	})
-
-	suite.Run("external claim", func() {
-		suite.mockEntityTypeService.On("GetAttributes", mock.Anything, mock.Anything, testUserType, filter).
-			Return(schema, nil).Once()
-		ctx := &providers.NodeContext{
-			UserInputs: map[string]string{"username": "u1", "sub": "client-sub"},
-			RuntimeData: map[string]string{
-				categoryTypeKey: testUserType,
-				common.RuntimeKeyExternalIdentity: externalIdentityEntry("", "",
-					map[string]interface{}{"sub": "did:example:holder"}),
-			},
-		}
-
-		identifying, _, err := suite.executor.getAttributesForProvisioning(ctx, entitytype.TypeCategoryUser)
-		suite.NoError(err)
-		suite.Equal("did:example:holder", identifying["sub"])
-	})
 }
 
 // A claim never stands in for a credential, so a password the flow has not collected is still prompted
@@ -2686,7 +2660,7 @@ func (suite *ProvisioningExecutorTestSuite) TestExecute_Success_WithMultipleGrou
 
 func (suite *ProvisioningExecutorTestSuite) TestExecute_CrossOU_Success() {
 	suite.expectSchemaForProvisioning()
-	attrs := map[string]interface{}{"employee_id": "user-sub-123"}
+	attrs := map[string]interface{}{"sub": "user-sub-123"}
 	attrsJSON, _ := json.Marshal(attrs)
 
 	existingUserID := testExistingUserID
@@ -2706,7 +2680,7 @@ func (suite *ProvisioningExecutorTestSuite) TestExecute_CrossOU_Success() {
 		ExecutionID: "flow-123",
 		FlowType:    providers.FlowTypeRegistration,
 		UserInputs: map[string]string{
-			"employee_id": "user-sub-123",
+			"sub": "user-sub-123",
 		},
 		RuntimeData: map[string]string{
 			ouIDKey:         testOUID,
@@ -2733,7 +2707,7 @@ func (suite *ProvisioningExecutorTestSuite) TestExecute_CrossOU_Success() {
 
 func (suite *ProvisioningExecutorTestSuite) TestExecute_CrossOU_NotEnabled_Fails() {
 	suite.expectSchemaForProvisioning()
-	attrs := map[string]interface{}{"employee_id": "user-sub-123"}
+	attrs := map[string]interface{}{"sub": "user-sub-123"}
 
 	existingUserID := testExistingUserID
 
@@ -2741,7 +2715,7 @@ func (suite *ProvisioningExecutorTestSuite) TestExecute_CrossOU_NotEnabled_Fails
 		ExecutionID: "flow-123",
 		FlowType:    providers.FlowTypeRegistration,
 		UserInputs: map[string]string{
-			"employee_id": "user-sub-123",
+			"sub": "user-sub-123",
 		},
 		RuntimeData: map[string]string{
 			ouIDKey:         testOUID,
@@ -2761,7 +2735,7 @@ func (suite *ProvisioningExecutorTestSuite) TestExecute_CrossOU_NotEnabled_Fails
 
 func (suite *ProvisioningExecutorTestSuite) TestExecute_CrossOU_SameOU_Fails() {
 	suite.expectSchemaForProvisioning()
-	attrs := map[string]interface{}{"employee_id": "user-sub-123"}
+	attrs := map[string]interface{}{"sub": "user-sub-123"}
 
 	existingUserID := testExistingUserID
 	existingUser := &providers.Entity{
@@ -2773,7 +2747,7 @@ func (suite *ProvisioningExecutorTestSuite) TestExecute_CrossOU_SameOU_Fails() {
 		ExecutionID: "flow-123",
 		FlowType:    providers.FlowTypeRegistration,
 		UserInputs: map[string]string{
-			"employee_id": "user-sub-123",
+			"sub": "user-sub-123",
 		},
 		RuntimeData: map[string]string{
 			ouIDKey:         testOUID,
@@ -2796,7 +2770,7 @@ func (suite *ProvisioningExecutorTestSuite) TestExecute_CrossOU_SameOU_Fails() {
 
 func (suite *ProvisioningExecutorTestSuite) TestExecute_CrossOU_NoTargetOU_Fails() {
 	suite.expectSchemaForProvisioning()
-	attrs := map[string]interface{}{"employee_id": "user-sub-123"}
+	attrs := map[string]interface{}{"sub": "user-sub-123"}
 
 	existingUserID := testExistingUserID
 
@@ -2804,7 +2778,7 @@ func (suite *ProvisioningExecutorTestSuite) TestExecute_CrossOU_NoTargetOU_Fails
 		ExecutionID: "flow-123",
 		FlowType:    providers.FlowTypeRegistration,
 		UserInputs: map[string]string{
-			"employee_id": "user-sub-123",
+			"sub": "user-sub-123",
 		},
 		RuntimeData: map[string]string{
 			categoryTypeKey: testUserType,
@@ -2883,7 +2857,7 @@ func (suite *ProvisioningExecutorTestSuite) TestExecute_RetryableProvisioningErr
 
 func (suite *ProvisioningExecutorTestSuite) TestExecute_CrossOU_NotEnabled_AuthnFlow_ReturnsFailure() {
 	suite.expectSchemaForProvisioning()
-	attrs := map[string]interface{}{"employee_id": "user-sub-123"}
+	attrs := map[string]interface{}{"sub": "user-sub-123"}
 
 	existingUserID := testExistingUserID
 
@@ -2891,7 +2865,7 @@ func (suite *ProvisioningExecutorTestSuite) TestExecute_CrossOU_NotEnabled_Authn
 		ExecutionID: "flow-123",
 		FlowType:    providers.FlowTypeAuthentication,
 		UserInputs: map[string]string{
-			"employee_id": "user-sub-123",
+			"sub": "user-sub-123",
 		},
 		RuntimeData: map[string]string{
 			ouIDKey:         testOUID,
@@ -2914,18 +2888,18 @@ func (suite *ProvisioningExecutorTestSuite) TestExecute_CrossOU_NotEnabled_Authn
 
 func (suite *ProvisioningExecutorTestSuite) TestExecute_CrossOU_NotEnabled_RegistrationFlow_PopulatesInputs() {
 	suite.expectSchemaForProvisioning()
-	attrs := map[string]interface{}{"employee_id": "user-sub-123"}
+	attrs := map[string]interface{}{"sub": "user-sub-123"}
 
 	existingUserID := testExistingUserID
 
 	nodeInputs := []providers.Input{
-		{Identifier: "employee_id", Type: "string", Required: true},
+		{Identifier: "sub", Type: "string", Required: true},
 	}
 	ctx := &providers.NodeContext{
 		ExecutionID: "flow-123",
 		FlowType:    providers.FlowTypeRegistration,
 		UserInputs: map[string]string{
-			"employee_id": "user-sub-123",
+			"sub": "user-sub-123",
 		},
 		NodeInputs: nodeInputs,
 		RuntimeData: map[string]string{
@@ -2956,7 +2930,7 @@ func (suite *ProvisioningExecutorTestSuite) TestExecute_CrossOU_NotEnabled_Regis
 
 func (suite *ProvisioningExecutorTestSuite) TestExecute_CrossOU_SameOU_AuthnFlow_ReturnsFailure() {
 	suite.expectSchemaForProvisioning()
-	attrs := map[string]interface{}{"employee_id": "user-sub-123"}
+	attrs := map[string]interface{}{"sub": "user-sub-123"}
 
 	existingUserID := testExistingUserID
 	existingUser := &providers.Entity{
@@ -2968,7 +2942,7 @@ func (suite *ProvisioningExecutorTestSuite) TestExecute_CrossOU_SameOU_AuthnFlow
 		ExecutionID: "flow-123",
 		FlowType:    providers.FlowTypeAuthentication,
 		UserInputs: map[string]string{
-			"employee_id": "user-sub-123",
+			"sub": "user-sub-123",
 		},
 		RuntimeData: map[string]string{
 			ouIDKey:         testOUID,
@@ -2994,7 +2968,7 @@ func (suite *ProvisioningExecutorTestSuite) TestExecute_CrossOU_SameOU_AuthnFlow
 
 func (suite *ProvisioningExecutorTestSuite) TestExecute_CrossOU_SameOU_RegistrationFlow_PopulatesInputs() {
 	suite.expectSchemaForProvisioning()
-	attrs := map[string]interface{}{"employee_id": "user-sub-123"}
+	attrs := map[string]interface{}{"sub": "user-sub-123"}
 
 	existingUserID := testExistingUserID
 	existingUser := &providers.Entity{
@@ -3003,13 +2977,13 @@ func (suite *ProvisioningExecutorTestSuite) TestExecute_CrossOU_SameOU_Registrat
 	}
 
 	nodeInputs := []providers.Input{
-		{Identifier: "employee_id", Type: "string", Required: true},
+		{Identifier: "sub", Type: "string", Required: true},
 	}
 	ctx := &providers.NodeContext{
 		ExecutionID: "flow-123",
 		FlowType:    providers.FlowTypeRegistration,
 		UserInputs: map[string]string{
-			"employee_id": "user-sub-123",
+			"sub": "user-sub-123",
 		},
 		NodeInputs: nodeInputs,
 		RuntimeData: map[string]string{
@@ -3043,7 +3017,7 @@ func (suite *ProvisioningExecutorTestSuite) TestExecute_CrossOU_SameOU_Registrat
 
 func (suite *ProvisioningExecutorTestSuite) TestExecute_CrossOU_GetUserError() {
 	suite.expectSchemaForProvisioning()
-	attrs := map[string]interface{}{"employee_id": "user-sub-123"}
+	attrs := map[string]interface{}{"sub": "user-sub-123"}
 
 	existingUserID := testExistingUserID
 
@@ -3051,7 +3025,7 @@ func (suite *ProvisioningExecutorTestSuite) TestExecute_CrossOU_GetUserError() {
 		ExecutionID: "flow-123",
 		FlowType:    providers.FlowTypeRegistration,
 		UserInputs: map[string]string{
-			"employee_id": "user-sub-123",
+			"sub": "user-sub-123",
 		},
 		RuntimeData: map[string]string{
 			ouIDKey:         testOUID,
@@ -4491,7 +4465,7 @@ func (suite *ProvisioningExecutorTestSuite) TestHasRequiredInputs_NoProperties_D
 // Ambiguous user (exists in multiple OUs) + cross-OU allowed + no match in target OU → create.
 func (suite *ProvisioningExecutorTestSuite) TestExecute_CrossOU_AmbiguousUser_NoMatchInTargetOU_Creates() {
 	suite.expectSchemaForProvisioning()
-	attrs := map[string]interface{}{"employee_id": "user-sub-123"}
+	attrs := map[string]interface{}{"sub": "user-sub-123"}
 	attrsJSON, _ := json.Marshal(attrs)
 
 	createdUser := &providers.User{
@@ -4504,7 +4478,7 @@ func (suite *ProvisioningExecutorTestSuite) TestExecute_CrossOU_AmbiguousUser_No
 	ctx := &providers.NodeContext{
 		ExecutionID: "flow-123",
 		FlowType:    providers.FlowTypeRegistration,
-		UserInputs:  map[string]string{"employee_id": "user-sub-123"},
+		UserInputs:  map[string]string{"sub": "user-sub-123"},
 		RuntimeData: map[string]string{
 			ouIDKey:         testOUID,
 			categoryTypeKey: testUserType,
@@ -4536,12 +4510,12 @@ func (suite *ProvisioningExecutorTestSuite) TestExecute_CrossOU_AmbiguousUser_No
 // Ambiguous user + cross-OU allowed + match found in target OU → fail "already exists in target".
 func (suite *ProvisioningExecutorTestSuite) TestExecute_CrossOU_AmbiguousUser_MatchInTargetOU_Fails() {
 	suite.expectSchemaForProvisioning()
-	attrs := map[string]interface{}{"employee_id": "user-sub-123"}
+	attrs := map[string]interface{}{"sub": "user-sub-123"}
 
 	ctx := &providers.NodeContext{
 		ExecutionID: "flow-123",
 		FlowType:    providers.FlowTypeRegistration,
-		UserInputs:  map[string]string{"employee_id": "user-sub-123"},
+		UserInputs:  map[string]string{"sub": "user-sub-123"},
 		RuntimeData: map[string]string{
 			ouIDKey:         testOUID,
 			categoryTypeKey: testUserType,
@@ -4571,12 +4545,12 @@ func (suite *ProvisioningExecutorTestSuite) TestExecute_CrossOU_AmbiguousUser_Ma
 // Ambiguous user + cross-OU NOT allowed → fail immediately without searching.
 func (suite *ProvisioningExecutorTestSuite) TestExecute_CrossOU_AmbiguousUser_CrossOUNotAllowed_Fails() {
 	suite.expectSchemaForProvisioning()
-	attrs := map[string]interface{}{"employee_id": "user-sub-123"}
+	attrs := map[string]interface{}{"sub": "user-sub-123"}
 
 	ctx := &providers.NodeContext{
 		ExecutionID: "flow-123",
 		FlowType:    providers.FlowTypeRegistration,
-		UserInputs:  map[string]string{"employee_id": "user-sub-123"},
+		UserInputs:  map[string]string{"sub": "user-sub-123"},
 		RuntimeData: map[string]string{
 			ouIDKey:         testOUID,
 			categoryTypeKey: testUserType,
@@ -4598,12 +4572,12 @@ func (suite *ProvisioningExecutorTestSuite) TestExecute_CrossOU_AmbiguousUser_Cr
 // Ambiguous user + cross-OU allowed + SearchEntities returns error
 func (suite *ProvisioningExecutorTestSuite) TestExecute_CrossOU_AmbiguousUser_SearchError_ReturnsServerError() {
 	suite.expectSchemaForProvisioning()
-	attrs := map[string]interface{}{"employee_id": "user-sub-123"}
+	attrs := map[string]interface{}{"sub": "user-sub-123"}
 
 	ctx := &providers.NodeContext{
 		ExecutionID: "flow-123",
 		FlowType:    providers.FlowTypeRegistration,
-		UserInputs:  map[string]string{"employee_id": "user-sub-123"},
+		UserInputs:  map[string]string{"sub": "user-sub-123"},
 		RuntimeData: map[string]string{
 			ouIDKey:         testOUID,
 			categoryTypeKey: testUserType,
@@ -4627,12 +4601,12 @@ func (suite *ProvisioningExecutorTestSuite) TestExecute_CrossOU_AmbiguousUser_Se
 // Non-ambiguous system error + cross-OU allowed → fail immediately, no search attempted.
 func (suite *ProvisioningExecutorTestSuite) TestExecute_CrossOU_SystemError_NoSearchAttempted() {
 	suite.expectSchemaForProvisioning()
-	attrs := map[string]interface{}{"employee_id": "user-sub-123"}
+	attrs := map[string]interface{}{"sub": "user-sub-123"}
 
 	ctx := &providers.NodeContext{
 		ExecutionID: "flow-123",
 		FlowType:    providers.FlowTypeRegistration,
-		UserInputs:  map[string]string{"employee_id": "user-sub-123"},
+		UserInputs:  map[string]string{"sub": "user-sub-123"},
 		RuntimeData: map[string]string{
 			ouIDKey:         testOUID,
 			categoryTypeKey: testUserType,

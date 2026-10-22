@@ -59,7 +59,7 @@ type flowStoreInterface interface {
 type flowStore struct {
 	dbProvider           provider.DBProviderInterface
 	maxVersionHistory    int
-	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizer
+	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizerInterface
 	logger               *log.Logger
 }
 
@@ -72,7 +72,7 @@ func (s *flowStore) scope(ctx context.Context) string {
 
 // newFlowStore creates a new instance of flowStore.
 func newFlowStore(
-	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizer,
+	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizerInterface,
 ) (flowStoreInterface, providers.Transactioner, error) {
 	dbProvider := getDBProvider()
 	transactioner, err := dbProvider.GetConfigDBTransactioner()

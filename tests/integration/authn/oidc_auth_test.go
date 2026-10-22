@@ -103,6 +103,7 @@ func (suite *OIDCAuthTestSuite) SetupSuite() {
 	userAttributes := map[string]interface{}{
 		"username":   "oidcuser",
 		"password":   "Test@1234",
+		"sub":        "user456",
 		"email":      "testuser@oidc.com",
 		"givenName":  "OIDC",
 		"familyName": "User",

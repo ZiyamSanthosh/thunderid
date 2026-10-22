@@ -17,7 +17,7 @@ import (
 )
 
 func TestNormalizeEntityTypeReferencesConvertsLegacyNamesToHandles(t *testing.T) {
-	normalizer := entitytypemock.NewEntityTypeReferenceNormalizerMock(t)
+	normalizer := entitytypemock.NewEntityTypeReferenceNormalizerInterfaceMock(t)
 	normalizer.
 		On("NormalizeEntityTypeReferences", mock.Anything, entitytype.TypeCategoryUser,
 			[]string{"Customer", "customer"}).
@@ -36,7 +36,7 @@ func TestNormalizeEntityTypeReferencesConvertsLegacyNamesToHandles(t *testing.T)
 }
 
 func TestNormalizeEntityTypeReferencesLeavesUnresolvedTypesUnchanged(t *testing.T) {
-	normalizer := entitytypemock.NewEntityTypeReferenceNormalizerMock(t)
+	normalizer := entitytypemock.NewEntityTypeReferenceNormalizerInterfaceMock(t)
 	normalizer.
 		On("NormalizeEntityTypeReferences", mock.Anything, entitytype.TypeCategoryUser, []string{"Gone"}).
 		Return(map[string]string{}, nil).
@@ -50,7 +50,7 @@ func TestNormalizeEntityTypeReferencesLeavesUnresolvedTypesUnchanged(t *testing.
 }
 
 func TestNormalizeEntityTypeReferencesResolvesEachCategorySeparately(t *testing.T) {
-	normalizer := entitytypemock.NewEntityTypeReferenceNormalizerMock(t)
+	normalizer := entitytypemock.NewEntityTypeReferenceNormalizerInterfaceMock(t)
 	normalizer.
 		On("NormalizeEntityTypeReferences", mock.Anything, entitytype.TypeCategoryUser, []string{"Default"}).
 		Return(map[string]string{"Default": "user-default"}, nil).
@@ -72,7 +72,7 @@ func TestNormalizeEntityTypeReferencesResolvesEachCategorySeparately(t *testing.
 }
 
 func TestNormalizeEntityTypeReferencesSkipsCategoriesWithoutEntityTypes(t *testing.T) {
-	store := &entityDBStore{entityTypeNormalizer: entitytypemock.NewEntityTypeReferenceNormalizerMock(t)}
+	store := &entityDBStore{entityTypeNormalizer: entitytypemock.NewEntityTypeReferenceNormalizerInterfaceMock(t)}
 
 	entities := []providers.Entity{{ID: "1", Category: providers.EntityCategoryApp, Type: "Web"}}
 
@@ -90,7 +90,7 @@ func TestNormalizeEntityTypeReferencesWithoutNormalizerIsNoop(t *testing.T) {
 }
 
 func TestNormalizeEntityTypeReferencesReturnsNormalizerError(t *testing.T) {
-	normalizer := entitytypemock.NewEntityTypeReferenceNormalizerMock(t)
+	normalizer := entitytypemock.NewEntityTypeReferenceNormalizerInterfaceMock(t)
 	normalizer.
 		On("NormalizeEntityTypeReferences", mock.Anything, entitytype.TypeCategoryUser, []string{"Customer"}).
 		Return(nil, errors.New("lookup failed")).

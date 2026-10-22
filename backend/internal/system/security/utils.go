@@ -52,6 +52,45 @@ func compilePathPattern(pattern string) (*regexp.Regexp, error) {
 	return re, nil
 }
 
+// PathMatcher matches request paths against glob-style path patterns, using the same syntax as the
+// public path patterns of the security middleware.
+type PathMatcher struct {
+	patterns []*regexp.Regexp
+}
+
+// NewPathMatcher compiles the given glob-style path patterns into a PathMatcher.
+// It returns an error if any pattern is invalid.
+func NewPathMatcher(patterns ...string) (*PathMatcher, error) {
+	compiled, err := compilePathPatterns(patterns)
+	if err != nil {
+		return nil, err
+	}
+	return &PathMatcher{patterns: compiled}, nil
+}
+
+// MustNewPathMatcher is like NewPathMatcher but panics if any pattern is invalid. It is intended for
+// patterns that are fixed at compile time.
+func MustNewPathMatcher(patterns ...string) *PathMatcher {
+	matcher, err := NewPathMatcher(patterns...)
+	if err != nil {
+		panic(err)
+	}
+	return matcher
+}
+
+// Matches reports whether the path matches any of the matcher's patterns.
+func (m *PathMatcher) Matches(path string) bool {
+	if len(path) > maxPublicPathLength {
+		return false
+	}
+	for _, re := range m.patterns {
+		if re.MatchString(path) {
+			return true
+		}
+	}
+	return false
+}
+
 // compilePathPatterns compiles a slice of glob-style path patterns into regular expressions.
 // It returns an error if any pattern is invalid.
 func compilePathPatterns(patterns []string) ([]*regexp.Regexp, error) {

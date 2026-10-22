@@ -47,7 +47,7 @@ func (s *IDPStoreTestSuite) assertNormalized(configuration *providers.AttributeC
 }
 
 func (s *IDPStoreTestSuite) expectLegacyNormalization() {
-	normalizer := entitytypemock.NewEntityTypeReferenceNormalizerMock(s.T())
+	normalizer := entitytypemock.NewEntityTypeReferenceNormalizerInterfaceMock(s.T())
 	normalizer.On("NormalizeEntityTypeReferences", mock.Anything, entitytype.TypeCategoryUser, mock.Anything).
 		Return(map[string]string{"Customer": "customer", "Employee": "employee"}, nil).Once()
 	s.store.entityTypeNormalizer = normalizer
@@ -80,7 +80,7 @@ func (s *IDPStoreTestSuite) TestGetIdentityProviderByName_NormalizesEntityTypeRe
 }
 
 func (s *IDPStoreTestSuite) TestGetIdentityProvidersByProperty_NormalizesAllProvidersWithOneLookup() {
-	normalizer := entitytypemock.NewEntityTypeReferenceNormalizerMock(s.T())
+	normalizer := entitytypemock.NewEntityTypeReferenceNormalizerInterfaceMock(s.T())
 	normalizer.On("NormalizeEntityTypeReferences", mock.Anything, entitytype.TypeCategoryUser, mock.Anything).
 		Return(map[string]string{"Customer": "customer", "Employee": "employee"}, nil).Once()
 	s.store.entityTypeNormalizer = normalizer
@@ -101,7 +101,7 @@ func (s *IDPStoreTestSuite) TestGetIdentityProvidersByProperty_NormalizesAllProv
 }
 
 func (s *IDPStoreTestSuite) TestGetIdentityProvider_SkipsNormalizerWithoutUserTypes() {
-	s.store.entityTypeNormalizer = entitytypemock.NewEntityTypeReferenceNormalizerMock(s.T())
+	s.store.entityTypeNormalizer = entitytypemock.NewEntityTypeReferenceNormalizerInterfaceMock(s.T())
 	s.mockDBProvider.On("GetConfigDBClient").Return(s.mockDBClient, nil)
 	s.mockDBClient.On("QueryContext", context.Background(), queryGetIdentityProviderByID,
 		"idp-1", testDeploymentID).
@@ -114,7 +114,7 @@ func (s *IDPStoreTestSuite) TestGetIdentityProvider_SkipsNormalizerWithoutUserTy
 }
 
 func (s *IDPStoreTestSuite) TestGetIdentityProvider_ReturnsNormalizerError() {
-	normalizer := entitytypemock.NewEntityTypeReferenceNormalizerMock(s.T())
+	normalizer := entitytypemock.NewEntityTypeReferenceNormalizerInterfaceMock(s.T())
 	normalizer.On("NormalizeEntityTypeReferences", mock.Anything, entitytype.TypeCategoryUser, mock.Anything).
 		Return(nil, errors.New("lookup failed")).Once()
 	s.store.entityTypeNormalizer = normalizer

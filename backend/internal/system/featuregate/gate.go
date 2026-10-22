@@ -14,18 +14,18 @@ const (
 	AccountRecovery Feature = "account.recovery"
 	// AdministrativeOperations controls administrative operations.
 	AdministrativeOperations Feature = "administration"
-	// UserProvisioning controls user provisioning during authentication.
-	UserProvisioning Feature = "user.provisioning"
+	// EntityProvisioning controls creating entities, such as users and agents, during authentication.
+	EntityProvisioning Feature = "entity.provisioning"
 	// OrganizationUnitCreation controls organization-unit creation.
 	OrganizationUnitCreation Feature = "organization_unit.creation"
-	// AccountLinking controls recording federated account links and converting legacy subjects.
+	// AccountLinking controls linking federated accounts inside flows.
 	AccountLinking Feature = "account.linking"
 	// UserAttributeUpdate controls profile-attribute updates performed inside flows.
 	UserAttributeUpdate Feature = "user.attribute_update"
 	// CredentialUpdate controls credential-setting and credential-enrollment operations inside flows.
 	CredentialUpdate Feature = "user.credential_update"
-	// PasskeyAuthentication controls passkey authentication, which updates the credential sign counter.
-	PasskeyAuthentication Feature = "authentication.passkey"
+	// PasskeySignCountUpdate controls recording the sign count a passkey authentication reports.
+	PasskeySignCountUpdate Feature = "authentication.passkey_sign_count"
 )
 
 // Gate records the product features currently disabled by the server.

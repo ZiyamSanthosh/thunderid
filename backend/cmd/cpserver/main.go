@@ -209,12 +209,29 @@ func initThunderConfigurations(ctx context.Context, logger *log.Logger, serverHo
 		logger.Fatal(ctx, "Failed to load configurations", log.Error(err))
 	}
 
+	if err := validateOperatingMode(cfg); err != nil {
+		logger.Fatal(ctx, "Unsupported operating mode", log.Error(err))
+	}
+
 	// Initialize runtime configurations.
 	if err := config.InitializeServerRuntime(serverHome, cfg); err != nil {
 		logger.Fatal(ctx, "Failed to initialize server runtime", log.Error(err))
 	}
 
 	return cfg
+}
+
+// validateOperatingMode rejects the restricted operating mode, which the Control Plane does not support.
+//
+// TODO: Decide how the Control Plane should behave in restricted mode. It does not apply the mode's
+// feature gates, and its reads return entity type handles, so a read followed by an update through
+// it would write handles into rows that the source release still reads by name. Until that is
+// settled, the Control Plane is expected to be down while a migration runs.
+func validateOperatingMode(cfg *config.Config) error {
+	if cfg.OperatingMode.IsRestricted() {
+		return fmt.Errorf("the Control Plane does not support the %q operating mode", cfg.OperatingMode)
+	}
+	return nil
 }
 
 // loadCertConfig loads the TLS material via the runtime crypto provider.

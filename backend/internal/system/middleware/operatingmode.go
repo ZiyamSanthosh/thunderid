@@ -4,62 +4,62 @@
 package middleware
 
 import (
-	"encoding/json"
 	"net/http"
-	"strings"
+
+	"github.com/thunder-id/thunderid/internal/system/error/apierror"
+	"github.com/thunder-id/thunderid/internal/system/security"
+	"github.com/thunder-id/thunderid/internal/system/utils"
 )
 
-const (
-	featureUnavailableErrorCode        = "feature_unavailable"
-	featureUnavailableErrorDescription = "The requested feature is unavailable while ThunderID is in restricted mode."
+// restrictedModePaths are the paths served in restricted mode. They use the glob syntax of the security
+// middleware's public paths, where "*" matches one segment and a trailing "/**" matches the base path and
+// everything below it.
+var restrictedModePaths = security.MustNewPathMatcher(
+	"/.well-known/oauth-authorization-server",
+	"/.well-known/openid-configuration",
+	"/console/**",
+	"/design/resolve",
+	"/flow/execute",
+	"/flow/meta",
+	"/gate/**",
+	"/health/**",
+	"/i18n/languages/*/translations/resolve",
+	"/oauth2/auth/callback",
+	"/oauth2/authorize",
+	"/oauth2/bc-authorize",
+	"/oauth2/bc-authorize/callback",
+	"/oauth2/introspect",
+	"/oauth2/jwks",
+	"/oauth2/logout",
+	"/oauth2/logout/callback",
+	"/oauth2/par",
+	"/oauth2/revoke",
+	"/oauth2/token",
+	"/oauth2/userinfo",
+	"/openid4vp/initiate",
+	"/openid4vp/request",
+	"/openid4vp/response",
+	"/openid4vp/status/**",
+	"/ou/*/oauth2/token",
 )
 
-var restrictedModeExactPaths = map[string]struct{}{
-	"/.well-known/oauth-authorization-server": {},
-	"/.well-known/openid-configuration":       {},
-	"/console":                                {},
-	"/design/resolve":                         {},
-	"/flow/execute":                           {},
-	"/flow/meta":                              {},
-	"/gate":                                   {},
-	"/oauth2/auth/callback":                   {},
-	"/oauth2/authorize":                       {},
-	"/oauth2/bc-authorize":                    {},
-	"/oauth2/bc-authorize/callback":           {},
-	"/oauth2/introspect":                      {},
-	"/oauth2/jwks":                            {},
-	"/oauth2/logout":                          {},
-	"/oauth2/logout/callback":                 {},
-	"/oauth2/par":                             {},
-	"/oauth2/revoke":                          {},
-	"/oauth2/token":                           {},
-	"/oauth2/userinfo":                        {},
-}
-
-var restrictedModePathPrefixes = []string{
-	"/console/",
-	"/gate/",
-	"/health/",
-	"/openid4vp/",
-}
-
-// restrictedModeReadOnlyPathPrefixes are the management resources that stay readable in restricted mode,
+// restrictedModeReadOnlyPaths are the management resources that stay readable in restricted mode,
 // so that their data can be inspected while a migration is in progress. Only read methods are allowed on
 // them, and everything else on these paths is still unavailable.
-var restrictedModeReadOnlyPathPrefixes = []string{
-	"/agent-types",
-	"/agents",
-	"/applications",
-	"/connections",
-	"/flows",
-	"/gateways",
-	"/groups",
-	"/organization-units",
-	"/resource-servers",
-	"/roles",
-	"/user-types",
-	"/users",
-}
+var restrictedModeReadOnlyPaths = security.MustNewPathMatcher(
+	"/agent-types/**",
+	"/agents/**",
+	"/applications/**",
+	"/connections/**",
+	"/flows/**",
+	"/gateways/**",
+	"/groups/**",
+	"/organization-units/**",
+	"/resource-servers/**",
+	"/roles/**",
+	"/user-types/**",
+	"/users/**",
+)
 
 // RestrictedModeMiddleware restricts the HTTP surface to the endpoints allowed in restricted mode.
 func RestrictedModeMiddleware(enabled bool) func(http.Handler) http.Handler {
@@ -74,23 +74,13 @@ func RestrictedModeMiddleware(enabled bool) func(http.Handler) http.Handler {
 				return
 			}
 
-			writeFeatureUnavailableError(w)
+			utils.WriteErrorResponse(r.Context(), w, http.StatusServiceUnavailable, apierror.ErrFeatureUnavailable)
 		})
 	}
 }
 
 func isRestrictedModePathAllowed(path string) bool {
-	if _, ok := restrictedModeExactPaths[path]; ok {
-		return true
-	}
-
-	for _, prefix := range restrictedModePathPrefixes {
-		if strings.HasPrefix(path, prefix) {
-			return true
-		}
-	}
-
-	return isTranslationResolvePath(path)
+	return restrictedModePaths.Matches(path)
 }
 
 // isRestrictedModeReadAllowed reports whether the request reads one of the management resources that stay
@@ -102,34 +92,5 @@ func isRestrictedModeReadAllowed(method, path string) bool {
 		return false
 	}
 
-	for _, prefix := range restrictedModeReadOnlyPathPrefixes {
-		if path == prefix || strings.HasPrefix(path, prefix+"/") {
-			return true
-		}
-	}
-
-	return false
-}
-
-func isTranslationResolvePath(path string) bool {
-	const (
-		prefix = "/i18n/languages/"
-		suffix = "/translations/resolve"
-	)
-
-	if !strings.HasPrefix(path, prefix) || !strings.HasSuffix(path, suffix) {
-		return false
-	}
-
-	language := strings.TrimSuffix(strings.TrimPrefix(path, prefix), suffix)
-	return language != "" && !strings.Contains(language, "/")
-}
-
-func writeFeatureUnavailableError(w http.ResponseWriter) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusServiceUnavailable)
-	_ = json.NewEncoder(w).Encode(map[string]string{
-		"error":             featureUnavailableErrorCode,
-		"error_description": featureUnavailableErrorDescription,
-	})
+	return restrictedModeReadOnlyPaths.Matches(path)
 }

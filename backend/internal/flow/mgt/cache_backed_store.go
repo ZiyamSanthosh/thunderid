@@ -28,7 +28,7 @@ type cacheBackedFlowStore struct {
 func newCacheBackedFlowStore(
 	flowByIDCache cache.CacheInterface[*providers.CompleteFlowDefinition],
 	flowByHandleCache cache.CacheInterface[*providers.CompleteFlowDefinition],
-	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizer,
+	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizerInterface,
 ) (flowStoreInterface, providers.Transactioner, error) {
 	store, transactioner, err := newFlowStore(entityTypeNormalizer)
 	if err != nil {

@@ -176,6 +176,7 @@ func (ts *GoogleAuthFlowTestSuite) SetupSuite() {
 	userAttributes := map[string]interface{}{
 		"username":   "googleflowuser",
 		"password":   "Test@1234",
+		"sub":        "google-test-user-123",
 		"email":      "testuser@gmail.com",
 		"givenName":  "Test",
 		"familyName": "User",

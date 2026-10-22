@@ -10,14 +10,12 @@ import (
 	"errors"
 	"fmt"
 	"path"
-	"reflect"
 	"sort"
 	"strings"
 
 	tidcommon "github.com/thunder-id/thunderid/pkg/thunderidengine/common"
 	"github.com/thunder-id/thunderid/pkg/thunderidengine/providers"
 
-	authnprovidercm "github.com/thunder-id/thunderid/internal/authnprovider/common"
 	"github.com/thunder-id/thunderid/internal/entity"
 	"github.com/thunder-id/thunderid/internal/entitytype"
 	oupkg "github.com/thunder-id/thunderid/internal/ou"
@@ -685,11 +683,6 @@ func (us *userService) UpdateUserAttributes(
 		return nil, svcErr
 	}
 
-	attributes, svcErr = keepLegacySubject(existingUser.Attributes, attributes)
-	if svcErr != nil {
-		return nil, svcErr
-	}
-
 	existingUser.Attributes = attributes
 
 	if err := us.entityService.UpdateAttributes(ctx, userID, attributes); err != nil {
@@ -1290,45 +1283,4 @@ func (us *userService) ResolveUserOUHandle(
 		user.OUID = ou.ID
 	}
 	return nil
-}
-
-// keepLegacySubject carries the stored sub over unchanged and rejects a request that changes it.
-// A federated sign-in migrates the user holding a matching sub to a recorded link, so a user who
-// sets their own sub could capture someone else's first sign-in, and the full replace this update
-// performs would otherwise drop the value a legacy user needs to be migrated.
-func keepLegacySubject(stored, requested json.RawMessage) (json.RawMessage, *tidcommon.ServiceError) {
-	var requestedAttrs map[string]json.RawMessage
-	if err := json.Unmarshal(requested, &requestedAttrs); err != nil {
-		return nil, &ErrorInvalidRequestFormat
-	}
-	storedAttrs := map[string]json.RawMessage{}
-	if len(stored) > 0 {
-		if err := json.Unmarshal(stored, &storedAttrs); err != nil {
-			return nil, &tidcommon.InternalServerError
-		}
-	}
-
-	storedSub, hasStored := storedAttrs[authnprovidercm.UserAttributeSub]
-	requestedSub, hasRequested := requestedAttrs[authnprovidercm.UserAttributeSub]
-	switch {
-	case hasRequested && (!hasStored || !sameJSONValue(storedSub, requestedSub)):
-		return nil, &ErrorInvalidRequestFormat
-	case !hasRequested && hasStored:
-		requestedAttrs[authnprovidercm.UserAttributeSub] = storedSub
-		merged, err := json.Marshal(requestedAttrs)
-		if err != nil {
-			return nil, &tidcommon.InternalServerError
-		}
-		return merged, nil
-	}
-	return requested, nil
-}
-
-// sameJSONValue reports whether two JSON documents hold the same value, ignoring formatting.
-func sameJSONValue(a, b json.RawMessage) bool {
-	var av, bv interface{}
-	if json.Unmarshal(a, &av) != nil || json.Unmarshal(b, &bv) != nil {
-		return false
-	}
-	return reflect.DeepEqual(av, bv)
 }

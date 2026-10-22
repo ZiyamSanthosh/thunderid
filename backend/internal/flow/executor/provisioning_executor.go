@@ -185,14 +185,16 @@ func (p *provisioningExecutor) Execute(ctx *providers.NodeContext) (*providers.E
 
 	// Authentication only auto-provisions the categories it can authenticate, and only when it
 	// marked the entity eligible.
-	if ctx.FlowType == providers.FlowTypeAuthentication && traitsFor(category).autoProvisionedAtAuthentication {
-		eligible, ok := ctx.RuntimeData[common.RuntimeKeyUserEligibleForProvisioning]
-		if !ok || eligible != dataValueTrue {
-			logger.Debug(ctx.Context, "Entity is not eligible for auto provisioning, skipping execution")
-			execResp.Status = providers.ExecComplete
-			return execResp, nil
+	if ctx.FlowType == providers.FlowTypeAuthentication {
+		if traitsFor(category).autoProvisionedAtAuthentication {
+			eligible, ok := ctx.RuntimeData[common.RuntimeKeyUserEligibleForProvisioning]
+			if !ok || eligible != dataValueTrue {
+				logger.Debug(ctx.Context, "Entity is not eligible for auto provisioning, skipping execution")
+				execResp.Status = providers.ExecComplete
+				return execResp, nil
+			}
 		}
-		if !p.featureGate.IsEnabled(featuregate.UserProvisioning) {
+		if !p.featureGate.IsEnabled(featuregate.EntityProvisioning) {
 			execResp.Status = providers.ExecFailure
 			execResp.Error = &ErrJITProvisionRestricted
 			return execResp, nil
@@ -883,13 +885,6 @@ func (p *provisioningExecutor) getAttributesForProvisioning(
 				credentialAttrs[a.Attribute] = value
 			} else if runtimeValue, exists := ctx.RuntimeData[a.Attribute]; exists && runtimeValue != "" {
 				credentialAttrs[a.Attribute] = runtimeValue
-			}
-		} else if a.Attribute == userAttributeSub {
-			// sub is read only from a verified external identity. Federated sign-ins migrate a user
-			// holding a matching sub, so a client-supplied value would let an account capture
-			// someone else's first sign-in.
-			if claimValue, exists := extIdentity.Claim(a.Attribute); exists && claimValue != "" {
-				identifyingAttrs[a.Attribute] = convertToSchemaType(claimValue, a.Type)
 			}
 		} else {
 			// External claims are only a fallback and must never take priority over runtime data.

@@ -107,6 +107,7 @@ func (suite *GithubAuthTestSuite) SetupSuite() {
 	userAttributes := map[string]interface{}{
 		"username":   "githubuser",
 		"password":   "Test@1234",
+		"sub":        "12345",
 		"email":      "testuser@github.com",
 		"givenName":  "Test",
 		"familyName": "User",

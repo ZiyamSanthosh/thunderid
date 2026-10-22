@@ -212,22 +212,47 @@ func (suite *AttributeCollectorTestSuite) TestExecute_Success() {
 	suite.mockEntityProvider.AssertExpectations(suite.T())
 }
 
-func (suite *AttributeCollectorTestSuite) TestExecute_RestrictedUpdateFailsBeforeMutation() {
+func (suite *AttributeCollectorTestSuite) restrictedContext(existingAttrs string) *providers.NodeContext {
 	suite.executor.featureGate = featuregate.NewGate(featuregate.UserAttributeUpdate)
-	ctx := &providers.NodeContext{
+	authUser := newAuthenticatedAuthUser()
+	suite.mockAuthnProvider.On("GetUserAttributes", mock.Anything, mock.Anything, mock.Anything,
+		mock.Anything).Return(authUser,
+		(*providers.AttributesResponse)(nil), (*tidcommon.ServiceError)(nil)).Maybe()
+	suite.mockEntityProvider.On("GetEntity", testUserID).Return(&providers.Entity{
+		ID:         testUserID,
+		OUID:       "ou-123",
+		Type:       "INTERNAL",
+		Attributes: json.RawMessage(existingAttrs),
+	}, nil)
+
+	return &providers.NodeContext{
 		ExecutionID: "flow-123",
 		FlowType:    providers.FlowTypeAuthentication,
-		AuthUser:    newAuthenticatedAuthUser(),
+		AuthUser:    authUser,
 		RuntimeData: map[string]string{userAttributeUserID: testUserID},
 		NodeInputs:  []providers.Input{{Identifier: "email", Type: "string", Required: true}},
 		UserInputs:  map[string]string{"email": "test@example.com"},
 	}
+}
+
+func (suite *AttributeCollectorTestSuite) TestExecute_RestrictedUpdateFailsBeforeMutation() {
+	ctx := suite.restrictedContext(`{}`)
 
 	resp, err := suite.executor.Execute(ctx)
 
 	assert.NoError(suite.T(), err)
 	assert.Equal(suite.T(), providers.ExecFailure, resp.Status)
 	assert.Equal(suite.T(), ErrUserAttributeUpdateRestricted.Code, resp.Error.Code)
+	suite.mockEntityProvider.AssertNotCalled(suite.T(), "UpdateAttributes", mock.Anything, mock.Anything)
+}
+
+func (suite *AttributeCollectorTestSuite) TestExecute_RestrictedUnchangedAttributesComplete() {
+	ctx := suite.restrictedContext(`{"email":"test@example.com"}`)
+
+	resp, err := suite.executor.Execute(ctx)
+
+	assert.NoError(suite.T(), err)
+	assert.Equal(suite.T(), providers.ExecComplete, resp.Status)
 	suite.mockEntityProvider.AssertNotCalled(suite.T(), "UpdateAttributes", mock.Anything, mock.Anything)
 }
 

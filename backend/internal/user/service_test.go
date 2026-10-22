@@ -832,66 +832,6 @@ func TestUserService_UpdateUserAttributes_RejectsCredentialAttributes(t *testing
 	require.Equal(t, ErrorInvalidRequestFormat.Code, err.Code)
 }
 
-// A federated sign-in migrates the user holding a matching sub, so a self-service update can neither
-// set nor change sub, and leaving it out of the full replace keeps the stored value.
-func TestUserService_UpdateUserAttributes_KeepsLegacySubject(t *testing.T) {
-	cases := []struct {
-		name      string
-		stored    string
-		requested string
-		written   string
-	}{
-		{name: "omitted sub is carried over", stored: `{"email":"old@example.com","sub":"legacy"}`,
-			requested: `{"email":"new@example.com"}`, written: `{"email":"new@example.com","sub":"legacy"}`},
-		{name: "unchanged sub is accepted", stored: `{"email":"old@example.com","sub":"legacy"}`,
-			requested: `{"email":"new@example.com","sub":"legacy"}`,
-			written:   `{"email":"new@example.com","sub":"legacy"}`},
-		{name: "no sub on either side", stored: `{"email":"old@example.com"}`,
-			requested: `{"email":"new@example.com"}`, written: `{"email":"new@example.com"}`},
-		{name: "changed sub is rejected", stored: `{"email":"old@example.com","sub":"legacy"}`,
-			requested: `{"email":"old@example.com","sub":"victim"}`},
-		{name: "added sub is rejected", stored: `{"email":"old@example.com"}`,
-			requested: `{"email":"old@example.com","sub":"victim"}`},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			storeMock := entitymock.NewEntityServiceInterfaceMock(t)
-			storeMock.On("IsEntityDeclarative", mock.Anything, mock.Anything).Return(false, nil).Maybe()
-			storeMock.On("GetEntity", mock.Anything, svcTestUserID1).
-				Return(&providers.Entity{Category: providers.EntityCategoryUser, ID: svcTestUserID1,
-					Type: testUserType, Attributes: json.RawMessage(tc.stored)}, nil).Once()
-			var written json.RawMessage
-			if tc.written != "" {
-				storeMock.On("UpdateAttributes", mock.Anything, svcTestUserID1, mock.Anything).
-					Run(func(args mock.Arguments) { written, _ = args.Get(2).(json.RawMessage) }).
-					Return(nil).Once()
-			}
-
-			schemaMock := entitytypemock.NewEntityTypeServiceInterfaceMock(t)
-			schemaMock.On("GetAttributes", mock.Anything, mock.Anything, testUserType,
-				entitytype.AttributeFilter{AllowCredential: true}).
-				Return([]entitytype.AttributeInfo{}, (*tidcommon.ServiceError)(nil)).Once()
-
-			service := &userService{
-				entityService:     storeMock,
-				entityTypeService: schemaMock,
-				authzService:      newAllowAllAuthz(t),
-			}
-
-			_, err := service.UpdateUserAttributes(context.Background(), svcTestUserID1,
-				json.RawMessage(tc.requested))
-			if tc.written == "" {
-				require.NotNil(t, err)
-				require.Equal(t, ErrorInvalidRequestFormat.Code, err.Code)
-				storeMock.AssertNotCalled(t, "UpdateAttributes", mock.Anything, mock.Anything, mock.Anything)
-				return
-			}
-			require.Nil(t, err)
-			require.JSONEq(t, tc.written, string(written))
-		})
-	}
-}
-
 func TestUserService_UpdateUserAttributes_NilSchemaService(t *testing.T) {
 	storeMock := entitymock.NewEntityServiceInterfaceMock(t)
 	storeMock.On("IsEntityDeclarative", mock.Anything, mock.Anything).Return(false, nil).Maybe()

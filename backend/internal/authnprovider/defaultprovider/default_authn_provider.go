@@ -20,7 +20,6 @@ import (
 	"github.com/thunder-id/thunderid/internal/authn/passkey"
 	authnprovidercm "github.com/thunder-id/thunderid/internal/authnprovider/common"
 	"github.com/thunder-id/thunderid/internal/entity"
-	"github.com/thunder-id/thunderid/internal/system/featuregate"
 	"github.com/thunder-id/thunderid/internal/system/log"
 )
 
@@ -31,7 +30,6 @@ type defaultAuthnProvider struct {
 	magicLinkService magiclink.MagicLinkAuthnServiceInterface
 	openid4vpService openid4vp.OpenID4VPServiceInterface
 	federatedAuths   map[providers.IDPType]authncommon.FederatedAuthenticator
-	featureGate      *featuregate.Gate
 	logger           *log.Logger
 }
 
@@ -40,8 +38,7 @@ func newDefaultAuthnProvider(entitySvc entity.EntityServiceInterface,
 	passkeyService passkey.PasskeyServiceInterface, otpService otp.OTPAuthnServiceInterface,
 	magicLinkService magiclink.MagicLinkAuthnServiceInterface,
 	openid4vpService openid4vp.OpenID4VPServiceInterface,
-	federatedAuths map[providers.IDPType]authncommon.FederatedAuthenticator,
-	featureGate *featuregate.Gate) providers.AuthnProviderInterface {
+	federatedAuths map[providers.IDPType]authncommon.FederatedAuthenticator) providers.AuthnProviderInterface {
 	return &defaultAuthnProvider{
 		entitySvc:        entitySvc,
 		passkeyService:   passkeyService,
@@ -49,7 +46,6 @@ func newDefaultAuthnProvider(entitySvc entity.EntityServiceInterface,
 		magicLinkService: magicLinkService,
 		openid4vpService: openid4vpService,
 		federatedAuths:   federatedAuths,
-		featureGate:      featureGate,
 		logger:           log.GetLogger().With(log.String(log.LoggerKeyComponentName, "DefaultAuthnProvider")),
 	}
 }
@@ -348,44 +344,6 @@ func (p *defaultAuthnProvider) resolveLinkedEntities(ctx context.Context,
 	return linkedIDs, nil
 }
 
-// claimLegacySubject migrates the users federated before links were recorded, who hold the
-// subject only in the schema attribute sub, to links at the connection presenting it.
-func (p *defaultAuthnProvider) claimLegacySubject(ctx context.Context,
-	token map[string]interface{}) ([]string, *tidcommon.ServiceError) {
-	idpID, _ := token[authnprovidercm.UserAttributeFederatedIdpID].(string)
-	sub, _ := token[authnprovidercm.UserAttributeSub].(string)
-
-	claimedIDs, err := p.entitySvc.ClaimLegacySubject(ctx, idpID, sub)
-	if err != nil {
-		return nil, p.logAndReturnServerError(ctx, "Failed to migrate a legacy subject",
-			log.String("error", err.Error()))
-	}
-	return claimedIDs, nil
-}
-
-// resolveLegacySubject finds users that still hold a federated subject in the legacy schema
-// attribute without converting that representation.
-func (p *defaultAuthnProvider) resolveLegacySubject(ctx context.Context,
-	token map[string]interface{}) ([]string, *tidcommon.ServiceError) {
-	sub, _ := token[authnprovidercm.UserAttributeSub].(string)
-
-	holders, err := p.entitySvc.SearchEntities(ctx,
-		map[string]interface{}{authnprovidercm.UserAttributeSub: sub})
-	if errors.Is(err, entity.ErrEntityNotFound) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, p.logAndReturnServerError(ctx, "Failed to resolve a legacy subject",
-			log.String("error", err.Error()))
-	}
-
-	entityIDs := make([]string, 0, len(holders))
-	for _, holder := range holders {
-		entityIDs = append(entityIDs, holder.ID)
-	}
-	return entityIDs, nil
-}
-
 func (p *defaultAuthnProvider) buildAuthnResult(
 	ctx context.Context, authnResult *authncommon.AuthnResult,
 ) (*providers.AuthnResult, *tidcommon.ServiceError) {
@@ -399,13 +357,6 @@ func (p *defaultAuthnProvider) buildAuthnResult(
 	}
 	if entityID == "" && authnprovidercm.IsFederatedToken(authnResult.Token) {
 		linkedIDs, svcErr := p.resolveLinkedEntities(ctx, authnResult.Token)
-		if svcErr == nil && len(linkedIDs) == 0 {
-			if p.featureGate.IsEnabled(featuregate.AccountLinking) {
-				linkedIDs, svcErr = p.claimLegacySubject(ctx, authnResult.Token)
-			} else {
-				linkedIDs, svcErr = p.resolveLegacySubject(ctx, authnResult.Token)
-			}
-		}
 		if svcErr != nil {
 			return nil, svcErr
 		}

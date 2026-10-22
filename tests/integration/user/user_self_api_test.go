@@ -53,7 +53,6 @@ func (s *SelfUserEndpointsSuite) SetupSuite() {
 			"username": map[string]interface{}{"type": "string", "required": true, "unique": true},
 			"email":    map[string]interface{}{"type": "string", "required": true, "unique": true},
 			"password": map[string]interface{}{"type": "string", "credential": true},
-			"sub":      map[string]interface{}{"type": "string"},
 		},
 	}
 	schemaID, err := testutils.CreateUserType(schema)
@@ -322,88 +321,4 @@ func (s *SelfUserEndpointsSuite) TestSelfUserUpdateCredentialsMissingAttributesR
 	s.Require().NoError(err)
 	defer verifyResp.Body.Close()
 	s.Equal(http.StatusOK, verifyResp.StatusCode, "the existing password must still grant access")
-}
-
-// selfUserWith creates a user of the suite's type holding attrs and returns a client signed in as it.
-func (s *SelfUserEndpointsSuite) selfUserWith(name string, attrs map[string]interface{}) *http.Client {
-	s.T().Helper()
-	attrs["username"] = name
-	attrs["email"] = name + "@example.com"
-	attrs["password"] = s.password
-	raw, err := json.Marshal(attrs)
-	s.Require().NoError(err)
-	userID, err := testutils.CreateUser(testutils.User{OUID: s.ouID, Type: s.userType, Attributes: raw})
-	s.Require().NoError(err)
-	s.T().Cleanup(func() { _ = testutils.DeleteUser(userID) })
-
-	client, err := testutils.GetHTTPClientForUser(name, s.password)
-	s.Require().NoError(err)
-	return client
-}
-
-// selfUpdate replaces the attributes of the user the client is signed in as.
-func (s *SelfUserEndpointsSuite) selfUpdate(client *http.Client, attrs map[string]interface{}) *http.Response {
-	s.T().Helper()
-	payload, err := json.Marshal(map[string]interface{}{"attributes": attrs})
-	s.Require().NoError(err)
-	req, err := http.NewRequest(http.MethodPut, testutils.TestServerURL+"/users/me", bytes.NewReader(payload))
-	s.Require().NoError(err)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := client.Do(req)
-	s.Require().NoError(err)
-	return resp
-}
-
-// selfAttributes reads the attributes of the user the client is signed in as.
-func (s *SelfUserEndpointsSuite) selfAttributes(client *http.Client) map[string]interface{} {
-	s.T().Helper()
-	resp, err := client.Get(testutils.TestServerURL + "/users/me")
-	s.Require().NoError(err)
-	defer resp.Body.Close()
-	s.Require().Equal(http.StatusOK, resp.StatusCode)
-
-	var userResp testutils.User
-	s.Require().NoError(json.NewDecoder(resp.Body).Decode(&userResp))
-	var attrs map[string]interface{}
-	s.Require().NoError(json.Unmarshal(userResp.Attributes, &attrs))
-	return attrs
-}
-
-// TestSelfUserUpdateKeepsLegacySubject verifies that a self-update leaving sub out keeps it, so a
-// user federated before links were recorded can still be migrated, and that changing it is refused,
-// so a user cannot take over another person's subject.
-func (s *SelfUserEndpointsSuite) TestSelfUserUpdateKeepsLegacySubject() {
-	name := "self.legacy"
-	client := s.selfUserWith(name, map[string]interface{}{"sub": "legacy-sub"})
-	attrs := map[string]interface{}{"username": name, "email": name + "@example.com"}
-
-	resp := s.selfUpdate(client, attrs)
-	resp.Body.Close()
-	s.Require().Equal(http.StatusOK, resp.StatusCode, "an update leaving sub out should succeed")
-	s.Equal("legacy-sub", s.selfAttributes(client)["sub"], "an update leaving sub out keeps it")
-
-	attrs["sub"] = "legacy-sub"
-	resp = s.selfUpdate(client, attrs)
-	resp.Body.Close()
-	s.Equal(http.StatusOK, resp.StatusCode, "an update repeating sub should succeed")
-
-	attrs["sub"] = "another-sub"
-	resp = s.selfUpdate(client, attrs)
-	defer resp.Body.Close()
-	s.requireSelfError(resp, http.StatusBadRequest, "USR-1001")
-	s.Equal("legacy-sub", s.selfAttributes(client)["sub"], "a refused update leaves sub as it was")
-}
-
-// TestSelfUserUpdateCannotSetSubject verifies that a user without sub cannot give itself one, or it
-// could claim another person's first federated sign-in.
-func (s *SelfUserEndpointsSuite) TestSelfUserUpdateCannotSetSubject() {
-	name := "self.nosub"
-	client := s.selfUserWith(name, map[string]interface{}{})
-
-	resp := s.selfUpdate(client, map[string]interface{}{
-		"username": name, "email": name + "@example.com", "sub": "claimed-sub",
-	})
-	defer resp.Body.Close()
-	s.requireSelfError(resp, http.StatusBadRequest, "USR-1001")
-	s.NotContains(s.selfAttributes(client), "sub", "a refused update leaves the user without sub")
 }

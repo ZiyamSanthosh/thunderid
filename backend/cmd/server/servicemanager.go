@@ -310,17 +310,17 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 			featuregate.UserRegistration,
 			featuregate.AccountRecovery,
 			featuregate.AdministrativeOperations,
-			featuregate.UserProvisioning,
+			featuregate.EntityProvisioning,
 			featuregate.OrganizationUnitCreation,
 			featuregate.AccountLinking,
 			featuregate.UserAttributeUpdate,
 			featuregate.CredentialUpdate,
-			featuregate.PasskeyAuthentication,
+			featuregate.PasskeySignCountUpdate,
 		)
 	}
 
 	// Initialize passkey service
-	passkeyService := passkey.Initialize(entityService, runtimeStoreProvider)
+	passkeyService := passkey.Initialize(entityService, runtimeStoreProvider, featureGate)
 
 	// Shared DPoP verifier (and its JTI replay cache) so OAuth and OpenID4VCI
 	// share JTI replay protection.
@@ -332,7 +332,7 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 			ouService, runtimeStoreProvider, exporters)
 
 	defaultProvider := defaultprovider.Initialize(entityService, passkeyService,
-		otpCoreService, magicLinkService, openid4vpSvc, federatedAuths, featureGate)
+		otpCoreService, magicLinkService, openid4vpSvc, federatedAuths)
 
 	customProviders := map[string]providers.CustomAuthnProvider{}
 	restCfg := runtime.Config.AuthnProvider.Rest
@@ -395,7 +395,6 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 	csp.InitializeConfigReader(serverConfigService)
 
 	flowConfig := flowconfig.FromServerRuntime()
-
 	revocationEnforcer, revocationSvc, err := revocation.Initialize(oauthCfg, jwtService, observabilitySvc)
 	fatalOnError(ctx, logger, err, "Failed to initialize revocation service")
 	sessionRevoker := sessionCriteriaRevoker{revoker: revocationSvc}

@@ -44,7 +44,6 @@ type EntityServiceInterface interface {
 	ResolveLinkedAccounts(ctx context.Context, idpID, sub string) ([]string, error)
 	GetLinkedEntities(ctx context.Context, idpID, sub string) ([]providers.Entity, error)
 	LinkAccount(ctx context.Context, entityID, idpID, sub string) error
-	ClaimLegacySubject(ctx context.Context, idpID, sub string) ([]string, error)
 	SearchEntities(ctx context.Context, filters map[string]interface{}) ([]providers.Entity, error)
 
 	// Lists (category-scoped)
@@ -460,87 +459,6 @@ func (s *entityService) LinkAccount(ctx context.Context, entityID, idpID, sub st
 		}
 		return s.store.UpdateSystemAttributes(txCtx, entityID, merged)
 	})
-}
-
-// ClaimLegacySubject migrates users from before recorded links, whose federated subject sits only
-// in the schema attribute sub, to a link at the connection now presenting that subject, and drops
-// the attribute. Every holder is migrated, as a sign-in matched sub before links were recorded. It
-// returns the users it migrated, an empty list when none hold sub.
-func (s *entityService) ClaimLegacySubject(ctx context.Context, idpID, sub string) ([]string, error) {
-	if idpID == "" || sub == "" {
-		return nil, ErrBadAttributesInRequest
-	}
-	holders, err := s.store.SearchEntities(ctx,
-		map[string]interface{}{authnprovidercm.UserAttributeSub: sub})
-	if errors.Is(err, ErrEntityNotFound) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	var claimed []string
-	err = s.transactioner.Transact(ctx, func(txCtx context.Context) error {
-		claimed = nil
-		for _, holder := range holders {
-			ok, err := s.claimLegacySubject(txCtx, holder.ID, idpID, sub)
-			if err != nil {
-				return err
-			}
-			if ok {
-				claimed = append(claimed, holder.ID)
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	for _, entityID := range claimed {
-		s.logger.Info(ctx, "Migrated a legacy subject attribute to a recorded link",
-			log.MaskedString("id", entityID), log.String("idpId", idpID))
-	}
-	return claimed, nil
-}
-
-// claimLegacySubject migrates one legacy holder of sub and reports whether it still held it.
-func (s *entityService) claimLegacySubject(ctx context.Context, entityID, idpID, sub string) (bool, error) {
-	current, err := s.store.LockEntity(ctx, entityID)
-	// The search also returns declarative users, which only the database store can lock, and a
-	// holder may be deleted after the search. Neither can take a link.
-	if errors.Is(err, ErrEntityNotFound) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	attrs := map[string]interface{}{}
-	if len(current.Attributes) > 0 {
-		if err := json.Unmarshal(current.Attributes, &attrs); err != nil {
-			return false, fmt.Errorf("failed to unmarshal attributes: %w", err)
-		}
-	}
-	// Read under the lock: a concurrent claim or edit may have changed sub since the lookup.
-	if stored, _ := attrs[authnprovidercm.UserAttributeSub].(string); stored != sub {
-		return false, nil
-	}
-
-	merged, err := withLinkedSubject(current.SystemAttributes, idpID, sub)
-	if err != nil {
-		return false, err
-	}
-	if merged != nil {
-		if err := s.store.UpdateSystemAttributes(ctx, entityID, merged); err != nil {
-			return false, err
-		}
-	}
-	delete(attrs, authnprovidercm.UserAttributeSub)
-	cleaned, err := json.Marshal(attrs)
-	if err != nil {
-		return false, fmt.Errorf("failed to marshal attributes: %w", err)
-	}
-	return true, s.store.UpdateAttributes(ctx, entityID, cleaned)
 }
 
 // SearchEntities searches for all entities matching the provided filters. The returned

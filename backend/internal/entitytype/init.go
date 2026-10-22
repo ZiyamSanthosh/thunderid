@@ -26,7 +26,7 @@ func Initialize(
 	authzService sysauthz.SystemAuthorizationServiceInterface,
 ) (
 	EntityTypeServiceInterface, declarativeresource.ResourceExporter, declarativeresource.ResourceExporter,
-	EntityTypeReferenceNormalizer, error,
+	EntityTypeReferenceNormalizerInterface, error,
 ) {
 	// Step 1: Determine store mode and initialize store and transactioner
 	storeMode := getEntityTypeStoreMode()
@@ -57,7 +57,8 @@ func Initialize(
 
 	userTypeExporter := newEntityTypeExporter(entityTypeService, TypeCategoryUser)
 	agentTypeExporter := newEntityTypeExporter(entityTypeService, TypeCategoryAgent)
-	referenceNormalizer := newEntityTypeReferenceNormalizer(entityTypeStore)
+	referenceNormalizer := newEntityTypeReferenceNormalizer(entityTypeStore,
+		cache.GetCache[*entityTypeReferenceSnapshot](cacheManager, "EntityTypeReferenceCache"))
 	return entityTypeService, userTypeExporter, agentTypeExporter, referenceNormalizer, nil
 }
 

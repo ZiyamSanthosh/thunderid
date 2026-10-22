@@ -681,3 +681,12 @@ func TestAccessLogExcludePaths(t *testing.T) {
 	assert.Equal(t, []string{"/console/", "/health/"},
 		accessLogExcludePaths([]string{"", "/health/", "/"}))
 }
+
+func TestValidateOperatingMode(t *testing.T) {
+	assert.NoError(t, validateOperatingMode(&config.Config{}))
+	assert.NoError(t, validateOperatingMode(&config.Config{OperatingMode: config.OperatingModeFull}))
+
+	err := validateOperatingMode(&config.Config{OperatingMode: config.OperatingModeRestricted})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "restricted")
+}

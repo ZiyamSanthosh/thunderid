@@ -42,7 +42,7 @@ func Initialize(
 	serverConfigSvc serverConfigProvider,
 	ouSvc ouProvider,
 	configHandler *FlowConfigHandler,
-	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizer,
+	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizerInterface,
 ) (FlowMgtServiceInterface, declarativeresource.ResourceExporter, error) {
 	flowValidator := newFlowValidator(executorRegistry, interceptorRegistry, graphBuilder)
 	store, compositeStore, transactioner, err := initializeStore(cacheManager, flowValidator, entityTypeNormalizer)
@@ -99,7 +99,7 @@ func Initialize(
 func initializeStore(
 	cacheManager cache.CacheManagerInterface,
 	flowValidator FlowValidatorInterface,
-	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizer,
+	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizerInterface,
 ) (flowStoreInterface, *compositeFlowStore, providers.Transactioner, error) {
 	var compositeStore *compositeFlowStore
 

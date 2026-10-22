@@ -14,7 +14,7 @@ func TestGate(t *testing.T) {
 
 	assert.False(t, gate.IsEnabled(UserRegistration))
 	assert.False(t, gate.IsEnabled(AccountRecovery))
-	assert.True(t, gate.IsEnabled(UserProvisioning))
+	assert.True(t, gate.IsEnabled(EntityProvisioning))
 	assert.True(t, gate.IsEnabled(OrganizationUnitCreation))
 }
 

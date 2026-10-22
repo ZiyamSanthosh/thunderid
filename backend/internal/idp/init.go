@@ -23,7 +23,7 @@ import (
 func Initialize(
 	cacheManager cache.CacheManagerInterface,
 	entityTypeService entitytype.EntityTypeServiceInterface,
-	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizer,
+	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizerInterface,
 	roleService role.RoleServiceInterface,
 	groupService group.GroupServiceInterface,
 	resourceService providers.ResourceServerProvider,
@@ -71,7 +71,7 @@ func Initialize(
 // ShouldLoadDeclarativeIDPResources.
 func initializeStore(
 	cacheManager cache.CacheManagerInterface,
-	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizer,
+	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizerInterface,
 ) (idpStoreInterface, providers.Transactioner, error) {
 	storeMode := getIdentityProviderStoreMode()
 

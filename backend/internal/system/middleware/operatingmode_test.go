@@ -39,7 +39,23 @@ func TestRestrictedModeMiddlewareEnabled(t *testing.T) {
 		{name: "health endpoint", path: "/health/readiness", wantStatus: http.StatusNoContent},
 		{name: "design resolve", path: "/design/resolve", wantStatus: http.StatusNoContent},
 		{name: "translation resolve", path: "/i18n/languages/en-US/translations/resolve", wantStatus: http.StatusNoContent},
-		{name: "OpenID4VP endpoint", path: "/openid4vp/request", wantStatus: http.StatusNoContent},
+		{name: "OU qualified token endpoint", method: http.MethodPost, path: "/ou/child-ou/oauth2/token",
+			wantStatus: http.StatusNoContent},
+		{name: "OU qualified nested path", method: http.MethodPost, path: "/ou/a/b/oauth2/token",
+			wantStatus: http.StatusServiceUnavailable},
+		{name: "OpenID4VP request", path: "/openid4vp/request", wantStatus: http.StatusNoContent},
+		{name: "OpenID4VP response", method: http.MethodPost, path: "/openid4vp/response",
+			wantStatus: http.StatusNoContent},
+		{name: "OpenID4VP initiate", method: http.MethodPost, path: "/openid4vp/initiate",
+			wantStatus: http.StatusNoContent},
+		{name: "OpenID4VP status", path: "/openid4vp/status/txn-1", wantStatus: http.StatusNoContent},
+		{name: "OpenID4VP trust anchors", path: "/openid4vp/trust-anchors", wantStatus: http.StatusServiceUnavailable},
+		{name: "presentation definition creation", method: http.MethodPost, path: "/openid4vp/presentation-definitions",
+			wantStatus: http.StatusServiceUnavailable},
+		{name: "presentation definition update", method: http.MethodPut,
+			path: "/openid4vp/presentation-definitions/example", wantStatus: http.StatusServiceUnavailable},
+		{name: "presentation definition deletion", method: http.MethodDelete,
+			path: "/openid4vp/presentation-definitions/example", wantStatus: http.StatusServiceUnavailable},
 		{name: "application update", method: http.MethodPut, path: "/applications/example",
 			wantStatus: http.StatusServiceUnavailable},
 		{name: "user creation", method: http.MethodPost, path: "/users", wantStatus: http.StatusServiceUnavailable},
@@ -99,16 +115,23 @@ func TestRestrictedModeMiddlewareEnabled(t *testing.T) {
 			assert.Equal(t, tt.wantStatus, recorder.Code)
 			if tt.wantStatus == http.StatusServiceUnavailable {
 				assert.JSONEq(t, `{
-					"error": "feature_unavailable",
-					"error_description": "The requested feature is unavailable while ThunderID is in restricted mode."
+					"code": "SSE-5030",
+					"message": {
+						"key": "error.operating_mode.feature_unavailable",
+						"defaultValue": "Feature unavailable"
+					},
+					"description": {
+						"key": "error.operating_mode.feature_unavailable_description",
+						"defaultValue": "The requested feature is unavailable while the server is in restricted mode"
+					}
 				}`, recorder.Body.String())
 			}
 		})
 	}
 }
 
-func TestIsTranslationResolvePath(t *testing.T) {
-	assert.True(t, isTranslationResolvePath("/i18n/languages/en-US/translations/resolve"))
-	assert.False(t, isTranslationResolvePath("/i18n/languages//translations/resolve"))
-	assert.False(t, isTranslationResolvePath("/i18n/languages/en/extra/translations/resolve"))
+func TestRestrictedModeTranslationResolvePath(t *testing.T) {
+	assert.True(t, isRestrictedModePathAllowed("/i18n/languages/en-US/translations/resolve"))
+	assert.False(t, isRestrictedModePathAllowed("/i18n/languages//translations/resolve"))
+	assert.False(t, isRestrictedModePathAllowed("/i18n/languages/en/extra/translations/resolve"))
 }

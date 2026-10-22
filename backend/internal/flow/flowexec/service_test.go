@@ -120,6 +120,111 @@ func TestValidateFlowFeatureWithoutGate(t *testing.T) {
 	assert.Nil(t, service.validateFlowFeature(providers.FlowTypeRegistration))
 }
 
+func restrictedFlowExecService(t *testing.T) *flowExecService {
+	mockObservability := observabilitymock.NewObservabilityServiceInterfaceMock(t)
+	mockObservability.EXPECT().IsEnabled().Return(false).Maybe()
+
+	return &flowExecService{
+		cfg:              testFlowExecCfg,
+		observabilitySvc: mockObservability,
+		featureGate: featuregate.NewGate(
+			featuregate.UserRegistration,
+			featuregate.AccountRecovery,
+			featuregate.AdministrativeOperations,
+		),
+	}
+}
+
+func TestInitiateFlowRestrictedFlowType(t *testing.T) {
+	executionID, svcErr := restrictedFlowExecService(t).InitiateFlow(context.Background(), &FlowInitContext{
+		ApplicationID: "test-app",
+		FlowType:      string(providers.FlowTypeRegistration),
+	})
+
+	assert.Empty(t, executionID)
+	if assert.NotNil(t, svcErr) {
+		assert.Equal(t, ErrorFlowFeatureDisabled.Code, svcErr.Code)
+	}
+}
+
+func TestInitiateAndExecuteRestrictedFlowType(t *testing.T) {
+	step, svcErr := restrictedFlowExecService(t).InitiateAndExecute(context.Background(), &FlowInitContext{
+		ApplicationID: "test-app",
+		FlowType:      string(providers.FlowTypeRecovery),
+	})
+
+	assert.Nil(t, step)
+	if assert.NotNil(t, svcErr) {
+		assert.Equal(t, ErrorFlowFeatureDisabled.Code, svcErr.Code)
+	}
+}
+
+func TestExecuteNewFlowRestrictedFlowType(t *testing.T) {
+	step, svcErr := restrictedFlowExecService(t).Execute(context.Background(), "test-app", "",
+		string(providers.FlowTypeRegistration), false, "", map[string]string{}, "", "", "")
+
+	assert.Nil(t, step)
+	if assert.NotNil(t, svcErr) {
+		assert.Equal(t, ErrorFlowFeatureDisabled.Code, svcErr.Code)
+	}
+}
+
+func TestExecuteExistingFlowRestrictedFlowType(t *testing.T) {
+	_ = config.InitializeServerRuntime("/tmp/test", &config.Config{})
+
+	flowFactory, _ := core.Initialize(cache.Initialize(config.GetServerRuntime().Config.Cache, "test-deployment"))
+	testGraph := flowFactory.CreateGraph("test-graph-id", providers.FlowTypeRegistration, 1)
+
+	storedCtx := &FlowContextDB{}
+	assert.NoError(t, storedCtx.FromEngineContext(EngineContext{
+		ExecutionID: existingExecutionID,
+		AppID:       "test-app-id",
+		FlowType:    providers.FlowTypeRegistration,
+		AuthenticatedUser: authncm.AuthenticatedUser{
+			Attributes: map[string]interface{}{},
+		},
+		UserInputs:       map[string]string{},
+		RuntimeData:      map[string]string{},
+		ExecutionHistory: map[string]*providers.NodeExecutionRecord{},
+		Graph:            testGraph,
+	}))
+
+	mockStore := newFlowStoreInterfaceMock(t)
+	mockFlowProvider := NewFlowProviderMock(t)
+	mockGraphBuilder := NewGraphBuilderInterfaceMock(t)
+	mockInboundClient := inboundclientmock.NewInboundClientServiceInterfaceMock(t)
+	mockEntityProvider := entityprovidermock.NewEntityProviderInterfaceMock(t)
+
+	mockStore.EXPECT().GetFlowContext(mock.Anything, existingExecutionID).Return(storedCtx, nil)
+	mockFlowProvider.EXPECT().
+		GetFlow(mock.Anything, "test-graph-id").
+		Return(&providers.CompleteFlowDefinition{ID: "test-graph-id"}, nil)
+	mockGraphBuilder.EXPECT().GetGraph(mock.Anything, mock.Anything).Return(testGraph, nil)
+	mockInboundClient.EXPECT().GetInboundClientByEntityID(mock.Anything, "test-app-id").Return(
+		&inboundmodel.InboundClient{ID: "test-app-id", RegistrationFlowID: "test-graph-id"}, nil)
+	mockEntityProvider.EXPECT().GetEntity("test-app-id").Return(
+		&providers.Entity{ID: "test-app-id", Category: providers.EntityCategoryApp},
+		(*entityprovider.EntityProviderError)(nil))
+
+	mockCrypto := cryptomock.NewRuntimeCryptoProviderMock(t)
+
+	service := restrictedFlowExecService(t)
+	service.flowStore = mockStore
+	service.graphBuilder = mockGraphBuilder
+	service.flowProvider = mockFlowProvider
+	service.actorProvider = actorprovider.Initialize(mockInboundClient, mockEntityProvider, noopAuthnMgr(), nil, nil)
+	service.transactioner = &stubTransactioner{}
+	service.cryptoSvc = mockCrypto
+
+	step, svcErr := service.Execute(context.Background(), "test-app", existingExecutionID,
+		string(providers.FlowTypeRegistration), false, "submit", map[string]string{}, "", "", "")
+
+	assert.Nil(t, step)
+	if assert.NotNil(t, svcErr) {
+		assert.Equal(t, ErrorFlowFeatureDisabled.Code, svcErr.Code)
+	}
+}
+
 func TestInitiateFlowNilContext(t *testing.T) {
 	// Setup
 	service := &flowExecService{cfg: testFlowExecCfg}

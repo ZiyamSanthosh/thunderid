@@ -13,7 +13,6 @@ import (
 	"github.com/thunder-id/thunderid/internal/authn/otp"
 	"github.com/thunder-id/thunderid/internal/authn/passkey"
 	"github.com/thunder-id/thunderid/internal/entity"
-	"github.com/thunder-id/thunderid/internal/system/featuregate"
 )
 
 // Name is the name of the built-in default authn provider. It is the catch-all for any
@@ -25,11 +24,6 @@ func Initialize(entitySvc entity.EntityServiceInterface,
 	passkeySvc passkey.PasskeyServiceInterface, otpSvc otp.OTPAuthnServiceInterface,
 	magicLinkSvc magiclink.MagicLinkAuthnServiceInterface,
 	openid4vpSvc openid4vp.OpenID4VPServiceInterface,
-	federatedAuths map[providers.IDPType]authncommon.FederatedAuthenticator,
-	featureGates ...*featuregate.Gate) providers.AuthnProviderInterface {
-	var gate *featuregate.Gate
-	if len(featureGates) > 0 {
-		gate = featureGates[0]
-	}
-	return newDefaultAuthnProvider(entitySvc, passkeySvc, otpSvc, magicLinkSvc, openid4vpSvc, federatedAuths, gate)
+	federatedAuths map[providers.IDPType]authncommon.FederatedAuthenticator) providers.AuthnProviderInterface {
+	return newDefaultAuthnProvider(entitySvc, passkeySvc, otpSvc, magicLinkSvc, openid4vpSvc, federatedAuths)
 }

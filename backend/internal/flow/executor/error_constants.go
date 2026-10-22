@@ -1579,7 +1579,7 @@ var (
 		},
 		ErrorDescription: tidcommon.I18nMessage{
 			Key:          "flows.executor.errors.jit_provision_restricted_desc",
-			DefaultValue: "JIT provisioning is unavailable while ThunderID is in restricted mode",
+			DefaultValue: "JIT provisioning is unavailable while the server is in restricted mode",
 		},
 	}
 
@@ -1593,7 +1593,7 @@ var (
 		},
 		ErrorDescription: tidcommon.I18nMessage{
 			Key:          "flows.executor.errors.ou_creation_restricted_desc",
-			DefaultValue: "Organization unit creation is unavailable while ThunderID is in restricted mode",
+			DefaultValue: "Organization unit creation is unavailable while the server is in restricted mode",
 		},
 	}
 
@@ -1607,7 +1607,7 @@ var (
 		},
 		ErrorDescription: tidcommon.I18nMessage{
 			Key:          "flows.executor.errors.account_linking_restricted_desc",
-			DefaultValue: "Account linking is unavailable while ThunderID is in restricted mode",
+			DefaultValue: "Account linking is unavailable while the server is in restricted mode",
 		},
 	}
 
@@ -1621,7 +1621,7 @@ var (
 		},
 		ErrorDescription: tidcommon.I18nMessage{
 			Key:          "flows.executor.errors.user_attribute_update_restricted_desc",
-			DefaultValue: "Profile updates are unavailable while ThunderID is in restricted mode",
+			DefaultValue: "Profile updates are unavailable while the server is in restricted mode",
 		},
 	}
 
@@ -1635,21 +1635,7 @@ var (
 		},
 		ErrorDescription: tidcommon.I18nMessage{
 			Key:          "flows.executor.errors.credential_update_restricted_desc",
-			DefaultValue: "Credential updates are unavailable while ThunderID is in restricted mode",
-		},
-	}
-
-	// ErrPasskeyAuthenticationRestricted is returned when server policy fences passkey authentication.
-	ErrPasskeyAuthenticationRestricted = tidcommon.ServiceError{
-		Type: tidcommon.ClientErrorType,
-		Code: "FET-1117",
-		Error: tidcommon.I18nMessage{
-			Key:          "flows.executor.errors.passkey_authentication_restricted",
-			DefaultValue: "Passkey authentication temporarily unavailable",
-		},
-		ErrorDescription: tidcommon.I18nMessage{
-			Key:          "flows.executor.errors.passkey_authentication_restricted_desc",
-			DefaultValue: "Passkey authentication is unavailable while ThunderID is in restricted mode",
+			DefaultValue: "Credential updates are unavailable while the server is in restricted mode",
 		},
 	}
 )

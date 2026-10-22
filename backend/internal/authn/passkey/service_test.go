@@ -20,6 +20,7 @@ import (
 
 	"github.com/thunder-id/thunderid/internal/entity"
 	"github.com/thunder-id/thunderid/internal/system/config"
+	"github.com/thunder-id/thunderid/internal/system/featuregate"
 	"github.com/thunder-id/thunderid/internal/system/log"
 	"github.com/thunder-id/thunderid/tests/mocks/entitymock"
 )
@@ -622,6 +623,47 @@ func (suite *WebAuthnServiceTestSuite) TestUpdateWebAuthnCredentialInDB_Success(
 	err := suite.service.updatePasskeyCredential(context.Background(), testUserID, updatedCredential)
 
 	suite.NoError(err)
+}
+
+// While the sign count update is disabled, the credential is not read or written, and the call still
+// succeeds so the authentication can complete.
+func (suite *WebAuthnServiceTestSuite) TestRecordSignCount_SkippedWhenDisabled() {
+	suite.service.featureGate = featuregate.NewGate(featuregate.PasskeySignCountUpdate)
+
+	svcErr := suite.service.recordSignCount(context.Background(), testUserID,
+		&webauthnCredential{ID: []byte("credential123")})
+
+	suite.Nil(svcErr)
+	suite.mockEntityService.AssertNotCalled(suite.T(), "GetCredentialsByType", mock.Anything, mock.Anything,
+		mock.Anything)
+	suite.mockEntityService.AssertNotCalled(suite.T(), "UpdateSystemCredentials", mock.Anything, mock.Anything,
+		mock.Anything)
+}
+
+func (suite *WebAuthnServiceTestSuite) TestRecordSignCount_UpdatesWhenEnabled() {
+	suite.service.featureGate = featuregate.NewGate()
+	credentialID := []byte("credential123")
+	existingJSON, _ := json.Marshal(webauthnCredential{ID: credentialID, Authenticator: authenticator{SignCount: 5}})
+	suite.mockEntityService.On("GetCredentialsByType", mock.Anything, testUserID, "passkey").
+		Return([]entity.StoredCredential{{Value: string(existingJSON)}}, nil).Once()
+	suite.mockEntityService.On("UpdateSystemCredentials", mock.Anything, testUserID, mock.Anything).
+		Return(nil).Once()
+
+	svcErr := suite.service.recordSignCount(context.Background(), testUserID,
+		&webauthnCredential{ID: credentialID, Authenticator: authenticator{SignCount: 6}})
+
+	suite.Nil(svcErr)
+}
+
+func (suite *WebAuthnServiceTestSuite) TestRecordSignCount_UpdateFailureIsServerError() {
+	suite.mockEntityService.On("GetCredentialsByType", mock.Anything, testUserID, "passkey").
+		Return(nil, assert.AnError).Once()
+
+	svcErr := suite.service.recordSignCount(context.Background(), testUserID,
+		&webauthnCredential{ID: []byte("credential123")})
+
+	suite.Require().NotNil(svcErr)
+	suite.Equal(tidcommon.InternalServerError.Code, svcErr.Code)
 }
 
 func (suite *WebAuthnServiceTestSuite) TestUpdateWebAuthnCredentialInDB_CredentialNotFound() {

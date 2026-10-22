@@ -99,6 +99,7 @@ func (suite *OAuthAuthTestSuite) SetupSuite() {
 	userAttributes := map[string]interface{}{
 		"username":   "oauthuser",
 		"password":   "Test@1234",
+		"sub":        "user123", // Must match OAuth user sub
 		"email":      "testuser@example.com",
 		"givenName":  "Test",
 		"familyName": "User",

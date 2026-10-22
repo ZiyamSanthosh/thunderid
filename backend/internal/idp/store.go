@@ -34,12 +34,12 @@ type idpStoreInterface interface {
 // idpStore is the default implementation of IDPStoreInterface.
 type idpStore struct {
 	dbProvider           provider.DBProviderInterface
-	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizer
+	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizerInterface
 }
 
 // newIDPStore creates a new instance of IDPStore.
 func newIDPStore(
-	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizer,
+	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizerInterface,
 ) (idpStoreInterface, providers.Transactioner, error) {
 	dbProvider := getDBProvider()
 	client, err := dbProvider.GetConfigDBClient()

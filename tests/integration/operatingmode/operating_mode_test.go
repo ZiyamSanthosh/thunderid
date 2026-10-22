@@ -24,8 +24,10 @@ const (
 )
 
 type operatingModeError struct {
-	Code        string `json:"error"`
-	Description string `json:"error_description"`
+	Code        string `json:"code"`
+	Description struct {
+		Key string `json:"key"`
+	} `json:"description"`
 }
 
 type flowFeatureError struct {
@@ -45,6 +47,7 @@ type OperatingModeTestSuite struct {
 	directFenceApps         map[string]string
 	applicationIDs          []string
 	flowIDs                 []string
+	modeRestored            bool
 }
 
 func TestOperatingModeTestSuite(t *testing.T) {
@@ -60,6 +63,9 @@ func (ts *OperatingModeTestSuite) SetupSuite() {
 	ts.originalConfig = original
 	ts.createCapabilityFenceFixtures()
 
+	// Registered before the patch, so a failure anywhere after it still restores the server for the suites
+	// that run later.
+	ts.T().Cleanup(ts.restoreOperatingMode)
 	ts.Require().NoError(testutils.PatchDeploymentConfig(map[string]interface{}{
 		operatingModeConfigKey: "restricted",
 	}), "failed to enable restricted mode")
@@ -72,7 +78,20 @@ func (ts *OperatingModeTestSuite) SetupSuite() {
 }
 
 func (ts *OperatingModeTestSuite) TearDownSuite() {
-	// Use non-fatal assertions so every restoration step is attempted even if an earlier one fails.
+	ts.restoreOperatingMode()
+	ts.assertAttributeWasNotPersisted()
+	ts.cleanupCapabilityFenceFixtures()
+}
+
+// restoreOperatingMode puts the original operating mode back and restarts the server. It runs once,
+// from whichever of the teardown and the registered cleanup reaches it first. It uses non-fatal
+// assertions so every step is attempted even if an earlier one fails.
+func (ts *OperatingModeTestSuite) restoreOperatingMode() {
+	if ts.modeRestored {
+		return
+	}
+	ts.modeRestored = true
+
 	ts.Assert().NoError(testutils.PatchDeploymentConfig(map[string]interface{}{
 		operatingModeConfigKey: ts.originalConfig,
 	}), "teardown: failed to restore the operating mode")
@@ -80,8 +99,6 @@ func (ts *OperatingModeTestSuite) TearDownSuite() {
 		"teardown: failed to restart ThunderID after restoring the operating mode")
 	ts.Assert().NoError(testutils.ObtainAdminAccessToken(),
 		"teardown: failed to restore the shared admin access token")
-	ts.assertAttributeWasNotPersisted()
-	ts.cleanupCapabilityFenceFixtures()
 }
 
 func (ts *OperatingModeTestSuite) TestAuthenticationAuthorizationAndTokenEndpointsRemainAvailable() {
@@ -95,6 +112,9 @@ func (ts *OperatingModeTestSuite) TestAuthenticationAuthorizationAndTokenEndpoin
 		{name: "OIDC discovery", method: http.MethodGet, path: "/.well-known/openid-configuration"},
 		{name: "flow execution", method: http.MethodPost, path: "/flow/execute", body: []byte(`{}`)},
 		{name: "token endpoint", method: http.MethodPost, path: "/oauth2/token"},
+		{name: "Console", method: http.MethodGet, path: "/console/"},
+		{name: "application list", method: http.MethodGet, path: "/applications"},
+		{name: "user list", method: http.MethodGet, path: "/users"},
 	}
 
 	for _, tt := range tests {
@@ -104,7 +124,7 @@ func (ts *OperatingModeTestSuite) TestAuthenticationAuthorizationAndTokenEndpoin
 
 			ts.NotEqual(http.StatusServiceUnavailable, resp.StatusCode,
 				"%s must reach its registered handler; body: %s", tt.path, body)
-			ts.NotContains(string(body), `"error":"feature_unavailable"`)
+			ts.NotContains(string(body), `"code":"SSE-5030"`)
 		})
 	}
 }
@@ -115,12 +135,11 @@ func (ts *OperatingModeTestSuite) TestManagementEndpointsAreRestricted() {
 		method string
 		path   string
 	}{
-		{name: "applications", method: http.MethodGet, path: "/applications"},
-		{name: "users", method: http.MethodGet, path: "/users"},
+		{name: "application creation", method: http.MethodPost, path: "/applications"},
+		{name: "user creation", method: http.MethodPost, path: "/users"},
 		{name: "server configuration", method: http.MethodGet, path: "/server-config"},
 		{name: "dynamic client registration", method: http.MethodPost, path: "/oauth2/dcr/register"},
 		{name: "MCP", method: http.MethodPost, path: "/mcp"},
-		{name: "Console", method: http.MethodGet, path: "/console/"},
 	}
 
 	for _, tt := range tests {
@@ -133,8 +152,8 @@ func (ts *OperatingModeTestSuite) TestManagementEndpointsAreRestricted() {
 
 			var errResp operatingModeError
 			ts.Require().NoError(json.Unmarshal(body, &errResp))
-			ts.Equal("feature_unavailable", errResp.Code)
-			ts.NotEmpty(errResp.Description)
+			ts.Equal("SSE-5030", errResp.Code)
+			ts.NotEmpty(errResp.Description.Key)
 		})
 	}
 }
@@ -187,7 +206,6 @@ func (ts *OperatingModeTestSuite) TestExecutorCapabilitiesAreFencedInsideAuthent
 	}{
 		{name: "organization unit creation", app: "ou", code: "FET-1113"},
 		{name: "credential update", app: "credential", code: "FET-1116"},
-		{name: "passkey authentication", app: "passkey", code: "FET-1117"},
 	}
 
 	for _, tt := range tests {
@@ -244,10 +262,6 @@ func (ts *OperatingModeTestSuite) createCapabilityFenceFixtures() {
 		directFenceFlow("restricted_ou_creation", "OUExecutor", "", nil))
 	ts.directFenceApps["credential"] = ts.createFlowApplication("restricted-credential", userType.Handle,
 		directFenceFlow("restricted_credential_update", "CredentialSetter", "", nil))
-	ts.directFenceApps["passkey"] = ts.createFlowApplication("restricted-passkey", userType.Handle,
-		directFenceFlow("restricted_passkey_authentication", "PasskeyAuthExecutor", "challenge", map[string]interface{}{
-			"relyingPartyId": "localhost",
-		}))
 }
 
 func (ts *OperatingModeTestSuite) createFlowApplication(handle, userType string, flow testutils.Flow) string {

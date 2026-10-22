@@ -1,11 +1,13 @@
 // Copyright 2026 The ThunderID Authors
 // SPDX-License-Identifier: Apache-2.0
 
+// This file is temporary compatibility code for references that still hold entity type names. It is
+// removed together with the entity type reference normalizer in a later release.
+
 package idp
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/thunder-id/thunderid/internal/entitytype"
 	"github.com/thunder-id/thunderid/pkg/thunderidengine/providers"
@@ -34,9 +36,9 @@ func (s *idpStore) normalizeEntityTypeReferences(
 		return nil
 	}
 
-	handles, err := s.entityTypeNormalizer.NormalizeEntityTypeReferences(ctx, entitytype.TypeCategoryUser, userTypes)
+	handles, err := entitytype.ResolveReferences(ctx, s.entityTypeNormalizer, entitytype.TypeCategoryUser, userTypes)
 	if err != nil {
-		return fmt.Errorf("failed to normalize entity type references: %w", err)
+		return err
 	}
 
 	for _, configuration := range configurations {

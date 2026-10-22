@@ -152,32 +152,6 @@ func (suite *PasskeyAuthExecutorTestSuite) TestExecuteRegisterStart_RestrictedBe
 		mock.Anything, mock.Anything)
 }
 
-func (suite *PasskeyAuthExecutorTestSuite) TestExecuteChallenge_RestrictedBeforeAuthentication() {
-	suite.executor.featureGate = featuregate.NewGate(featuregate.PasskeyAuthentication)
-	ctx := createPasskeyNodeContext(passkeyExecutorModeChallenge, providers.FlowTypeAuthentication)
-
-	resp, err := suite.executor.Execute(ctx)
-
-	assert.NoError(suite.T(), err)
-	assert.Equal(suite.T(), providers.ExecFailure, resp.Status)
-	assert.Equal(suite.T(), ErrPasskeyAuthenticationRestricted.Code, resp.Error.Code)
-	suite.mockAuthnProvider.AssertNotCalled(suite.T(), "InitiateAuthentication", mock.Anything, mock.Anything,
-		mock.Anything, mock.Anything)
-}
-
-func (suite *PasskeyAuthExecutorTestSuite) TestExecuteVerify_RestrictedBeforeSignCounterUpdate() {
-	suite.executor.featureGate = featuregate.NewGate(featuregate.PasskeyAuthentication)
-	ctx := createPasskeyNodeContext(passkeyExecutorModeVerify, providers.FlowTypeAuthentication)
-
-	resp, err := suite.executor.Execute(ctx)
-
-	assert.NoError(suite.T(), err)
-	assert.Equal(suite.T(), providers.ExecFailure, resp.Status)
-	assert.Equal(suite.T(), ErrPasskeyAuthenticationRestricted.Code, resp.Error.Code)
-	suite.mockAuthnProvider.AssertNotCalled(suite.T(), "AuthenticateUser", mock.Anything, mock.Anything,
-		mock.Anything, mock.Anything, mock.Anything, mock.Anything)
-}
-
 func (suite *PasskeyAuthExecutorTestSuite) TestExecuteChallenge_Success() {
 	ctx := createPasskeyNodeContext(passkeyExecutorModeChallenge, providers.FlowTypeAuthentication)
 	ctx.RuntimeData[userAttributeUserID] = testPasskeyUserID

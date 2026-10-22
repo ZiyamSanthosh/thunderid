@@ -36,7 +36,7 @@ func (suite *InboundClientStoreTestSuite) expectInboundClientQuery(row map[strin
 }
 
 func (suite *InboundClientStoreTestSuite) TestGetInboundClientByEntityID_NormalizesEntityTypeReferences() {
-	normalizer := entitytypemock.NewEntityTypeReferenceNormalizerMock(suite.T())
+	normalizer := entitytypemock.NewEntityTypeReferenceNormalizerInterfaceMock(suite.T())
 	normalizer.On("NormalizeEntityTypeReferences", mock.Anything, entitytype.TypeCategoryUser,
 		[]string{"Customer", "customer"}).
 		Return(map[string]string{"Customer": "customer", "customer": "customer"}, nil).Once()
@@ -54,7 +54,7 @@ func (suite *InboundClientStoreTestSuite) TestGetInboundClientByEntityID_Normali
 }
 
 func (suite *InboundClientStoreTestSuite) TestGetInboundClientByEntityID_KeepsUnresolvedEntityTypes() {
-	normalizer := entitytypemock.NewEntityTypeReferenceNormalizerMock(suite.T())
+	normalizer := entitytypemock.NewEntityTypeReferenceNormalizerInterfaceMock(suite.T())
 	normalizer.On("NormalizeEntityTypeReferences", mock.Anything, entitytype.TypeCategoryUser,
 		[]string{"Customer", "Gone"}).
 		Return(map[string]string{"Customer": "customer"}, nil).Once()
@@ -69,7 +69,7 @@ func (suite *InboundClientStoreTestSuite) TestGetInboundClientByEntityID_KeepsUn
 }
 
 func (suite *InboundClientStoreTestSuite) TestGetInboundClientByEntityID_SkipsNormalizerWithoutTypes() {
-	suite.store.entityTypeNormalizer = entitytypemock.NewEntityTypeReferenceNormalizerMock(suite.T())
+	suite.store.entityTypeNormalizer = entitytypemock.NewEntityTypeReferenceNormalizerInterfaceMock(suite.T())
 	suite.expectInboundClientQuery(inboundClientRow("app1", nil, nil))
 
 	client, err := suite.store.GetInboundClientByEntityID(context.Background(), "app1")
@@ -79,7 +79,7 @@ func (suite *InboundClientStoreTestSuite) TestGetInboundClientByEntityID_SkipsNo
 }
 
 func (suite *InboundClientStoreTestSuite) TestGetInboundClientByEntityID_ReturnsNormalizerError() {
-	normalizer := entitytypemock.NewEntityTypeReferenceNormalizerMock(suite.T())
+	normalizer := entitytypemock.NewEntityTypeReferenceNormalizerInterfaceMock(suite.T())
 	normalizer.On("NormalizeEntityTypeReferences", mock.Anything, entitytype.TypeCategoryUser,
 		[]string{"Customer"}).
 		Return(nil, errors.New("lookup failed")).Once()
@@ -93,7 +93,7 @@ func (suite *InboundClientStoreTestSuite) TestGetInboundClientByEntityID_Returns
 }
 
 func (suite *InboundClientStoreTestSuite) TestGetInboundClientList_NormalizesAllClientsWithOneLookupPerCategory() {
-	normalizer := entitytypemock.NewEntityTypeReferenceNormalizerMock(suite.T())
+	normalizer := entitytypemock.NewEntityTypeReferenceNormalizerInterfaceMock(suite.T())
 	normalizer.On("NormalizeEntityTypeReferences", mock.Anything, entitytype.TypeCategoryUser,
 		[]string{"Customer", "Employee"}).
 		Return(map[string]string{"Customer": "customer", "Employee": "employee"}, nil).Once()
@@ -111,11 +111,4 @@ func (suite *InboundClientStoreTestSuite) TestGetInboundClientList_NormalizesAll
 	suite.Len(clients, 2)
 	suite.Equal([]string{"customer"}, clients[0].AllowedUserTypes)
 	suite.Equal([]string{"employee"}, clients[1].AllowedUserTypes)
-}
-
-func (suite *InboundClientStoreTestSuite) TestReplaceWithHandles() {
-	suite.Nil(replaceWithHandles(nil, map[string]string{"a": "b"}))
-	suite.Equal([]string{"x", "customer", "y"},
-		replaceWithHandles([]string{"x", "Customer", "customer", "y", "x"}, map[string]string{"Customer": "customer"}))
-	suite.Equal([]string{"Customer"}, replaceWithHandles([]string{"Customer"}, nil))
 }
