@@ -17,18 +17,25 @@ func verifyAgentNameCollisionGuard(t *testing.T, environment migrationharness.En
 	output := environment.RunMigrationCommandExpectFailure(t, "apply migrate")
 	require.Contains(t, output, "colliding name values")
 
+	resolveAgentNameCollision(t, environment)
+
 	entityDB := environment.OpenDatabase(t, "entitydb")
 	migrationharness.AssertQueryValue(t, entityDB,
 		`SELECT COUNT(*)::TEXT FROM "MIGRATION_PROGRESS" WHERE OPERATION_ID = $1`,
 		"0", "2.0.0/entitydb/49_migrate_agent_names_to_attributes")
+
+	environment.RunMigrationCommand(t, "resume")
+	t.Log("verified: an agent-name collision blocks migrate, while duplicate non-agent names do not")
+}
+
+func resolveAgentNameCollision(t *testing.T, environment migrationharness.Environment) {
+	t.Helper()
+	entityDB := environment.OpenDatabase(t, "entitydb")
 	_, err := entityDB.Exec(`UPDATE "ENTITY"
 		SET ATTRIBUTES = jsonb_set(ATTRIBUTES, '{name}', '"Different User"'::jsonb)
 		WHERE DEPLOYMENT_ID = 'migration-deployment'
 		AND ID = '0199a123-4714-7abc-8def-0123456789ab'`)
 	require.NoError(t, err)
-
-	environment.RunMigrationCommand(t, "resume")
-	t.Log("verified: an agent-name collision blocks migrate, while duplicate non-agent names do not")
 }
 
 func verifyMigrateAgentNames(t *testing.T, environment migrationharness.Environment) {

@@ -56,7 +56,7 @@ type MigrationRunResult struct {
 	Resumed         bool
 }
 
-// MigrationWorkflowResult contains the ordered phase results of one safe automatic migration.
+// MigrationWorkflowResult contains the phase results completed before the serving cutover.
 type MigrationWorkflowResult struct {
 	Phases []MigrationRunResult
 }
@@ -245,22 +245,21 @@ func (c *MigrationCoordinator) applyPhaseWithLock(
 	return result, err
 }
 
-// ApplySafe executes expand and migrate in order while deliberately leaving contract for explicit execution.
+// ApplySafe executes only expand so operators can start and verify the target, then drain the source
+// before explicitly starting migrate.
 func (c *MigrationCoordinator) ApplySafe(
 	ctx context.Context,
 	selection MigrationSelection,
 ) (MigrationWorkflowResult, error) {
-	result := MigrationWorkflowResult{Phases: make([]MigrationRunResult, 0, 2)}
+	result := MigrationWorkflowResult{Phases: make([]MigrationRunResult, 0, 1)}
 	if err := c.validateSafeWorkflow(); err != nil {
 		return result, err
 	}
 	err := c.withExecutionLocks(ctx, 0, func(lockCtx context.Context) error {
-		for _, phase := range []OperationPhase{OperationPhaseExpand, OperationPhaseMigrate} {
-			phaseResult, err := c.applyPhase(lockCtx, phase, selection)
-			result.Phases = append(result.Phases, phaseResult)
-			if err != nil {
-				return err
-			}
+		phaseResult, err := c.applyPhase(lockCtx, OperationPhaseExpand, selection)
+		result.Phases = append(result.Phases, phaseResult)
+		if err != nil {
+			return err
 		}
 		return nil
 	})
@@ -268,17 +267,18 @@ func (c *MigrationCoordinator) ApplySafe(
 }
 
 func (c *MigrationCoordinator) validateSafeWorkflow() error {
-	preContractStores := make(map[StoreID]struct{})
-	for _, phase := range [][]Operation{c.plan.Expand, c.plan.Migrate} {
-		for _, operation := range phase {
-			preContractStores[operation.Definition().StoreID] = struct{}{}
-		}
+	expandStores := make(map[StoreID]struct{})
+	for _, operation := range c.plan.Expand {
+		expandStores[operation.Definition().StoreID] = struct{}{}
 	}
-	for _, operation := range c.plan.Contract {
-		storeID := operation.Definition().StoreID
-		if _, exists := preContractStores[storeID]; !exists {
+	for _, phase := range [][]Operation{c.plan.Migrate, c.plan.Contract} {
+		for _, operation := range phase {
+			storeID := operation.Definition().StoreID
+			if _, exists := expandStores[storeID]; exists {
+				continue
+			}
 			return fmt.Errorf(
-				"%w: store %q has contract operations but no expand or migrate operation to establish contract readiness",
+				"%w: store %q has post-expand operations but no expand operation to establish the serving boundary",
 				ErrSafeWorkflowUnsupported, storeID)
 		}
 	}

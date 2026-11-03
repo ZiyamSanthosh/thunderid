@@ -202,7 +202,7 @@ func (suite *ProvisioningExecutorTestSuite) TestExecute_NonRegistrationFlow() {
 }
 
 func (suite *ProvisioningExecutorTestSuite) TestExecute_RestrictedModeAllowsAuthenticationWithoutJIT() {
-	suite.executor.featureGate = featuregate.NewGate(featuregate.UserProvisioning)
+	suite.executor.featureGate = featuregate.NewGate(featuregate.EntityProvisioning)
 	ctx := &providers.NodeContext{
 		ExecutionID: "flow-123",
 		FlowType:    providers.FlowTypeAuthentication,
@@ -215,7 +215,7 @@ func (suite *ProvisioningExecutorTestSuite) TestExecute_RestrictedModeAllowsAuth
 }
 
 func (suite *ProvisioningExecutorTestSuite) TestExecute_RestrictedModeRejectsJITBeforeMutation() {
-	suite.executor.featureGate = featuregate.NewGate(featuregate.UserProvisioning)
+	suite.executor.featureGate = featuregate.NewGate(featuregate.EntityProvisioning)
 	ctx := &providers.NodeContext{
 		ExecutionID: "flow-123",
 		FlowType:    providers.FlowTypeAuthentication,

@@ -43,7 +43,10 @@ var (
 	queryUpdateAgentNameRepresentation = dbmodel.DBQuery{
 		ID: "MIG-ENT_MGT-13",
 		PostgresQuery: `UPDATE "ENTITY" SET ATTRIBUTES = $1, SYSTEM_ATTRIBUTES = $2
-			WHERE ID = $3 AND DEPLOYMENT_ID = $4`,
+			WHERE ID = $3
+			AND ATTRIBUTES IS NOT DISTINCT FROM $4
+			AND SYSTEM_ATTRIBUTES IS NOT DISTINCT FROM $5
+			AND DEPLOYMENT_ID = $6`,
 	}
 	queryUpsertAgentNameIdentifier = dbmodel.DBQuery{
 		ID: "MIG-ENT_MGT-14",
@@ -85,11 +88,13 @@ type agentNameCheckpoint struct {
 }
 
 type agentNameRecord struct {
-	id               string
-	entityType       string
-	deploymentID     string
-	attributes       map[string]interface{}
-	systemAttributes map[string]interface{}
+	id                       string
+	entityType               string
+	deploymentID             string
+	attributes               map[string]interface{}
+	systemAttributes         map[string]interface{}
+	originalAttributes       interface{}
+	originalSystemAttributes interface{}
 }
 
 type agentNameIdentifier struct {
@@ -253,10 +258,16 @@ func (o *agentNameOperation) ExecuteBatch(
 			if err != nil {
 				return engine.ResumableBatchResult{}, fmt.Errorf("encode agent system attributes: %w", err)
 			}
-			if _, err := execution.Access().Execute(ctx, engine.StoreIDEntityDB,
+			affected, err := execution.Access().Execute(ctx, engine.StoreIDEntityDB,
 				queryUpdateAgentNameRepresentation, string(attributesJSON), string(systemAttributesJSON),
-				record.id, record.deploymentID); err != nil {
+				record.id, record.originalAttributes, record.originalSystemAttributes,
+				record.deploymentID)
+			if err != nil {
 				return engine.ResumableBatchResult{}, fmt.Errorf("update agent %q name representation: %w", record.id, err)
+			}
+			if affected != 1 {
+				return engine.ResumableBatchResult{}, fmt.Errorf(
+					"update agent %q name representation: source value changed concurrently", record.id)
 			}
 		}
 		source := "attribute"
@@ -452,9 +463,18 @@ func readAgentNameRecord(row engine.QueryRow) (agentNameRecord, error) {
 	if err != nil {
 		return agentNameRecord{}, fmt.Errorf("read agent %q system attributes: %w", id, err)
 	}
+	originalAttributes, hasAttributes := row["attributes"]
+	if !hasAttributes {
+		return agentNameRecord{}, fmt.Errorf("read agent %q attributes: column is missing", id)
+	}
+	originalSystemAttributes, hasSystemAttributes := row["system_attributes"]
+	if !hasSystemAttributes {
+		return agentNameRecord{}, fmt.Errorf("read agent %q system attributes: column is missing", id)
+	}
 	return agentNameRecord{
 		id: id, entityType: entityType, deploymentID: deploymentID,
 		attributes: attributes, systemAttributes: systemAttributes,
+		originalAttributes: originalAttributes, originalSystemAttributes: originalSystemAttributes,
 	}, nil
 }
 

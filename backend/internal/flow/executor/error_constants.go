@@ -1778,7 +1778,7 @@ var (
 		},
 		ErrorDescription: tidcommon.I18nMessage{
 			Key:          "flows.executor.errors.jit_provision_restricted_desc",
-			DefaultValue: "JIT provisioning is unavailable while ThunderID is in restricted mode",
+			DefaultValue: "JIT provisioning is unavailable while the server is in restricted mode",
 		},
 	}
 
@@ -1792,7 +1792,49 @@ var (
 		},
 		ErrorDescription: tidcommon.I18nMessage{
 			Key:          "flows.executor.errors.ou_creation_restricted_desc",
-			DefaultValue: "Organization unit creation is unavailable while ThunderID is in restricted mode",
+			DefaultValue: "Organization unit creation is unavailable while the server is in restricted mode",
+		},
+	}
+
+	// ErrAccountLinkingRestricted is returned when server policy fences account-link writes.
+	ErrAccountLinkingRestricted = tidcommon.ServiceError{
+		Type: tidcommon.ClientErrorType,
+		Code: "FET-1133",
+		Error: tidcommon.I18nMessage{
+			Key:          "flows.executor.errors.account_linking_restricted",
+			DefaultValue: "Account linking temporarily unavailable",
+		},
+		ErrorDescription: tidcommon.I18nMessage{
+			Key:          "flows.executor.errors.account_linking_restricted_desc",
+			DefaultValue: "Account linking is unavailable while the server is in restricted mode",
+		},
+	}
+
+	// ErrUserAttributeUpdateRestricted is returned when server policy fences profile updates.
+	ErrUserAttributeUpdateRestricted = tidcommon.ServiceError{
+		Type: tidcommon.ClientErrorType,
+		Code: "FET-1134",
+		Error: tidcommon.I18nMessage{
+			Key:          "flows.executor.errors.user_attribute_update_restricted",
+			DefaultValue: "Profile update temporarily unavailable",
+		},
+		ErrorDescription: tidcommon.I18nMessage{
+			Key:          "flows.executor.errors.user_attribute_update_restricted_desc",
+			DefaultValue: "Profile updates are unavailable while the server is in restricted mode",
+		},
+	}
+
+	// ErrCredentialUpdateRestricted is returned when server policy fences credential mutations.
+	ErrCredentialUpdateRestricted = tidcommon.ServiceError{
+		Type: tidcommon.ClientErrorType,
+		Code: "FET-1135",
+		Error: tidcommon.I18nMessage{
+			Key:          "flows.executor.errors.credential_update_restricted",
+			DefaultValue: "Credential update temporarily unavailable",
+		},
+		ErrorDescription: tidcommon.I18nMessage{
+			Key:          "flows.executor.errors.credential_update_restricted_desc",
+			DefaultValue: "Credential updates are unavailable while the server is in restricted mode",
 		},
 	}
 )

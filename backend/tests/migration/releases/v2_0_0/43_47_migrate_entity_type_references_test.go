@@ -67,21 +67,13 @@ func verifyMigrateEntityTypeReferences(t *testing.T, environment migrationharnes
 				WHERE DEPLOYMENT_ID = 'migration-deployment'
 				AND FLOW_ID = '0199a123-4791-7abc-8def-0123456789ab' AND VERSION = 1`,
 			"declarative-customer")
-		migrationharness.AssertQueryValue(t, configDB,
-			`SELECT PROPERTIES -> 'subjectAttributeMappings' -> 1 ->> 'entityType'
-				FROM "AUTHORIZATION_PDP_CONNECTION"
-				WHERE DEPLOYMENT_ID = 'migration-deployment'
-				AND ID = '0199a123-4782-7abc-8def-0123456789ab'`,
-			"declarative-customer")
-
 		for _, operationID := range []string{
 			"2.0.0/configdb/44_migrate_inbound_client_entity_type_references",
 			"2.0.0/configdb/45_migrate_idp_entity_type_references",
-			"2.0.0/configdb/46_migrate_authorization_pdp_entity_type_references",
 			"2.0.0/configdb/47_migrate_flow_entity_type_references",
 		} {
 			migrationharness.AssertOperationCompleted(t, configDB, operationID)
 		}
-		t.Log("verified: database and declarative entity-type names were replaced by handles in every supported reference")
+		t.Log("verified: database and declarative entity-type names were replaced by handles in source-backed references")
 	})
 }

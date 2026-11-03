@@ -13,6 +13,7 @@ import (
 	"github.com/thunder-id/thunderid/internal/entitytype"
 	"github.com/thunder-id/thunderid/internal/flow/common"
 	"github.com/thunder-id/thunderid/internal/flow/core"
+	"github.com/thunder-id/thunderid/internal/system/featuregate"
 	"github.com/thunder-id/thunderid/internal/system/log"
 	tidcommon "github.com/thunder-id/thunderid/pkg/thunderidengine/common"
 	"github.com/thunder-id/thunderid/pkg/thunderidengine/providers"
@@ -34,6 +35,7 @@ type accountLinkingExecutor struct {
 	providers.Executor
 	authnProvider     providers.AuthnProviderManager
 	entityTypeService entitytype.EntityTypeServiceInterface
+	featureGate       *featuregate.Gate
 	logger            *log.Logger
 }
 
@@ -44,6 +46,7 @@ func newAccountLinkingExecutor(
 	flowFactory core.FlowFactoryInterface,
 	authnProvider providers.AuthnProviderManager,
 	entityTypeService entitytype.EntityTypeServiceInterface,
+	featureGate *featuregate.Gate,
 ) *accountLinkingExecutor {
 	logger := log.GetLogger().With(
 		log.String(log.LoggerKeyComponentName, ExecutorNameAccountLinking),
@@ -64,6 +67,7 @@ func newAccountLinkingExecutor(
 		Executor:          base,
 		authnProvider:     authnProvider,
 		entityTypeService: entityTypeService,
+		featureGate:       featureGate,
 		logger:            logger,
 	}
 }
@@ -133,6 +137,11 @@ func (e *accountLinkingExecutor) resolveIdentity(ctx *providers.NodeContext,
 	if candidates == nil || len(candidates.EntityIDs) == 0 {
 		logger.Debug(ctx.Context, "No local account for this federated identity, continuing as a new user")
 		execResp.Status = providers.ExecComplete
+		return execResp, nil
+	}
+	if !e.featureGate.IsEnabled(featuregate.AccountLinking) {
+		execResp.Status = providers.ExecFailure
+		execResp.Error = &ErrAccountLinkingRestricted
 		return execResp, nil
 	}
 
@@ -240,6 +249,11 @@ func (e *accountLinkingExecutor) refuseCandidate(ctx *providers.NodeContext,
 // the federated token on the AuthUser.
 func (e *accountLinkingExecutor) writeLink(ctx *providers.NodeContext, execResp *providers.ExecutorResponse,
 	entityID string, logger *log.Logger) error {
+	if !e.featureGate.IsEnabled(featuregate.AccountLinking) {
+		execResp.Status = providers.ExecFailure
+		execResp.Error = &ErrAccountLinkingRestricted
+		return nil
+	}
 	federated := federatedIdentityFrom(ctx)
 	if federated == nil {
 		return errors.New("no federated identity to link")

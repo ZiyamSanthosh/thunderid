@@ -133,7 +133,7 @@ positive. Not changed; to be done with the operation's owner.
 To re-enable 49: uncomment the four lines in `release.go` and the matching lines in `release_test.go`
 (restore counts to 9 and 8), rebuild the pack.
 
-### 1.3 Declarative entity types injected into operations 43 to 47 through the entity type service  (DONE)
+### 1.3 Declarative entity types injected into operations 43 to 45 and 47 through the entity type service  (DONE)
 
 Decision record: sections 3.1 below. Final decisions: the real `EntityTypeService` is used (not a new
 reader), built over the declarative store only; no deployment binding (the file store has no
@@ -145,7 +145,7 @@ declarative half is injected, database types are still read by the operations' o
 | `internal/entitytype/init.go` | New `InitializeDeclarativeService(ouService, authzService)`: builds the service over `newEntityTypeFileBasedStore()` and loads the resource files. No routes, no MCP, no database reads, store-mode config ignored. |
 | `internal/ou/init.go` | New `InitializeService(cacheManager, authzService)`: the OU service alone (needed only to resolve `ouHandle` in resource files). |
 | `releases/v2_0_0/declarative_entity_types.go` (new) | Exported `DeclarativeEntityType`, `DeclarativeEntityTypes` interface, and the lazy, cached `declarativeEntityTypeSource`. |
-| `releases/v2_0_0/release.go` | `Dependencies.DeclarativeEntityTypes func() (DeclarativeEntityTypes, error)`; `migrationPlan` builds one source and passes it to the 10 operation constructors (forward and rollback of 43 to 47). |
+| `releases/v2_0_0/release.go` | `Dependencies.DeclarativeEntityTypes func() (DeclarativeEntityTypes, error)`; `migrationPlan` builds one source and passes it to the eight operation constructors (forward and rollback of 43 to 45 and 47). |
 | `releases/v2_0_0/entity_type_reference_operation.go` | Mapping gets `declaredByName` / `declaredByHandle` (keyed by category + value, no deployment). `readMapping` merges the declarative types; `translate` consults database then declarative, and fails on a conflict. |
 | `releases/v2_0_0/43..47_*.go` | Constructors take the source and wrap their config with `withDeclaredEntityTypes`. |
 | `internal/system/migration/current/current.go` | Forwards the two new types (alias). |
@@ -215,7 +215,7 @@ partial run) is flagged instead of passing.
 ```
 database type name 'customer', declarative handle 'customer' (user):
 before: handle 'customer'    -> 2.0.0 server fails to start
-after:  handle 'customer_1'  -> operations 43 to 47 map the stored name 'customer' to 'customer_1'
+after:  handle 'customer_1'  -> operations 43 to 45 and 47 map the stored name 'customer' to 'customer_1'
 ```
 
 Operation 05 (unique index on `HANDLE, CATEGORY, DEPLOYMENT_ID`) is purely about database rows and was
@@ -356,7 +356,7 @@ and `IsReadOnly` marks declarative entries. So the lookup the operations need is
 2. `releases/v2_0_0`: declare a narrow interface next to the operations, for example
    `declarativeEntityTypes interface{ ListDeclarative(ctx, category) ([]declarativeEntityType, error) }`
    with `DisplayName`, `Handle`, `Category`. Add `Dependencies.EntityTypes func() (declarativeEntityTypes, error)`.
-3. Operations 04 (handle collision check), 05, 43 to 47 and their rollbacks (`readEntityTypeReferenceMapping`
+3. Operations 04 (handle collision check), 05, 43 to 45 and 47 and their rollbacks (`readEntityTypeReferenceMapping`
    in `entity_type_reference_operation.go`, `readEntityTypeHandleRecords` in
    `04_backfill_entity_type_handle.go`): merge declarative records into the mapping (name -> handle and
    handle -> name per category). Return a clear error if the plan needs the provider and it is missing.
@@ -440,7 +440,7 @@ migration metadata tables (`MIGRATION_*`), and anything operation 25/26's "drop"
    implementation recorded in section 3.1. No code changed for this yet.
 9. Implemented the injection (1.3): `InitializeDeclarativeService`, `ou.InitializeService`, the
    `DeclarativeEntityTypes` dependency, the lazy provider in `cmd/server`, and the mapping merge in
-   operations 43 to 47. First attempt filtered on `IsReadOnly` and found nothing (declarative-only
+   operations 43 to 45 and 47. First attempt filtered on `IsReadOnly` and found nothing (declarative-only
    store never sets it); removed the filter.
 10. Run stopped on `app/application` entities; fixed operation 43 to translate only user/agent (1.4).
 11. Full run succeeded: all four stores at their required level (2.2).
@@ -523,7 +523,7 @@ are globally scoped.
 
 **Migration impact.** The current implementation applies the one loaded declarative type set to every
 deployment selected for migration. Operation 04 reserves those handles while generating database
-handles, and operations 43 through 47 use them to translate stored references. In a single-deployment
+handles, and operations 43 through 45 and 47 use them to translate stored references. In a single-deployment
 database this is deterministic. In a multi-deployment database it can reserve a handle or translate a
 reference in deployment B using declarative metadata belonging to configured deployment A. The
 migration cannot safely infer a different owner because the files provide no deployment identity.
@@ -551,8 +551,9 @@ around the cutover unless the source application is confirmed not to rely on `SE
 ### 5.4 Added PostgreSQL integration coverage
 
 - Operation 04 reserves a declarative handle obtained through the real migration service provider.
-- Operations 43 through 47 translate references for both database-backed and declarative entity
-  types, including a post-Expand authorization PDP row.
+- Operations 43 through 45 and 47 translate references for both database-backed and declarative
+  entity types. Operation 46 and its authorization PDP fixture were later removed because those
+  references are outside the current migration plan.
 - Operations 25 and 26 cut over with their actual source foreign-key dependencies present.
 - Operation 49 rejects a collision involving an agent without rejecting duplicate non-agent names.
 14. The project owner finished operation 49 and re-enabled it (it now takes the declarative source as a

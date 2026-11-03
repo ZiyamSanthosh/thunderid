@@ -11,6 +11,7 @@ import (
 	"time"
 
 	authnprovidercm "github.com/thunder-id/thunderid/internal/authnprovider/common"
+	"github.com/thunder-id/thunderid/internal/entitytype"
 	serverconst "github.com/thunder-id/thunderid/internal/system/constants"
 	dbmodel "github.com/thunder-id/thunderid/internal/system/database/model"
 	"github.com/thunder-id/thunderid/internal/system/database/provider"
@@ -84,14 +85,17 @@ var getDBProvider = provider.GetDBProvider
 
 // entityDBStore is the database implementation of entityStoreInterface.
 type entityDBStore struct {
-	indexedAttributes map[string]bool
-	dbProvider        provider.DBProviderInterface
-	logger            *log.Logger
+	indexedAttributes    map[string]bool
+	dbProvider           provider.DBProviderInterface
+	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizerInterface
+	logger               *log.Logger
 }
 
 // newEntityDBStore creates a new instance of entityDBStore.
 // Indexed attributes start empty; consumers must call LoadIndexedAttributes after init.
-func newEntityDBStore() (entityStoreInterface, providers.Transactioner, error) {
+func newEntityDBStore(
+	entityTypeNormalizer entitytype.EntityTypeReferenceNormalizerInterface,
+) (entityStoreInterface, providers.Transactioner, error) {
 	dbProvider := getDBProvider()
 	client, err := dbProvider.GetEntityDBClient()
 	if err != nil {
@@ -103,9 +107,10 @@ func newEntityDBStore() (entityStoreInterface, providers.Transactioner, error) {
 	}
 
 	return &entityDBStore{
-		indexedAttributes: make(map[string]bool),
-		dbProvider:        dbProvider,
-		logger:            log.GetLogger().With(log.String(log.LoggerKeyComponentName, "EntityStore")),
+		indexedAttributes:    make(map[string]bool),
+		dbProvider:           dbProvider,
+		entityTypeNormalizer: entityTypeNormalizer,
+		logger:               log.GetLogger().With(log.String(log.LoggerKeyComponentName, "EntityStore")),
 	}, transactioner, nil
 }
 
@@ -212,7 +217,11 @@ func (es *entityDBStore) GetEntity(ctx context.Context, id string) (providers.En
 		return providers.Entity{}, fmt.Errorf("unexpected number of results: %d", len(results))
 	}
 
-	return buildEntityFromResultRow(results[0])
+	entities, err := es.buildEntities(ctx, results)
+	if err != nil {
+		return providers.Entity{}, err
+	}
+	return entities[0], nil
 }
 
 // GetEntityWithCredentials retrieves an entity with all credential columns.
@@ -237,13 +246,13 @@ func (es *entityDBStore) GetEntityWithCredentials(ctx context.Context, id string
 	}
 
 	row := results[0]
-	entity, err := buildEntityFromResultRow(row)
+	entities, err := es.buildEntities(ctx, results)
 	if err != nil {
 		return nil, err
 	}
 
 	return &entityWithCredentials{
-		Entity:            &entity,
+		Entity:            &entities[0],
 		SchemaCredentials: parseJSONColumn(row, "credentials"),
 		SystemCredentials: parseJSONColumn(row, "system_credentials"),
 	}, nil
@@ -603,7 +612,7 @@ func (es *entityDBStore) SearchEntities(ctx context.Context,
 		return nil, ErrEntityNotFound
 	}
 
-	return buildEntitiesFromResults(results)
+	return es.buildEntities(ctx, results)
 }
 
 // GetIndexedAttributes returns the set of configured indexed attributes.
@@ -646,7 +655,7 @@ func (es *entityDBStore) GetEntityList(ctx context.Context, category string,
 		return nil, fmt.Errorf("failed to execute paginated query: %w", err)
 	}
 
-	return buildEntitiesFromResults(results)
+	return es.buildEntities(ctx, results)
 }
 
 // GetEntityListCountByOUIDs retrieves the total count of entities scoped to OU IDs.
@@ -688,7 +697,7 @@ func (es *entityDBStore) GetEntityListByOUIDs(ctx context.Context, category stri
 		return nil, fmt.Errorf("failed to execute paginated query: %w", err)
 	}
 
-	return buildEntitiesFromResults(results)
+	return es.buildEntities(ctx, results)
 }
 
 // GetEntityListCountBySystemAttributes retrieves the number of entities a system attribute query selects.
@@ -844,7 +853,7 @@ func (es *entityDBStore) GetEntitiesByIDs(ctx context.Context, entityIDs []strin
 			return nil, fmt.Errorf("failed to execute query: %w", err)
 		}
 
-		batch, err := buildEntitiesFromResults(results)
+		batch, err := es.buildEntities(ctx, results)
 		if err != nil {
 			return nil, err
 		}
@@ -1018,6 +1027,20 @@ func buildGroupFromResultRow(row map[string]interface{}) (providers.EntityGroup,
 	}
 
 	return providers.EntityGroup{ID: groupID, Name: name, OUID: ouID}, nil
+}
+
+// buildEntities builds entities from result rows and converts their stored type references to handles.
+func (es *entityDBStore) buildEntities(
+	ctx context.Context, results []map[string]interface{},
+) ([]providers.Entity, error) {
+	entities, err := buildEntitiesFromResults(results)
+	if err != nil {
+		return nil, err
+	}
+	if err := es.normalizeEntityTypeReferences(ctx, entities); err != nil {
+		return nil, err
+	}
+	return entities, nil
 }
 
 func buildEntitiesFromResults(results []map[string]interface{}) ([]providers.Entity, error) {

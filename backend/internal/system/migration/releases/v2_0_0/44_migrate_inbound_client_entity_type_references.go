@@ -27,7 +27,7 @@ var (
 	queryUpdateInboundClientEntityTypeReferences = dbmodel.DBQuery{
 		ID: "MIG-CFG_MGT-26",
 		PostgresQuery: `UPDATE "INBOUND_CLIENT" SET PROPERTIES = $1
-			WHERE ENTITY_ID = $2 AND DEPLOYMENT_ID = $3`,
+			WHERE ENTITY_ID = $2 AND PROPERTIES = $3 AND DEPLOYMENT_ID = $4`,
 	}
 )
 

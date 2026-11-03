@@ -15,6 +15,22 @@ type ErrorResponse struct {
 	Description tidcommon.I18nMessage `json:"description"`
 }
 
+// Operating mode error responses.
+var (
+	// ErrFeatureUnavailable is returned when the server's operating mode does not serve the request (HTTP 503).
+	ErrFeatureUnavailable = ErrorResponse{
+		Code: "SSE-5030",
+		Message: tidcommon.I18nMessage{
+			Key:          "error.operating_mode.feature_unavailable",
+			DefaultValue: "Feature unavailable",
+		},
+		Description: tidcommon.I18nMessage{
+			Key:          "error.operating_mode.feature_unavailable_description",
+			DefaultValue: "The requested feature is unavailable while the server is in restricted mode",
+		},
+	}
+)
+
 // Authentication and authorization error responses, returned by the security middleware.
 var (
 	// ErrUnauthorized is returned when authentication credentials are missing or invalid (HTTP 401).

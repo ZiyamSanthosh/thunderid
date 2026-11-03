@@ -175,14 +175,14 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 	hashService, err := cryptolib.Initialize(hashCfg)
 	fatalOnError(ctx, logger, err, "Failed to initialize HashService")
 
-	entityTypeService, entityTypeExporter, agentTypeExporter, err := entitytype.Initialize(
+	entityTypeService, entityTypeExporter, agentTypeExporter, entityTypeNormalizer, err := entitytype.Initialize(
 		mux, mcpServer, cacheManager, ouService, ouAuthzService)
 	fatalOnError(ctx, logger, err, "Failed to initialize EntityTypeService")
 	exporters = append(exporters, entityTypeExporter)
 	exporters = append(exporters, agentTypeExporter)
 
-	entityService, err := entity.Initialize(cacheManager, hashService, entityTypeService, ouService,
-		sharingService)
+	entityService, err := entity.Initialize(cacheManager, hashService, entityTypeService, entityTypeNormalizer,
+		ouService, sharingService)
 	fatalOnError(ctx, logger, err, "Failed to initialize EntityService")
 
 	entityProvider := entityprovider.InitializeEntityProvider(entityService)
@@ -283,7 +283,7 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 		role.NewEffectivePermissionResolver(roleService, groupService, entityService))
 
 	idpService, err := idp.Initialize(
-		cacheManager, entityTypeService, roleService, groupService, resourceService, ouService)
+		cacheManager, entityTypeService, entityTypeNormalizer, roleService, groupService, resourceService, ouService)
 	fatalOnError(ctx, logger, err, "Failed to initialize IDPService")
 
 	notifTemplateSvc, _, notifTemplateExporter, err := notificationtemplate.Initialize(
@@ -321,7 +321,7 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 	flowMgtService, flowMgtExporter, err := flowmgt.Initialize(
 		mux, mcpServer, cacheManager, flowFactory, execRegistry, interceptorRegistry, graphBuilder,
 		serverConfigService, ouService, notifTemplateSvc, httpConnectionService, flowConfigHandler, idpService,
-		false, sharingService)
+		false, sharingService, entityTypeNormalizer)
 	fatalOnError(ctx, logger, err, "Failed to initialize FlowMgtService")
 
 	// Two-phase initialization: inject the flow resolver into the OU service.
@@ -342,7 +342,8 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 	cimdService := cimd.Initialize(mux)
 	inboundClientService, err := inboundclient.Initialize(
 		cacheManager, certservice, entityProvider,
-		themeMgtService, layoutMgtService, flowMgtService, entityTypeService, runtimeCryptoSvc, jweService,
+		themeMgtService, layoutMgtService, flowMgtService, entityTypeService, entityTypeNormalizer,
+		runtimeCryptoSvc, jweService,
 		cimdService, nil, nil, inboundclient.KeepingValueReferences())
 	fatalOnError(ctx, logger, err, "Failed to initialize InboundClientService")
 

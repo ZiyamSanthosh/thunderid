@@ -39,6 +39,7 @@ Implemented:
     Explicit pre-contract rollback
 
 Required next:
+    Product-owned legacy reads for in-place representation migrations
     Automated mixed-version in-place qualification
     Serving-impact and backfill resource qualification
     Broader integrated failure injection
@@ -67,7 +68,8 @@ Conditional:
 | Explicit rollback | Implemented | Failed-operation, failed-phase and complete pre-contract scopes |
 | Realistic PostgreSQL operations | Implemented | Schema expansion, table creation, backfill, constraints, contract and rollback |
 | PostgreSQL integration coverage | Implemented | Separate and shared layouts, resume, concurrency, deployment selection and rollback |
-| Complete mixed-version serving qualification | Pending | Must keep source traffic active through standalone migration and target handoff |
+| Product dual-read compatibility | Pending | Feature developers must make the target read legacy representations used at the Expanded handoff |
+| Complete lifecycle qualification | Pending | Must cover source-serving Expand, target handoff, source drain and target-serving Migrate |
 | Serving-impact qualification | Pending | Must measure DDL lock behavior, latency and backfill resource use |
 | Configurable backfill resource controls | Pending | Batch size, pacing or throttling and limits must be operator-controlled |
 | Operator runbook | Pending | Must document the supported workflow and recovery boundaries |
@@ -79,15 +81,16 @@ Conditional:
 ## Implemented workflow
 
 The target ThunderID artifact owns the migration definitions and runs as a standalone administrative
-process. The default pre-serving workflow is:
+process. The workflow is:
 
 1. Initialize or inspect migration metadata.
 2. Run the read-only status and readiness checks.
 3. Apply `expand` while the source version remains compatible.
-4. Apply or resume `migrate` until every selected target is verified.
-5. Reach `contract_ready` and start the target version.
-6. Shift traffic and drain every source instance.
-7. Explicitly authorize and apply `contract`.
+4. Start the target version in restricted mode at the Expanded boundary.
+5. Shift traffic and drain every source instance.
+6. Apply or resume `migrate` while the target serves using product-owned legacy reads.
+7. Reach `contract_ready`, observe the rollback window, then explicitly authorize and apply
+   `contract`.
 
 The default apply workflow stops before contract. Contract cannot be reached accidentally through
 the generic phase execution path.
@@ -124,19 +127,19 @@ the generic phase execution path.
 
 ### Automated mixed-version qualification
 
-The qualification harness must run a supported source artifact and target artifact together. It
-must continuously exercise authentication, authorization, token, logout and revocation traffic
-while the target artifact performs migration. It must then start the target server, shift traffic,
-drain the source and apply contract explicitly.
+The qualification harness must run a supported source artifact and target artifact through the new
+handoff. It must continuously exercise authentication, authorization, token, logout and revocation
+traffic while source serves during Expand and target serves during Migrate. It must shift traffic,
+drain the source before Migrate and apply Contract explicitly after the rollback window.
 
 The test must prove that:
 
 - allowed traffic remains successful during migration;
 - fenced mutations fail before writing;
-- interruption and resume preserve availability and correctness;
-- target readiness is not reported before verification finishes;
-- target startup succeeds only at a compatible boundary;
-- source startup or continued serving is rejected after contract; and
+- product-owned fallback reads handle every partially migrated representation;
+- interruption, resume and compare-and-set conflicts preserve availability and correctness;
+- target startup succeeds at Expanded but not while Expand is still running;
+- source startup is rejected after Migrate begins; and
 - both separate and shared PostgreSQL layouts behave consistently.
 
 ### Serving-impact qualification
@@ -164,7 +167,6 @@ The following work is not part of the immediate base qualification:
 - service-enabled migration operations, until a real operation requires business-service access;
 - change capture, transactional outbox and conflict policies, until a migration keeps an affected
   representation writable during backfill;
-- target serving while `migrate` is incomplete;
 - hosted background migration coordination;
 - contract-only release plans;
 - database-copy or blue-green orchestration;

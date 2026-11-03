@@ -10,6 +10,7 @@ import (
 	"github.com/thunder-id/thunderid/internal/entityprovider"
 	"github.com/thunder-id/thunderid/internal/flow/common"
 	"github.com/thunder-id/thunderid/internal/flow/core"
+	"github.com/thunder-id/thunderid/internal/system/featuregate"
 	"github.com/thunder-id/thunderid/internal/system/log"
 	"github.com/thunder-id/thunderid/pkg/thunderidengine/providers"
 )
@@ -20,6 +21,7 @@ type credentialSetter struct {
 	entityProvider entityprovider.EntityProviderInterface
 	authnProvider  providers.AuthnProviderManager
 	accessGuard    *accessGuard
+	featureGate    *featuregate.Gate
 	logger         *log.Logger
 }
 
@@ -29,6 +31,7 @@ func newCredentialSetter(
 	entityProvider entityprovider.EntityProviderInterface,
 	authnProvider providers.AuthnProviderManager,
 	accessGuard *accessGuard,
+	featureGate *featuregate.Gate,
 ) *credentialSetter {
 	logger := log.GetLogger().With(log.String(log.LoggerKeyComponentName, "CredentialSetter"))
 	base := flowFactory.CreateExecutor(
@@ -55,6 +58,7 @@ func newCredentialSetter(
 		entityProvider: entityProvider,
 		authnProvider:  authnProvider,
 		accessGuard:    accessGuard,
+		featureGate:    featureGate,
 		logger:         logger,
 	}
 }
@@ -67,6 +71,11 @@ func (e *credentialSetter) Execute(ctx *providers.NodeContext) (*providers.Execu
 	execResp := &providers.ExecutorResponse{
 		AdditionalData: make(map[string]string),
 		RuntimeData:    make(map[string]string),
+	}
+	if !e.featureGate.IsEnabled(featuregate.CredentialUpdate) {
+		execResp.Status = providers.ExecFailure
+		execResp.Error = &ErrCredentialUpdateRestricted
+		return execResp, nil
 	}
 
 	// Check if password is provided

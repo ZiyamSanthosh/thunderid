@@ -118,10 +118,11 @@ For every daily image, the SaaS deployment workflow should:
 4. Perform an ordinary rolling deployment when no database transition is required.
 5. Resolve pending migration revisions from the compiled catalog when a database is behind.
 6. Enable restricted mode on serving source instances when the migration requires write fencing.
-7. Run readiness checks and the pre-serving migration phases from the target image.
-8. Start target instances only after the required stores reach `contract_ready`.
+7. Run readiness checks and Expand from the target image.
+8. Start target instances in restricted mode after the required stores reach `expanded`.
 9. Shift traffic and drain source instances.
-10. Run contract explicitly after the rollback boundary is accepted.
+10. Run Migrate while target instances serve with the feature-specific legacy-read behavior.
+11. Run Contract explicitly after the rollback boundary is accepted.
 
 The normal startup compatibility gate remains mandatory. Timestamped artifact deployment must not
 bypass migration simply because the product was not assigned a public release version.
@@ -203,10 +204,10 @@ revisions by phase:
 ```text
 expand m000007
 expand m000008
+start restricted target
+drain source
 migrate m000007
 migrate m000008
-start target
-drain source
 contract m000008
 contract m000007
 ```

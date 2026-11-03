@@ -203,7 +203,7 @@ func (p *provisioningExecutor) Execute(ctx *providers.NodeContext) (*providers.E
 			execResp.Status = providers.ExecComplete
 			return execResp, nil
 		}
-		if !p.featureGate.IsEnabled(featuregate.UserProvisioning) {
+		if !p.featureGate.IsEnabled(featuregate.EntityProvisioning) {
 			execResp.Status = providers.ExecFailure
 			execResp.Error = &ErrJITProvisionRestricted
 			return execResp, nil

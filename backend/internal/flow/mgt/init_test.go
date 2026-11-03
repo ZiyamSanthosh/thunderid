@@ -748,6 +748,7 @@ func (s *InitTestSuite) TestInitializeStore_MutableMode() {
 		cache.Initialize(config.GetServerRuntime().Config.Cache, "test-deployment"),
 		mockValidator,
 		newOuProviderMock(s.T()),
+		nil,
 	)
 
 	s.NoError(err)
@@ -790,6 +791,7 @@ func (s *InitTestSuite) TestInitializeStore_DeclarativeMode() {
 		cache.Initialize(config.GetServerRuntime().Config.Cache, "test-deployment"),
 		mockValidator,
 		newOuProviderMock(s.T()),
+		nil,
 	)
 
 	// Note: err might occur if declarative resources path doesn't exist, but that's expected
@@ -837,6 +839,7 @@ func (s *InitTestSuite) TestInitializeStore_CompositeMode() {
 		cache.Initialize(config.GetServerRuntime().Config.Cache, "test-deployment"),
 		mockValidator,
 		newOuProviderMock(s.T()),
+		nil,
 	)
 
 	// Note: err might occur if declarative resources path doesn't exist, but that's expected
@@ -883,6 +886,7 @@ func (s *InitTestSuite) TestInitializeStore_DeclarativeMode_ResourceLoadingError
 		cache.Initialize(config.GetServerRuntime().Config.Cache, "test-deployment"),
 		mockValidator,
 		newOuProviderMock(s.T()),
+		nil,
 	)
 
 	// When declarative resources path doesn't exist or has issues, error is returned
@@ -932,6 +936,7 @@ func (s *InitTestSuite) TestInitializeStore_CompositeMode_ResourceLoadingError()
 		cache.Initialize(config.GetServerRuntime().Config.Cache, "test-deployment"),
 		mockValidator,
 		newOuProviderMock(s.T()),
+		nil,
 	)
 
 	// When declarative resources path doesn't exist or has issues, error is returned
@@ -981,6 +986,7 @@ func (s *InitTestSuite) TestInitializeStore_DefaultMode() {
 		cache.Initialize(config.GetServerRuntime().Config.Cache, "test-deployment"),
 		mockValidator,
 		newOuProviderMock(s.T()),
+		nil,
 	)
 
 	s.NoError(err)
@@ -1026,6 +1032,7 @@ func (s *InitTestSuite) TestInitializeStore_ModeNormalization() {
 		cache.Initialize(config.GetServerRuntime().Config.Cache, "test-deployment"),
 		mockValidator,
 		newOuProviderMock(s.T()),
+		nil,
 	)
 
 	// Note: err might occur if declarative resources path doesn't exist, but that's expected

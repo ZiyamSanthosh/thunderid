@@ -6,9 +6,9 @@ The PostgreSQL migration-engine foundation is functionally complete. ThunderID n
 commands, metadata, compatibility gates, realistic release operations, readiness checks, recovery
 and rollback behavior needed to qualify an in-place zero-downtime migration workflow.
 
-The system is not yet a production ZDM guarantee. The remaining required work is integrated
-mixed-version qualification while a source instance continues serving real traffic, followed by
-serving-impact controls and operator documentation.
+The system is not yet a production ZDM guarantee. The remaining required work includes
+product-owned dual-read support for each in-place representation change, integrated lifecycle
+qualification, serving-impact controls and operator documentation.
 
 The current branch contains these recent migration commits:
 
@@ -23,6 +23,9 @@ The current branch contains these recent migration commits:
 - Four-table PostgreSQL migration metadata shared by all logical stores.
 - Initialization, status, phase readiness, apply, resume and rollback commands.
 - Startup compatibility enforcement before normal service initialization.
+- An explicit Expanded handoff boundary: source instances are admitted through Expand, target
+  instances are admitted from Expanded onward, and source instances are rejected once Migrate
+  begins.
 - Atomic and resumable execution with transactional progress and checkpoints.
 - Namespace-level PostgreSQL execution ownership locks.
 - Restartable online schema execution for PostgreSQL DDL that cannot run inside a transaction,
@@ -73,12 +76,13 @@ Automate a complete topology that:
 1. starts a supported source artifact in restricted mode;
 2. continuously exercises authentication, authorization, token, logout and revocation traffic;
 3. proves that fenced mutations fail before their first write;
-4. runs the target artifact as a standalone migration process;
-5. exercises interruption and resume during the pre-serving phases;
-6. verifies that target readiness is reported only after operation verification;
-7. starts a target serving instance against the migrated databases;
-8. shifts traffic, drains the source instances and explicitly runs contract; and
-9. proves that the source version is rejected after contract.
+4. runs Expand from the target artifact as a standalone migration process;
+5. starts the target in restricted mode at Expanded and verifies product-owned legacy reads;
+6. drains every source instance before Migrate;
+7. exercises Migrate interruption and resume while target traffic continues;
+8. proves compare-and-set conflict handling does not overwrite a concurrent target write;
+9. keeps Contract explicit until the rollback window ends; and
+10. proves that the source version is rejected once Migrate has begun.
 
 Run this qualification with separate logical databases and with all logical stores sharing one
 physical PostgreSQL database.
@@ -115,15 +119,16 @@ Do not implement these without a concrete release or product requirement:
 
 - service-enabled migration operations;
 - change capture, transactional outbox and conflict handling;
-- target serving while `migrate` is still running;
 - hosted background migration coordination;
 - contract-only release plans;
 - database-copy or blue-green migration;
 - machine-readable report files; and
 - production providers other than PostgreSQL.
 
-The service-dependency construction seam already exists. Add concrete service initialization only
-when an actual operation needs it.
+Target serving during Migrate is now the required lifecycle. Its legacy-read behavior remains owned
+by the respective feature developers and must be qualified before release. The service-dependency
+construction seam already exists. Add concrete service initialization only when an actual operation
+needs it.
 
 ## Current workspace note
 

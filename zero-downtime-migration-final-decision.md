@@ -179,33 +179,35 @@ the binary.
 ### Default ZDM execution topology
 
 The default ZDM topology uses a standalone migration process created from the target ThunderID
-artifact. Target-version request-serving instances are not required to serve while migration is in
-progress.
+artifact. Target-version instances begin serving in restricted mode after Expand and continue
+serving while Migrate runs.
 
 ```text
 Source-version instances continue serving
                  |
                  v
-Target artifact runs as a standalone migration job
+Target artifact runs Expand as a standalone migration job
                  |
-                 | expand, migrate, catch up and validate
+                 | validate the shared compatibility boundary
                  v
-Target stores become serving-compatible
-                 |
-                 v
-Start target-version serving instances
+Start restricted target-version serving instances
                  |
                  v
 Shift traffic and drain source-version instances
                  |
                  v
+Target artifact runs Migrate while target serves
+                 |
+                 | transform, resume and validate
+                 v
 Authorize contract after the rollback boundary
 ```
 
-This remains a zero-downtime upgrade because the source-version instances preserve request
-availability until the target version is ready. The migration job does not open an HTTP listener and
-exits after completing its requested work. The later target-serving process uses the same artifact
-but initializes its own service objects.
+This remains a zero-downtime upgrade because source instances preserve request availability through
+Expand and target instances preserve it after the handoff. The migration job does not open an HTTP
+listener and exits after completing its requested work. The target-serving process uses the same
+artifact but initializes its own service objects. Product-owned fallback reads are mandatory for
+partially migrated representations.
 
 A hosted mode in which a long-lived target-serving instance also owns a background migration
 coordinator is not required for the base ZDM guarantee. It is a future optimization and must not be
@@ -298,25 +300,24 @@ schema and data operations may appear in more than one phase.
 | `migrate` | Move historical data and captured live changes into the target representation, then prove that it is ready. | Run bounded backfills and transformations; replay and reconcile captured changes; migrate selected deployments; validate counts and invariants. |
 | `contract` | Remove the obsolete representation only after every old reader and writer is gone and rollback no longer depends on it. | Drop old tables, columns and indexes; enforce final constraints; remove compatibility or capture objects; delete temporary migration data. |
 
-The base ZDM workflow runs `expand` and `migrate` before target traffic, then stops at
-`CONTRACT_READY`. It runs `contract` only after explicit authorization. CP/DP environments may run
-and verify `expand` and `migrate` separately.
+The base ZDM workflow runs `expand` while the source serves, then starts the target in restricted
+mode at the Expanded boundary. After traffic shifts and every source instance is drained, `migrate`
+runs while the target serves. It stops at `CONTRACT_READY` and runs `contract` only after explicit
+authorization.
 
-Allowing target-serving instances to accept production traffic while `migrate` is still running is
-not required for the base ZDM implementation. It remains a later design decision and is allowed only
-when dual-read behavior or another verified compatibility rule makes partially migrated data safe.
+Target serving during `migrate` is allowed only when each affected product feature provides verified
+legacy reads for partially migrated data. The migration engine establishes the lifecycle boundary;
+feature developers own that representation compatibility.
 
 ### Meaning of completion before serving
 
-All pre-serving operations required by the target release must complete before that release accepts
-traffic. This includes required expansion, transformation, backfill, delta catch-up, validation and
-compatibility recording.
+All Expand operations required by the target release must complete before that release accepts
+traffic. In-place transformation and backfill may continue during target serving only when verified
+product compatibility makes both legacy and target rows readable.
 
-This requirement does not imply that every pre-serving operation is safe while the source binary is
-serving. The migration plan must explicitly identify which operations can run concurrently with the
-source and which require source writers to be fenced or an isolated destination. If an operation that
-must complete before target serving is not source-serving compatible, in-place ZDM is not available
-for that operation unless a compatible bridge is introduced.
+Expand must remain source-serving compatible. Source writers that threaten the Expanded boundary
+must be capability-fenced. The source is drained before any Migrate operation changes an in-place
+representation that it cannot read.
 
 Destructive contraction does not run before serving when an old binary or rollback path still needs
 the old representation. Contraction is a separate finalization phase executed through the same
@@ -340,15 +341,13 @@ sequenceDiagram
     Old->>DB: Continue authoritative traffic
     Operator->>Migrator: Start target migration plan
     Migrator->>DB: Apply additive expansion
-    Migrator->>DB: Register change consumer where required
-    Migrator->>DB: Backfill in bounded batches
-    Old->>DB: Continue compatible writes and change capture
-    Migrator->>DB: Apply captured delta and validate
-    Migrator->>DB: Mark target SERVE_READY
-    Operator->>New: Start through compatibility gate
-    Operator->>Old: Drain source instances
-    Migrator->>DB: Final catch-up and activate
-    New->>DB: Use authoritative target representation
+    Migrator->>DB: Mark Expanded
+    Operator->>New: Start restricted target through compatibility gate
+    Operator->>New: Shift traffic
+    Operator->>Old: Drain all source instances
+    Migrator->>DB: Backfill in bounded compare-and-set batches
+    New->>DB: Read legacy or target representation
+    Migrator->>DB: Validate and mark CONTRACT_READY
     Operator->>Migrator: Finalize after rollback window
 ```
 

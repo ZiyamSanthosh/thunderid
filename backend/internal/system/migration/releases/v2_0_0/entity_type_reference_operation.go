@@ -6,7 +6,9 @@ package v2_0_0
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 
 	dbmodel "github.com/thunder-id/thunderid/internal/system/database/model"
 	"github.com/thunder-id/thunderid/internal/system/migration/engine"
@@ -36,6 +38,14 @@ type entityTypeReferenceMapping struct {
 	declaredByHandle map[string]string
 }
 
+type ambiguousEntityTypeReferenceError struct {
+	value string
+}
+
+func (e *ambiguousEntityTypeReferenceError) Error() string {
+	return fmt.Sprintf("entity-type reference %q is both a legacy name and a different handle", e.value)
+}
+
 type entityTypeReferenceTransform func(
 	payload string,
 	deploymentID string,
@@ -55,7 +65,7 @@ type entityTypeReferenceOperationConfig struct {
 	payloadOptional bool
 	batchArgs       func(entityTypeReferenceCursor, engine.ExecutionTarget) []interface{}
 	readCursor      func(engine.QueryRow) (entityTypeReferenceCursor, error)
-	updateArgs      func(string, engine.QueryRow) ([]interface{}, error)
+	updateArgs      func(string, string, engine.QueryRow) ([]interface{}, error)
 	transform       entityTypeReferenceTransform
 	declared        *declarativeEntityTypeSource
 	targetSummary   string
@@ -152,6 +162,18 @@ func (o *entityTypeReferenceOperation) CheckReadiness(
 	}
 	mapping, complete, err := o.readMapping(ctx, access, "")
 	if err != nil {
+		var ambiguity *ambiguousEntityTypeReferenceError
+		if errors.As(err, &ambiguity) {
+			return engine.ReadinessResult{
+				State:   engine.ReadinessBlocked,
+				Summary: ambiguity.Error(),
+				Findings: []engine.Finding{{
+					Code:        o.config.findingCode,
+					Message:     ambiguity.Error(),
+					Remediation: "Rename the conflicting entity type before retrying",
+				}},
+			}, nil
+		}
 		return engine.ReadinessResult{}, err
 	}
 	if !complete {
@@ -236,13 +258,19 @@ func (o *entityTypeReferenceOperation) ExecuteBatch(
 			return engine.ResumableBatchResult{}, err
 		}
 		if changed {
-			args, err := o.config.updateArgs(updated, row)
+			args, err := o.config.updateArgs(updated, payload, row)
 			if err != nil {
 				return engine.ResumableBatchResult{}, err
 			}
-			if _, err := execution.Access().Execute(
-				ctx, o.config.definition.StoreID, o.config.updateQuery, args...); err != nil {
+			affected, err := execution.Access().Execute(
+				ctx, o.config.definition.StoreID, o.config.updateQuery, args...)
+			if err != nil {
 				return engine.ResumableBatchResult{}, fmt.Errorf("update entity-type references: %w", err)
+			}
+			if affected != 1 {
+				return engine.ResumableBatchResult{}, fmt.Errorf(
+					"update entity-type references: source value changed concurrently for deployment %q and ID %q",
+					cursor.DeploymentID, cursor.ID)
 			}
 		}
 		checkpoint = cursor
@@ -361,7 +389,32 @@ func (o *entityTypeReferenceOperation) readMapping(
 		return entityTypeReferenceMapping{}, false, fmt.Errorf("read declarative entity types: %w", err)
 	}
 	mapping.addDeclared(declared)
+	if err := mapping.validateUnambiguous(); err != nil {
+		return entityTypeReferenceMapping{}, false, err
+	}
 	return mapping, complete, nil
+}
+
+func (m entityTypeReferenceMapping) validateUnambiguous() error {
+	for key, handle := range m.byName {
+		if name, exists := m.byHandle[key]; exists && (handle != name || referenceValue(key) != handle) {
+			return &ambiguousEntityTypeReferenceError{value: referenceValue(key)}
+		}
+	}
+	for key, handle := range m.declaredByName {
+		if name, exists := m.declaredByHandle[key]; exists && (handle != name || referenceValue(key) != handle) {
+			return &ambiguousEntityTypeReferenceError{value: referenceValue(key)}
+		}
+	}
+	return nil
+}
+
+func referenceValue(key string) string {
+	index := strings.LastIndexByte(key, '\x00')
+	if index < 0 {
+		return key
+	}
+	return key[index+1:]
 }
 
 func (m *entityTypeReferenceMapping) addDeclared(declared []DeclarativeEntityType) {
@@ -441,38 +494,6 @@ func (m entityTypeReferenceMapping) translate(
 	return "", false, fmt.Errorf(
 		"entity-type reference %q has no %s mapping in deployment %q for category %q",
 		value, direction, deploymentID, category)
-}
-
-func (m entityTypeReferenceMapping) translateAnyCategory(
-	deploymentID string,
-	value string,
-	direction entityTypeReferenceDirection,
-) (string, bool, error) {
-	var translated string
-	found := false
-	for _, category := range []string{"user", "agent"} {
-		candidate, changed, err := m.translate(deploymentID, category, value, direction)
-		if err != nil {
-			continue
-		}
-		if !found {
-			translated = candidate
-			found = true
-		} else if translated != candidate {
-			return "", false, fmt.Errorf(
-				"entity-type reference %q is ambiguous across categories in deployment %q",
-				value, deploymentID)
-		}
-		if !changed && candidate == value {
-			translated = value
-		}
-	}
-	if !found {
-		return "", false, fmt.Errorf(
-			"entity-type reference %q has no %s mapping in deployment %q",
-			value, direction, deploymentID)
-	}
-	return translated, translated != value, nil
 }
 
 func readEntityTypeReferencePayload(row engine.QueryRow, column string, optional bool) (string, error) {

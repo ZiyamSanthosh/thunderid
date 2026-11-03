@@ -42,21 +42,19 @@ func TestPostgresMigrationRollback(t *testing.T) {
 		VALUES ('unselected-deployment', '0199a123-4902-7abc-8def-0123456789ab', 'user',
 			'Preserved Entity', 'preserved-entity', '0199a123-4702-7abc-8def-0123456789ab', FALSE, '{}'::jsonb)`)
 	require.NoError(t, err)
-	_, err = db.Exec(`INSERT INTO "MIGRATION_PROGRESS"
-		(ID, MIGRATION_STATE_ID, RUN_ID, TARGET_LEVEL, OPERATION_ID, OPERATION_ORDER,
-		 EXECUTION_TARGET_ID, STATUS, CHECKPOINT_DATA, UPDATED_AT)
-		SELECT '0199a123-4901-7abc-8def-0123456789ab', ID, $1, '2.0.0',
-			'2.0.0/configdb/04_backfill_entity_type_handle', 4, 'migration-deployment', 'in_progress',
-			'{"lastID":"0199a123-4704-7abc-8def-0123456789ab"}', NOW()
-		FROM "MIGRATION_STATE" WHERE STORE_ID = 'configdb'`, rollbackRunID)
+	_, err = db.Exec(`UPDATE "MIGRATION_PROGRESS"
+		SET RUN_ID = $1, STATUS = 'in_progress',
+			CHECKPOINT_DATA = '{"lastID":"0199a123-4704-7abc-8def-0123456789ab"}', UPDATED_AT = NOW()
+		WHERE OPERATION_ID = '2.0.0/configdb/04_backfill_entity_type_handle'
+			AND EXECUTION_TARGET_ID = ''`, rollbackRunID)
 	require.NoError(t, err)
-	insertMigrationRun(t, db, rollbackRunID, "forward", "migrate", "",
-		[]string{"migration-deployment"}, "configdb",
+	insertMigrationRun(t, db, rollbackRunID, "forward", "expand", "",
+		nil, "configdb",
 		"2.0.0/configdb/04_backfill_entity_type_handle",
-		"2.0.0/configdb/04_backfill_entity_type_handle", "migration-deployment", "forward",
+		"2.0.0/configdb/04_backfill_entity_type_handle", "", "forward",
 		"simulated partial backfill failure")
 	_, err = db.Exec(`UPDATE "MIGRATION_STATE"
-		SET STAGE = 'migrating', STATUS = 'failed', ACTIVE_RUN_ID = $1,
+		SET STAGE = 'expanding', STATUS = 'failed', ACTIVE_RUN_ID = $1,
 			FAILURE_SUMMARY = 'simulated partial backfill failure', UPDATED_AT = NOW()
 		WHERE STORE_ID = 'configdb'`, rollbackRunID)
 	require.NoError(t, err)
@@ -67,12 +65,12 @@ func TestPostgresMigrationRollback(t *testing.T) {
 		`SELECT COUNT(*)::TEXT FROM "ENTITY_TYPES"
 			WHERE DEPLOYMENT_ID = 'migration-deployment' AND HANDLE IS NOT NULL`, "0")
 	migrationharness.AssertQueryValue(t, db,
-		`SELECT HANDLE FROM "ENTITY_TYPES"
-			WHERE DEPLOYMENT_ID = 'unselected-deployment'`, "preserved-entity")
+		`SELECT COUNT(*)::TEXT FROM "ENTITY_TYPES"
+			WHERE DEPLOYMENT_ID = 'unselected-deployment' AND HANDLE IS NULL`, "1")
 	migrationharness.AssertQueryValue(t, db,
 		`SELECT COMPLETED_LEVEL || ':' || STAGE || ':' || STATUS
 			FROM "MIGRATION_STATE" WHERE STORE_ID = 'configdb'`,
-		"1.0.0:migrating:failed")
+		"1.0.0:expanding:failed")
 	migrationharness.AssertQueryValue(t, db,
 		`SELECT COUNT(*)::TEXT FROM "MIGRATION_PROGRESS" WHERE RUN_ID = $1`, "0", rollbackRunID)
 	migrationharness.AssertQueryValue(t, db,
@@ -92,7 +90,9 @@ func TestPostgresMigrationRollback(t *testing.T) {
 func TestPostgresMigrationPhaseRollback(t *testing.T) {
 	environment := migrationharness.Start(t, filepath.Join(releaseTestDirectory(t), "config.yaml"))
 	prepareEntityTypeMigrationSource(t, environment)
-	environment.RunMigrationCommand(t, "apply")
+	environment.RunMigrationCommand(t, "apply expand")
+	resolveAgentNameCollision(t, environment)
+	environment.RunMigrationCommand(t, "apply migrate")
 
 	db := environment.OpenDatabase(t, "configdb")
 	prepareFailedCompletedMigrateRun(t, environment, phaseRollbackRunID, nil)
@@ -100,7 +100,7 @@ func TestPostgresMigrationPhaseRollback(t *testing.T) {
 	environment.RunMigrationCommand(t, "rollback --phase migrate")
 
 	migrationharness.AssertQueryValue(t, db,
-		`SELECT COUNT(*)::TEXT FROM "ENTITY_TYPES" WHERE HANDLE IS NOT NULL`, "0")
+		`SELECT COUNT(*)::TEXT FROM "ENTITY_TYPES" WHERE HANDLE IS NULL`, "0")
 	migrationharness.AssertQueryValue(t, db,
 		`SELECT PROPERTIES -> 'allowedUserTypes' ->> 0 FROM "INBOUND_CLIENT"
 			WHERE DEPLOYMENT_ID = 'migration-deployment'
@@ -203,7 +203,7 @@ func TestPostgresDeploymentSpecificPhaseRollback(t *testing.T) {
 
 	migrationharness.AssertQueryValue(t, db,
 		`SELECT COUNT(*)::TEXT FROM "ENTITY_TYPES"
-			WHERE DEPLOYMENT_ID IN ('deployment-a', 'deployment-b') AND HANDLE IS NOT NULL`, "0")
+			WHERE DEPLOYMENT_ID IN ('deployment-a', 'deployment-b') AND HANDLE IS NOT NULL`, "2")
 	migrationharness.AssertQueryValue(t, db,
 		`SELECT HANDLE FROM "ENTITY_TYPES" WHERE DEPLOYMENT_ID = 'deployment-c'`, "preserved-user")
 	migrationharness.AssertQueryValue(t, db,
@@ -219,7 +219,9 @@ func TestPostgresDeploymentSpecificPhaseRollback(t *testing.T) {
 func TestPostgresMigrationCompleteRollback(t *testing.T) {
 	environment := migrationharness.Start(t, filepath.Join(releaseTestDirectory(t), "config.yaml"))
 	prepareEntityTypeMigrationSource(t, environment)
-	environment.RunMigrationCommand(t, "apply")
+	environment.RunMigrationCommand(t, "apply expand")
+	resolveAgentNameCollision(t, environment)
+	environment.RunMigrationCommand(t, "apply migrate")
 
 	db := environment.OpenDatabase(t, "configdb")
 	environment.RunMigrationCommand(t, "rollback --revert-all")
@@ -246,7 +248,9 @@ func TestPostgresMigrationCompleteRollback(t *testing.T) {
 func TestPostgresMigrationCompleteRollbackResumesInterruptedRollback(t *testing.T) {
 	environment := migrationharness.Start(t, filepath.Join(releaseTestDirectory(t), "config.yaml"))
 	prepareEntityTypeMigrationSource(t, environment)
-	environment.RunMigrationCommand(t, "apply")
+	environment.RunMigrationCommand(t, "apply expand")
+	resolveAgentNameCollision(t, environment)
+	environment.RunMigrationCommand(t, "apply migrate")
 
 	configDB := environment.OpenDatabase(t, "configdb")
 	const checkpointID = "0199a123-4849-7abc-8def-0123456789ab"
@@ -294,7 +298,9 @@ func TestPostgresMigrationCompleteRollbackResumesInterruptedRollback(t *testing.
 func TestPostgresMigrationCompleteRollbackBlockedByContract(t *testing.T) {
 	environment := migrationharness.Start(t, filepath.Join(releaseTestDirectory(t), "config.yaml"))
 	prepareEntityTypeMigrationSource(t, environment)
-	environment.RunMigrationCommand(t, "apply")
+	environment.RunMigrationCommand(t, "apply expand")
+	resolveAgentNameCollision(t, environment)
+	environment.RunMigrationCommand(t, "apply migrate")
 	environment.RunMigrationCommand(t, "apply contract")
 
 	db := environment.OpenDatabase(t, "configdb")
@@ -313,7 +319,9 @@ func TestPostgresMigrationCompleteRollbackBlockedByContract(t *testing.T) {
 func TestPostgresMigrationRollbackResumesInterruptedRollback(t *testing.T) {
 	environment := migrationharness.Start(t, filepath.Join(releaseTestDirectory(t), "config.yaml"))
 	prepareEntityTypeMigrationSource(t, environment)
-	environment.RunMigrationCommand(t, "apply")
+	environment.RunMigrationCommand(t, "apply expand")
+	resolveAgentNameCollision(t, environment)
+	environment.RunMigrationCommand(t, "apply migrate")
 
 	db := environment.OpenDatabase(t, "configdb")
 	prepareInterruptedRollbackRun(t, db)
@@ -336,7 +344,7 @@ func TestPostgresMigrationRollbackResumesInterruptedRollback(t *testing.T) {
 	migrationharness.AssertQueryValue(t, db,
 		`SELECT COMPLETED_LEVEL || ':' || STAGE || ':' || STATUS
 			FROM "MIGRATION_STATE" WHERE STORE_ID = 'configdb'`,
-		"1.0.0:migrating:failed")
+		"1.0.0:expanding:failed")
 	t.Log("verified: a second rollback invocation resumed from its durable checkpoint")
 }
 
@@ -350,18 +358,15 @@ func prepareFailedCompletedMigrateRun(
 	configDB := environment.OpenDatabase(t, "configdb")
 	result, err := configDB.Exec(`UPDATE "MIGRATION_PROGRESS" SET RUN_ID = $1, UPDATED_AT = NOW()
 		WHERE OPERATION_ID IN (
-			'2.0.0/configdb/04_backfill_entity_type_handle',
-			'2.0.0/configdb/05_add_entity_type_handle_uniqueness',
 			'2.0.0/configdb/44_migrate_inbound_client_entity_type_references',
 			'2.0.0/configdb/45_migrate_idp_entity_type_references',
-			'2.0.0/configdb/46_migrate_authorization_pdp_entity_type_references',
 			'2.0.0/configdb/47_migrate_flow_entity_type_references',
 			'2.0.0/configdb/48_migrate_default_agent_name_schema'
 		)`, runID)
 	require.NoError(t, err)
 	rowsAffected, err := result.RowsAffected()
 	require.NoError(t, err)
-	require.GreaterOrEqual(t, rowsAffected, int64(7))
+	require.GreaterOrEqual(t, rowsAffected, int64(4))
 
 	entityDB := environment.OpenDatabase(t, "entitydb")
 	result, err = entityDB.Exec(`UPDATE "MIGRATION_PROGRESS" SET RUN_ID = $1, UPDATED_AT = NOW()
@@ -433,12 +438,12 @@ func prepareInterruptedRollbackRun(t *testing.T, db *sql.DB) {
 			jsonb_build_object('lastID', $2::TEXT)::TEXT, NOW()
 		FROM "MIGRATION_STATE" WHERE STORE_ID = 'configdb'`, interruptedRollbackRunID, checkpointID)
 	require.NoError(t, err)
-	insertMigrationRun(t, db, interruptedRollbackRunID, "rollback", "migrate", "failed_operation", nil,
+	insertMigrationRun(t, db, interruptedRollbackRunID, "rollback", "expand", "failed_operation", nil,
 		"configdb", "2.0.0/configdb/04_backfill_entity_type_handle",
 		"2.0.0/configdb/04_backfill_entity_type_handle_rollback", "", "rollback",
 		"simulated interrupted rollback")
 	_, err = db.Exec(`UPDATE "MIGRATION_STATE"
-		SET STAGE = 'migrating', STATUS = 'failed', ACTIVE_RUN_ID = $1,
+		SET STAGE = 'expanding', STATUS = 'failed', ACTIVE_RUN_ID = $1,
 			FAILURE_SUMMARY = 'simulated interrupted rollback', UPDATED_AT = NOW()
 		WHERE STORE_ID = 'configdb'`, interruptedRollbackRunID)
 	require.NoError(t, err)

@@ -170,11 +170,10 @@ func TestMigrationCoordinatorStoreCompletedPhaseRejectsUnsupportedPhase(t *testi
 	assert.False(t, completed)
 }
 
-func TestMigrationCoordinatorSafeWorkflowRunsExpandAndMigrateUnderOneLock(t *testing.T) {
+func TestMigrationCoordinatorSafeWorkflowStopsAfterExpand(t *testing.T) {
 	release := phaseAwareStateControllerTestRelease()
 	dbClient := providermock.NewDBClientInterfaceMock(t)
 	updatedAt := time.Now().UTC()
-	expectCoordinatorPreflightStates(dbClient, release.Manifest, StoreIDConfigDB, true, updatedAt)
 	expectCoordinatorPreflightStates(dbClient, release.Manifest, StoreIDConfigDB, true, updatedAt)
 	locker := &countingMigrationExecutionLocker{}
 	coordinator, err := NewMigrationCoordinator(release, []MigrationNamespace{{
@@ -186,15 +185,13 @@ func TestMigrationCoordinatorSafeWorkflowRunsExpandAndMigrateUnderOneLock(t *tes
 	result, err := coordinator.ApplySafe(context.Background(), MigrationSelection{})
 
 	require.NoError(t, err)
-	require.Len(t, result.Phases, 2)
+	require.Len(t, result.Phases, 1)
 	assert.Equal(t, OperationPhaseExpand, result.Phases[0].Phase)
 	assert.True(t, result.Phases[0].AlreadyAtTarget)
-	assert.Equal(t, OperationPhaseMigrate, result.Phases[1].Phase)
-	assert.True(t, result.Phases[1].AlreadyAtTarget)
 	assert.Equal(t, 1, locker.calls)
 }
 
-func TestMigrationCoordinatorSafeWorkflowRejectsContractOnlyStore(t *testing.T) {
+func TestMigrationCoordinatorSafeWorkflowRejectsStoreWithoutExpandBoundary(t *testing.T) {
 	manifest := changedStoreManifest(StoreIDConfigDB)
 	release := ReleaseDefinition{Manifest: manifest, Plan: MigrationPlan{
 		TargetVersion: manifest.ReleaseVersion,

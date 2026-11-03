@@ -202,15 +202,15 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 	fatalOnError(ctx, logger, err, "Failed to initialize HashService")
 
 	// Initialize user type service
-	entityTypeService, entityTypeExporter, agentTypeExporter, err := entitytype.Initialize(
+	entityTypeService, entityTypeExporter, agentTypeExporter, entityTypeNormalizer, err := entitytype.Initialize(
 		mux, mcpServer, cacheManager, ouService, ouAuthzService)
 	fatalOnError(ctx, logger, err, "Failed to initialize EntityTypeService")
 	exporters = append(exporters, entityTypeExporter)
 	exporters = append(exporters, agentTypeExporter)
 
 	// Initialize entity service
-	entityService, err := entity.Initialize(cacheManager, hashService, entityTypeService, ouService,
-		sharingService)
+	entityService, err := entity.Initialize(cacheManager, hashService, entityTypeService, entityTypeNormalizer,
+		ouService, sharingService)
 	fatalOnError(ctx, logger, err, "Failed to initialize EntityService")
 
 	// Initialize entity provider
@@ -339,7 +339,7 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 		roleService, resourceService, entityService, authZENPDPService)
 
 	idpService, err := idp.Initialize(
-		cacheManager, entityTypeService, roleService, groupService, resourceService, ouService)
+		cacheManager, entityTypeService, entityTypeNormalizer, roleService, groupService, resourceService, ouService)
 	fatalOnError(ctx, logger, err, "Failed to initialize IDPService")
 
 	// Register the /connections API as a thin layer over the identity-provider and
@@ -373,8 +373,24 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 		runtime.Config.Server.Identifier)
 	fatalOnError(ctx, logger, err, "Failed to initialize runtime store")
 
+	// The feature gate centralizes runtime feature availability for the configured operating mode.
+	featureGate := featuregate.NewGate()
+	if runtime.Config.OperatingMode.IsRestricted() {
+		featureGate = featuregate.NewGate(
+			featuregate.UserRegistration,
+			featuregate.AccountRecovery,
+			featuregate.AdministrativeOperations,
+			featuregate.EntityProvisioning,
+			featuregate.OrganizationUnitCreation,
+			featuregate.AccountLinking,
+			featuregate.UserAttributeUpdate,
+			featuregate.CredentialUpdate,
+			featuregate.PasskeySignCountUpdate,
+		)
+	}
+
 	// Initialize passkey service
-	passkeyService := passkey.Initialize(entityService, runtimeStoreProvider, governanceService)
+	passkeyService := passkey.Initialize(entityService, runtimeStoreProvider, governanceService, featureGate)
 
 	// Shared DPoP verifier (and its JTI replay cache) so OAuth and OpenID4VCI
 	// share JTI replay protection.
@@ -423,19 +439,6 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 		runtime.Config.AttributeCache.Encryption.Enabled)
 
 	flowConfig := flowconfig.FromServerRuntime()
-
-	// The feature gate centralizes runtime feature availability for the configured operating mode.
-	featureGate := featuregate.NewGate()
-	if runtime.Config.OperatingMode.IsRestricted() {
-		featureGate = featuregate.NewGate(
-			featuregate.UserRegistration,
-			featuregate.AccountRecovery,
-			featuregate.AdministrativeOperations,
-			featuregate.UserProvisioning,
-			featuregate.OrganizationUnitCreation,
-		)
-	}
-
 	revocationEnforcer, revocationSvc, err := revocation.Initialize(oauthCfg, jwtService, observabilitySvc)
 	fatalOnError(ctx, logger, err, "Failed to initialize revocation service")
 	sessionRevoker := sessionCriteriaRevoker{revoker: revocationSvc}
@@ -492,7 +495,7 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 	flowMgtService, flowMgtExporter, err := flowmgt.Initialize(
 		mux, mcpServer, cacheManager, flowFactory, execRegistry, interceptorRegistry, graphBuilder,
 		serverConfigService, ouService, notifTemplateSvc, httpConnectionService, flowConfigHandler, idpService,
-		true, sharingService)
+		true, sharingService, entityTypeNormalizer)
 	fatalOnError(ctx, logger, err, "Failed to initialize FlowMgtService")
 
 	// Two-phase initialization: inject the flow resolver into the OU service.
@@ -514,8 +517,8 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 	cimdService := cimd.Initialize(mux)
 	inboundClientService, err := inboundclient.Initialize(
 		cacheManager, certservice, entityProvider,
-		themeMgtService, layoutMgtService, flowMgtService, entityTypeService, runtimeCryptoSvc, jweService,
-		cimdService, sharingService, entityService)
+		themeMgtService, layoutMgtService, flowMgtService, entityTypeService, entityTypeNormalizer,
+		runtimeCryptoSvc, jweService, cimdService, sharingService, entityService)
 	fatalOnError(ctx, logger, err, "Failed to initialize InboundClientService")
 
 	// Inject the consent service into the consent enforcer. It is wired here rather than at enforcer

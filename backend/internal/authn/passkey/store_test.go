@@ -25,7 +25,7 @@ const testDeploymentID = "test-deployment"
 // TestInitialize verifies the service wiring builds a store backed by the injected runtime store.
 func TestInitialize(t *testing.T) {
 	svc := Initialize(entitymock.NewEntityServiceInterfaceMock(t), inmemory.Initialize(testDeploymentID),
-		identitygovernancemock.NewIdentityGovernanceServiceInterfaceMock(t))
+		identitygovernancemock.NewIdentityGovernanceServiceInterfaceMock(t), nil)
 	assert.NotNil(t, svc)
 }
 

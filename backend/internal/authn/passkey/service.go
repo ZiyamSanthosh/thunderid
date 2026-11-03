@@ -19,6 +19,7 @@ import (
 	authnprovidercm "github.com/thunder-id/thunderid/internal/authnprovider/common"
 	"github.com/thunder-id/thunderid/internal/entity"
 	"github.com/thunder-id/thunderid/internal/identitygovernance"
+	"github.com/thunder-id/thunderid/internal/system/featuregate"
 	"github.com/thunder-id/thunderid/internal/system/log"
 )
 
@@ -54,18 +55,20 @@ type passkeyService struct {
 	entityService entity.EntityServiceInterface
 	sessionStore  sessionStoreInterface
 	governance    identitygovernance.IdentityGovernanceServiceInterface
+	featureGate   *featuregate.Gate
 	logger        *log.Logger
 }
 
 // newPasskeyService creates a new instance of passkey service.
 func newPasskeyService(
 	entitySvc entity.EntityServiceInterface, sessionStore sessionStoreInterface,
-	governance identitygovernance.IdentityGovernanceServiceInterface,
+	governance identitygovernance.IdentityGovernanceServiceInterface, featureGate *featuregate.Gate,
 ) PasskeyServiceInterface {
 	return &passkeyService{
 		entityService: entitySvc,
 		sessionStore:  sessionStore,
 		governance:    governance,
+		featureGate:   featureGate,
 		logger:        log.GetLogger().With(log.String(log.LoggerKeyComponentName, loggerComponentName)),
 	}
 }
@@ -492,16 +495,9 @@ func (w *passkeyService) FinishAuthentication(ctx context.Context, req *PasskeyA
 		log.String("credentialID", base64.StdEncoding.EncodeToString(credential.ID)),
 		log.Any("signCount", credential.Authenticator.SignCount))
 
-	// Update credential in database to prevent replay attacks
-	if err := w.updatePasskeyCredential(ctx, userID, credential); err != nil {
-		logger.Error(ctx, "Failed to update credential sign count in database", log.Error(err))
-		return nil, &tidcommon.InternalServerError
+	if svcErr := w.recordSignCount(ctx, userID, credential); svcErr != nil {
+		return nil, svcErr
 	}
-
-	logger.Debug(ctx, "Updated credential sign count in database",
-		log.MaskedString("userID", userID),
-		log.String("credentialID", base64.StdEncoding.EncodeToString(credential.ID)),
-		log.Any("newSignCount", credential.Authenticator.SignCount))
 
 	// Clear session data
 	w.clearSessionData(ctx, req.SessionToken)
@@ -533,6 +529,35 @@ func (w *passkeyService) refuseHeldEnrolment(ctx context.Context, userID string,
 			log.MaskedString("userID", userID))
 		return &common.ErrorAccountExpired
 	}
+	return nil
+}
+
+// recordSignCount stores the sign count the authenticator reported, unless recording is disabled.
+//
+// While it is disabled the stored count falls behind the authenticator's own counter. The next
+// recorded authentication overwrites it with the count the authenticator reports, so nothing
+// accumulates. The only cost is that cloned authenticator detection is weaker until then, and the
+// service does not act on CloneWarning today.
+func (w *passkeyService) recordSignCount(
+	ctx context.Context, userID string, credential *webauthnCredential,
+) *tidcommon.ServiceError {
+	logger := w.logger.With(log.String(log.LoggerKeyComponentName, loggerComponentName))
+
+	if !w.featureGate.IsEnabled(featuregate.PasskeySignCountUpdate) {
+		logger.Debug(ctx, "Skipping the credential sign count update",
+			log.MaskedString("userID", userID))
+		return nil
+	}
+
+	if err := w.updatePasskeyCredential(ctx, userID, credential); err != nil {
+		logger.Error(ctx, "Failed to update credential sign count in database", log.Error(err))
+		return &tidcommon.InternalServerError
+	}
+
+	logger.Debug(ctx, "Updated credential sign count in database",
+		log.MaskedString("userID", userID),
+		log.String("credentialID", base64.StdEncoding.EncodeToString(credential.ID)),
+		log.Any("newSignCount", credential.Authenticator.SignCount))
 	return nil
 }
 

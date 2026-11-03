@@ -49,7 +49,8 @@ type resumableBackfillOperation struct {
 func TestPostgresResumableBackfill(t *testing.T) {
 	environment := migrationharness.Start(t, filepath.Join(releaseTestDirectory(t), "config.yaml"))
 	environment.RunMigrationCommand(t, "check")
-	environment.RunMigrationCommand(t, "apply")
+	environment.RunMigrationCommand(t, "apply expand")
+	environment.RunMigrationCommand(t, "apply migrate")
 	environment.RunMigrationCommand(t, "apply contract")
 	verifyResumableBackfill(t, environment)
 }

@@ -41,7 +41,7 @@ func jsonEntityTypeReferencesOperationConfig(config jsonEntityTypeReferencesConf
 		payloadOptional: config.payloadOptional,
 		batchArgs:       simpleEntityTypeReferenceBatchArgs,
 		readCursor:      simpleEntityTypeReferenceCursor,
-		updateArgs: func(updated string, row engine.QueryRow) ([]interface{}, error) {
+		updateArgs: func(updated string, original string, row engine.QueryRow) ([]interface{}, error) {
 			id, err := row.String("id")
 			if err != nil {
 				return nil, err
@@ -50,7 +50,7 @@ func jsonEntityTypeReferencesOperationConfig(config jsonEntityTypeReferencesConf
 			if err != nil {
 				return nil, err
 			}
-			return []interface{}{updated, id, deploymentID}, nil
+			return []interface{}{updated, id, original, deploymentID}, nil
 		},
 		transform: func(payload string, deploymentID string, _ engine.QueryRow,
 			mapping entityTypeReferenceMapping, direction entityTypeReferenceDirection,

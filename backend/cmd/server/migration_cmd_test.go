@@ -246,7 +246,7 @@ func TestRunStartupCompatibilityCheckAcceptsContractReadyTarget(t *testing.T) {
 	assert.True(t, report.Compatible())
 }
 
-func TestRunStartupCompatibilityCheckRejectsExpandedTarget(t *testing.T) {
+func TestRunStartupCompatibilityCheckAcceptsExpandedTarget(t *testing.T) {
 	dataSource := testPostgresDataSource("thunderid")
 	cfg := &config.Config{Database: config.DatabaseConfig{
 		Config: dataSource, Entity: dataSource, RuntimeTransient: dataSource, RuntimePersistent: dataSource,
@@ -282,9 +282,9 @@ func TestRunStartupCompatibilityCheckRejectsExpandedTarget(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotNil(t, report)
-	assert.False(t, report.Compatible())
-	assert.Equal(t, engine.CompatibilityReasonTargetNotReady, report.Stores[0].Reason)
-	assert.Equal(t, engine.CompatibilityReasonTargetNotReady, report.Stores[3].Reason)
+	assert.True(t, report.Compatible())
+	assert.Equal(t, engine.CompatibilityReasonNone, report.Stores[0].Reason)
+	assert.Equal(t, engine.CompatibilityReasonNone, report.Stores[3].Reason)
 }
 
 func TestRunStartupCompatibilityCheckValidatesDependencies(t *testing.T) {
@@ -454,7 +454,7 @@ func TestRunMigrationApplyReturnsNoOpWhenStoresAreAtTarget(t *testing.T) {
 			{"table_name": "MIGRATION_PROGRESS"},
 			{"table_name": "MIGRATION_DEPLOYMENT_STATE"},
 			{"table_name": "MIGRATION_RUN"},
-		}, nil).Times(8)
+		}, nil).Times(4)
 	for _, storeID := range []engine.StoreID{
 		engine.StoreIDConfigDB,
 		engine.StoreIDEntityDB,
@@ -462,7 +462,7 @@ func TestRunMigrationApplyReturnsNoOpWhenStoresAreAtTarget(t *testing.T) {
 		engine.StoreIDRuntimePersistent,
 	} {
 		dbClient.On("QueryContext", mock.Anything, mock.Anything, string(storeID)).
-			Return([]map[string]interface{}{testMigrationStateRow(storeID)}, nil).Twice()
+			Return([]map[string]interface{}{testMigrationStateRow(storeID)}, nil).Once()
 	}
 
 	result, err := runMigrationCommand(
@@ -472,11 +472,9 @@ func TestRunMigrationApplyReturnsNoOpWhenStoresAreAtTarget(t *testing.T) {
 	require.NotNil(t, result)
 	assert.Nil(t, result.application)
 	require.NotNil(t, result.workflow)
-	require.Len(t, result.workflow.Phases, 2)
+	require.Len(t, result.workflow.Phases, 1)
 	assert.Equal(t, engine.OperationPhaseExpand, result.workflow.Phases[0].Phase)
 	assert.True(t, result.workflow.Phases[0].AlreadyAtTarget)
-	assert.Equal(t, engine.OperationPhaseMigrate, result.workflow.Phases[1].Phase)
-	assert.True(t, result.workflow.Phases[1].AlreadyAtTarget)
 	assert.Nil(t, result.compatibility)
 	assert.Nil(t, result.preflight)
 }

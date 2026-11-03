@@ -38,7 +38,7 @@ func TestEntityTypeReferenceMappingUsesPersistedHandles(t *testing.T) {
 	assert.Equal(t, "legacy-person", handle)
 
 	collidingHandle, changed, err := mapping.translate(
-		"deployment-a", "user", "legacy-person", entityTypeReferenceForward)
+		"deployment-a", "user", "Legacy-Person", entityTypeReferenceForward)
 	require.NoError(t, err)
 	assert.True(t, changed)
 	assert.Equal(t, "legacy-person_1", collidingHandle)
@@ -90,30 +90,6 @@ func TestTransformIDPEntityTypeReferences(t *testing.T) {
 	})
 }
 
-func TestTransformAuthorizationPDPEntityTypeReferences(t *testing.T) {
-	mapping := testEntityTypeReferenceMapping()
-	source := `{
-		"endpoint":"https://pdp.example.com",
-		"subjectAttributeMappings":[
-			{"entityType":"Legacy Person","attributes":[]},
-			{"entityType":"Legacy Agent","attributes":[]}
-		]
-	}`
-	target := `{
-		"endpoint":"https://pdp.example.com",
-		"subjectAttributeMappings":[
-			{"entityType":"legacy-person","attributes":[]},
-			{"entityType":"legacy-agent","attributes":[]}
-		]
-	}`
-
-	assertEntityTypeReferenceRoundTrip(t, source, target, func(payload string,
-		direction entityTypeReferenceDirection,
-	) (string, bool, error) {
-		return transformAuthorizationPDPEntityTypeReferences(payload, "deployment-a", mapping, direction)
-	})
-}
-
 func TestTransformFlowEntityTypeReferences(t *testing.T) {
 	mapping := testEntityTypeReferenceMapping()
 	source := `[
@@ -143,7 +119,6 @@ func TestEntityTypeReferenceOperationsAreResumableAndUseTheExpectedStores(t *tes
 		{newMigrateEntityTypeReferencesOperation(nil), engine.StoreIDEntityDB, []engine.StoreID{engine.StoreIDConfigDB}},
 		{newMigrateInboundClientEntityTypeReferencesOperation(nil), engine.StoreIDConfigDB, nil},
 		{newMigrateIDPEntityTypeReferencesOperation(nil), engine.StoreIDConfigDB, nil},
-		{newMigrateAuthorizationPDPEntityTypeReferencesOperation(nil), engine.StoreIDConfigDB, nil},
 		{newMigrateFlowEntityTypeReferencesOperation(nil), engine.StoreIDConfigDB, nil},
 	}
 
@@ -155,6 +130,54 @@ func TestEntityTypeReferenceOperationsAreResumableAndUseTheExpectedStores(t *tes
 		assert.Equal(t, test.readStores, definition.ReadStoreIDs)
 		assert.Implements(t, (*engine.ResumableOperation)(nil), test.operation)
 		assert.Implements(t, (*engine.ReadinessChecker)(nil), test.operation)
+	}
+}
+
+func TestEntityTypeReferenceUpdatesUseCompareAndSetPredicates(t *testing.T) {
+	tests := []struct {
+		name              string
+		config            entityTypeReferenceOperationConfig
+		row               engine.QueryRow
+		expectedPredicate string
+		expectedArgs      []interface{}
+	}{
+		{
+			name: "entity", config: entityTypeReferencesOperationConfig(
+				migrateEntityTypeReferencesOperationID, "test", entityTypeReferenceForward),
+			row:               engine.QueryRow{"id": "entity-id", "deployment_id": "deployment-a"},
+			expectedPredicate: "TYPE = $3",
+			expectedArgs:      []interface{}{"target", "entity-id", "source", "deployment-a"},
+		},
+		{
+			name: "inbound client", config: inboundClientEntityTypeReferencesOperationConfig(
+				migrateInboundClientEntityTypeReferencesOperationID, "test", entityTypeReferenceForward),
+			row:               engine.QueryRow{"id": "client-id", "deployment_id": "deployment-a"},
+			expectedPredicate: "PROPERTIES = $3",
+			expectedArgs:      []interface{}{"target", "client-id", "source", "deployment-a"},
+		},
+		{
+			name: "identity provider", config: idpEntityTypeReferencesOperationConfig(
+				migrateIDPEntityTypeReferencesOperationID, "test", entityTypeReferenceForward),
+			row:               engine.QueryRow{"id": "idp-id", "deployment_id": "deployment-a"},
+			expectedPredicate: "ATTRIBUTE_CONFIGURATION = $3",
+			expectedArgs:      []interface{}{"target", "idp-id", "source", "deployment-a"},
+		},
+		{
+			name: "flow", config: flowEntityTypeReferencesOperationConfig(
+				migrateFlowEntityTypeReferencesOperationID, "test", entityTypeReferenceForward),
+			row:               engine.QueryRow{"id": "flow-id", "version": int64(2), "deployment_id": "deployment-a"},
+			expectedPredicate: "NODES = $4",
+			expectedArgs:      []interface{}{"target", "flow-id", int64(2), "source", "deployment-a"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Contains(t, test.config.updateQuery.PostgresQuery, test.expectedPredicate)
+			args, err := test.config.updateArgs("target", "source", test.row)
+			require.NoError(t, err)
+			assert.Equal(t, test.expectedArgs, args)
+		})
 	}
 }
 
@@ -181,13 +204,13 @@ func testEntityTypeReferenceMapping() entityTypeReferenceMapping {
 	return entityTypeReferenceMapping{
 		byName: map[string]string{
 			"deployment-a\x00user\x00Legacy Person": "legacy-person",
-			"deployment-a\x00user\x00legacy-person": "legacy-person_1",
+			"deployment-a\x00user\x00Legacy-Person": "legacy-person_1",
 			"deployment-a\x00user\x00Customer":      "customer",
 			"deployment-a\x00agent\x00Legacy Agent": "legacy-agent",
 		},
 		byHandle: map[string]string{
 			"deployment-a\x00user\x00legacy-person":   "Legacy Person",
-			"deployment-a\x00user\x00legacy-person_1": "legacy-person",
+			"deployment-a\x00user\x00legacy-person_1": "Legacy-Person",
 			"deployment-a\x00user\x00customer":        "Customer",
 			"deployment-a\x00agent\x00legacy-agent":   "Legacy Agent",
 		},
