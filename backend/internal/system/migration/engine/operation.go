@@ -365,6 +365,9 @@ func validateMigrationSelection(selection MigrationSelection) error {
 		if deploymentID != strings.TrimSpace(deploymentID) {
 			return fmt.Errorf("migration selection deployment ID %q contains surrounding whitespace", deploymentID)
 		}
+		if len([]rune(deploymentID)) > maxDeploymentIDLength {
+			return fmt.Errorf("migration selection deployment ID exceeds %d characters", maxDeploymentIDLength)
+		}
 		if _, exists := seen[deploymentID]; exists {
 			return fmt.Errorf("migration selection repeats deployment ID %q", deploymentID)
 		}

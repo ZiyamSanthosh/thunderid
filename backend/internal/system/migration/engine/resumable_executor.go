@@ -83,7 +83,8 @@ func (e *ResumableOperationExecutor) Execute(
 		progress := Progress{
 			ID: progressID, MigrationStateID: state.ID, RunID: runID, TargetLevel: state.TargetLevel,
 			OperationID: string(definition.ID), OperationOrder: operationOrder,
-			Status: StatusInProgress, UpdatedAt: e.now(),
+			ExecutionTargetID: target.DeploymentID,
+			Status:            StatusInProgress, UpdatedAt: e.now(),
 		}
 		if err := e.metadataStore.InsertProgress(txCtx, progress); err != nil {
 			return err
@@ -148,6 +149,11 @@ func (e *ResumableOperationExecutor) Resume(
 		return OperationExecutionResult{}, fmt.Errorf(
 			"resume operation %q: progress does not identify an in-progress execution", definition.ID)
 	}
+	if progress.ExecutionTargetID != target.DeploymentID {
+		return OperationExecutionResult{}, fmt.Errorf(
+			"resume operation %q: progress execution target %q does not match resolved target %q",
+			definition.ID, progress.ExecutionTargetID, target.DeploymentID)
+	}
 	return e.executeBatches(ctx, operation, target, progress)
 }
 
@@ -187,12 +193,7 @@ func (e *ResumableOperationExecutor) validateExecution(
 	}
 	if len(targets) != 1 {
 		return OperationDefinition{}, ExecutionTarget{}, fmt.Errorf(
-			"execute operation %q: resumable executor requires exactly one execution target", definition.ID)
-	}
-	if targets[0].DeploymentID != "" {
-		return OperationDefinition{}, ExecutionTarget{}, fmt.Errorf(
-			"execute operation %q: resumable executor does not yet support deployment-targeted execution",
-			definition.ID)
+			"execute operation %q: resumable executor currently requires exactly one execution target", definition.ID)
 	}
 	return definition, targets[0], nil
 }

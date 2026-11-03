@@ -74,7 +74,8 @@ func TestCreateAuthorizationPDPConnectionVerification(t *testing.T) {
 
 	source, err := operation.PreVerify(context.Background(), authorizationPDPReadAccess{
 		rows: map[string][]engine.QueryRow{
-			postgresQueryAuthorizationPDPConnectionTable.GetID(): {},
+			postgresQueryAuthorizationPDPConnectionTable.GetID():     {},
+			postgresQueryAuthorizationPDPConnectionIndexName.GetID(): {},
 		},
 	}, target)
 	require.NoError(t, err)
@@ -91,6 +92,94 @@ func TestCreateAuthorizationPDPConnectionVerification(t *testing.T) {
 	invalid, err := operation.PreVerify(context.Background(), authorizationPDPReadAccess{rows: invalidRows}, target)
 	require.NoError(t, err)
 	assert.Equal(t, engine.VerificationInvalid, invalid.State)
+}
+
+func TestCreateAuthorizationPDPConnectionReadiness(t *testing.T) {
+	operation, err := newCreateAuthorizationPDPConnectionOperation()
+	require.NoError(t, err)
+	sqlOperation := operation.(*engine.SQLOperation)
+
+	tests := []struct {
+		name          string
+		access        authorizationPDPReadAccess
+		expectedState engine.ReadinessState
+		expectedText  string
+		findingCount  int
+	}{
+		{
+			name: "absent table is ready",
+			access: authorizationPDPReadAccess{rows: map[string][]engine.QueryRow{
+				postgresQueryAuthorizationPDPConnectionTable.GetID():     {},
+				postgresQueryAuthorizationPDPConnectionIndexName.GetID(): {},
+			}},
+			expectedState: engine.ReadinessReady,
+			expectedText:  "ready to be created",
+		},
+		{
+			name:          "target table is ready",
+			access:        authorizationPDPTargetAccess(),
+			expectedState: engine.ReadinessReady,
+			expectedText:  "already matches the target schema",
+		},
+		{
+			name: "partial table blocks migration",
+			access: authorizationPDPReadAccess{rows: map[string][]engine.QueryRow{
+				postgresQueryAuthorizationPDPConnectionTable.GetID():   {{"relation_kind": "r"}},
+				postgresQueryAuthorizationPDPConnectionColumns.GetID(): {},
+			}},
+			expectedState: engine.ReadinessBlocked,
+			expectedText:  "expected 8 AUTHORIZATION_PDP_CONNECTION columns",
+			findingCount:  1,
+		},
+		{
+			name: "conflicting table relation blocks migration",
+			access: authorizationPDPReadAccess{rows: map[string][]engine.QueryRow{
+				postgresQueryAuthorizationPDPConnectionTable.GetID(): {{"relation_kind": "v"}},
+			}},
+			expectedState: engine.ReadinessBlocked,
+			expectedText:  "is not an ordinary table",
+			findingCount:  1,
+		},
+		{
+			name: "conflicting index name blocks migration",
+			access: authorizationPDPReadAccess{rows: map[string][]engine.QueryRow{
+				postgresQueryAuthorizationPDPConnectionTable.GetID():     {},
+				postgresQueryAuthorizationPDPConnectionIndexName.GetID(): {{"relation_kind": "i"}},
+			}},
+			expectedState: engine.ReadinessBlocked,
+			expectedText:  "already in use",
+			findingCount:  1,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := sqlOperation.CheckReadiness(
+				context.Background(), test.access, engine.PlanContext{})
+
+			require.NoError(t, err)
+			assert.Equal(t, test.expectedState, result.State)
+			assert.Contains(t, result.Summary, test.expectedText)
+			assert.Len(t, result.Findings, test.findingCount)
+			if test.findingCount > 0 {
+				assert.Equal(t, "unexpected_authorization_pdp_connection_schema", result.Findings[0].Code)
+				assert.NotEmpty(t, result.Findings[0].Remediation)
+			}
+		})
+	}
+}
+
+func TestCreateAuthorizationPDPConnectionReadinessPropagatesInspectionFailure(t *testing.T) {
+	operation, err := newCreateAuthorizationPDPConnectionOperation()
+	require.NoError(t, err)
+
+	result, err := operation.(*engine.SQLOperation).CheckReadiness(
+		context.Background(), authorizationPDPReadAccess{err: errors.New("database unavailable")},
+		engine.PlanContext{})
+
+	require.Error(t, err)
+	assert.Empty(t, result.State)
+	assert.ErrorContains(t, err, "database unavailable")
 }
 
 func TestCreateAuthorizationPDPConnectionPropagatesInspectionFailure(t *testing.T) {
@@ -113,7 +202,7 @@ func authorizationPDPTargetAccess() authorizationPDPReadAccess {
 func authorizationPDPTargetRows() map[string][]engine.QueryRow {
 	return map[string][]engine.QueryRow{
 		postgresQueryAuthorizationPDPConnectionTable.GetID(): {{
-			"table_name": "AUTHORIZATION_PDP_CONNECTION",
+			"relation_kind": "r",
 		}},
 		postgresQueryAuthorizationPDPConnectionColumns.GetID():    authorizationPDPColumnRows(),
 		postgresQueryAuthorizationPDPConnectionPrimaryKey.GetID(): authorizationPDPPrimaryKeyRows(),

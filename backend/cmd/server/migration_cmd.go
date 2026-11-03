@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"strings"
 
 	"github.com/thunder-id/thunderid/internal/system/config"
 	dbprovider "github.com/thunder-id/thunderid/internal/system/database/provider"
@@ -16,6 +17,12 @@ import (
 	"github.com/thunder-id/thunderid/pkg/thunderidengine/providers"
 )
 
+type migrationCommandOptions struct {
+	phase     engine.OperationPhase
+	selection engine.MigrationSelection
+	revertAll bool
+}
+
 const (
 	migrationSubcommand       = "migration"
 	migrationInitializeAction = "initialize"
@@ -23,6 +30,7 @@ const (
 	migrationCheckAction      = "check"
 	migrationApplyAction      = "apply"
 	migrationResumeAction     = "resume"
+	migrationRollbackAction   = "rollback"
 )
 
 var (
@@ -35,8 +43,10 @@ type migrationCommandResult struct {
 	initialization []engine.InitializationResult
 	compatibility  *engine.CompatibilityReport
 	preflight      *engine.PreflightReport
+	workflowCheck  *engine.WorkflowPreflightReport
 	application    *engine.MigrationRunResult
 	workflow       *engine.MigrationWorkflowResult
+	rollback       *engine.MigrationRollbackResult
 }
 
 type migrationDatabaseAdapter struct {
@@ -93,19 +103,20 @@ func runMigrationCommand(
 	cfg *config.Config,
 	dbProvider dbprovider.DBProviderInterface,
 ) (*migrationCommandResult, error) {
-	if len(args) < 2 || len(args) > 3 || args[0] != migrationSubcommand {
+	if len(args) < 2 || args[0] != migrationSubcommand {
 		return nil, errors.New(migrationCommandUsage())
 	}
 	if args[1] != migrationInitializeAction && args[1] != migrationStatusAction &&
 		args[1] != migrationCheckAction && args[1] != migrationApplyAction &&
-		args[1] != migrationResumeAction {
+		args[1] != migrationResumeAction && args[1] != migrationRollbackAction {
 		return nil, fmt.Errorf(
 			"unsupported migration action %q; %s", args[1], migrationCommandUsage())
 	}
-	phase, err := migrationCommandPhase(args)
+	options, err := parseMigrationCommandOptions(args)
 	if err != nil {
 		return nil, err
 	}
+	phase := options.phase
 	if cfg == nil {
 		return nil, fmt.Errorf("run migration %s: configuration is required", args[1])
 	}
@@ -145,6 +156,17 @@ func runMigrationCommand(
 		}
 		return result, nil
 	case migrationCheckAction:
+		if len(args) == 2 {
+			report, err := runMigrationWorkflowCheck(ctx, *releaseDefinition, namespaces)
+			if err != nil {
+				return nil, err
+			}
+			result := &migrationCommandResult{action: args[1], workflowCheck: &report}
+			if !report.Ready() {
+				return result, errMigrationCheckBlocked
+			}
+			return result, nil
+		}
 		report, err := runMigrationCheck(ctx, *releaseDefinition, namespaces, phase)
 		if err != nil {
 			return nil, err
@@ -167,7 +189,8 @@ func runMigrationCommand(
 		if phase == engine.OperationPhaseContract {
 			application, err = runMigrationContract(ctx, *releaseDefinition, namespaces)
 		} else {
-			application, err = runMigrationApply(ctx, *releaseDefinition, namespaces, phase)
+			application, err = runMigrationApply(
+				ctx, *releaseDefinition, namespaces, phase, options.selection)
 		}
 		result := &migrationCommandResult{action: args[1], application: &application}
 		if err != nil {
@@ -177,6 +200,14 @@ func runMigrationCommand(
 	case migrationResumeAction:
 		application, err := runMigrationResume(ctx, *releaseDefinition, namespaces)
 		result := &migrationCommandResult{action: args[1], application: &application}
+		if err != nil {
+			return result, err
+		}
+		return result, nil
+	case migrationRollbackAction:
+		rollback, err := runMigrationRollback(ctx, *releaseDefinition, namespaces,
+			engine.MigrationRollbackRequest{Phase: phase, RevertAll: options.revertAll})
+		result := &migrationCommandResult{action: args[1], rollback: &rollback}
 		if err != nil {
 			return result, err
 		}
@@ -207,12 +238,98 @@ func runMigrationApplySafe(
 }
 
 func migrationCommandUsage() string {
-	return "usage: thunderid migration <initialize|status|check|apply|resume> [expand|migrate|contract]"
+	return "usage: thunderid migration <initialize|status|check|apply|resume|rollback> " +
+		"[expand|migrate|contract] [--deployment-id <id>] " +
+		"[rollback --phase <expand|migrate|contract> | rollback --revert-all]"
+}
+
+func runMigrationRollback(
+	ctx context.Context,
+	release engine.ReleaseDefinition,
+	namespaces []migrationNamespace,
+	request engine.MigrationRollbackRequest,
+) (engine.MigrationRollbackResult, error) {
+	executionNamespaces, err := migrationExecutionNamespaces(namespaces, "rollback")
+	if err != nil {
+		return engine.MigrationRollbackResult{}, err
+	}
+	coordinator, err := engine.NewMigrationCoordinator(release, executionNamespaces)
+	if err != nil {
+		return engine.MigrationRollbackResult{}, fmt.Errorf("create migration coordinator: %w", err)
+	}
+	result, err := coordinator.Rollback(ctx, request)
+	if err != nil {
+		return result, fmt.Errorf("rollback migration: %w", err)
+	}
+	return result, nil
+}
+
+func parseMigrationCommandOptions(args []string) (migrationCommandOptions, error) {
+	options := migrationCommandOptions{}
+	positional := []string{args[0], args[1]}
+	for index := 2; index < len(args); index++ {
+		argument := args[index]
+		switch {
+		case argument == "--phase":
+			index++
+			if index >= len(args) {
+				return options, fmt.Errorf("--phase requires a value; %s", migrationCommandUsage())
+			}
+			options.phase = engine.OperationPhase(args[index])
+		case strings.HasPrefix(argument, "--phase="):
+			options.phase = engine.OperationPhase(strings.TrimPrefix(argument, "--phase="))
+		case argument == "--revert-all":
+			options.revertAll = true
+		case argument == "--deployment-id":
+			index++
+			if index >= len(args) || strings.TrimSpace(args[index]) == "" {
+				return options, fmt.Errorf("--deployment-id requires a value; %s", migrationCommandUsage())
+			}
+			options.selection.DeploymentIDs = append(options.selection.DeploymentIDs, args[index])
+		case strings.HasPrefix(argument, "--deployment-id="):
+			deploymentID := strings.TrimPrefix(argument, "--deployment-id=")
+			if strings.TrimSpace(deploymentID) == "" {
+				return options, fmt.Errorf("--deployment-id requires a value; %s", migrationCommandUsage())
+			}
+			options.selection.DeploymentIDs = append(options.selection.DeploymentIDs, deploymentID)
+		case strings.HasPrefix(argument, "-"):
+			return options, fmt.Errorf("unsupported migration option %q; %s", argument, migrationCommandUsage())
+		default:
+			positional = append(positional, argument)
+		}
+	}
+	positionalPhase, err := migrationCommandPhase(positional)
+	if err != nil {
+		return options, err
+	}
+	if options.phase == "" {
+		options.phase = positionalPhase
+	}
+	if options.phase != "" {
+		switch options.phase {
+		case engine.OperationPhaseExpand, engine.OperationPhaseMigrate, engine.OperationPhaseContract:
+		default:
+			return options, fmt.Errorf("unsupported migration phase %q; %s", options.phase, migrationCommandUsage())
+		}
+	}
+	if (options.revertAll || (options.phase != "" && positionalPhase == "")) && args[1] != migrationRollbackAction {
+		return options, fmt.Errorf("rollback options are supported only by migration rollback; %s",
+			migrationCommandUsage())
+	}
+	if args[1] == migrationRollbackAction && options.revertAll && options.phase != "" {
+		return options, fmt.Errorf("migration rollback cannot combine --phase and --revert-all; %s",
+			migrationCommandUsage())
+	}
+	if len(options.selection.DeploymentIDs) > 0 &&
+		(args[1] != migrationApplyAction || options.phase != engine.OperationPhaseMigrate) {
+		return options, errors.New("--deployment-id is supported only by migration apply migrate")
+	}
+	return options, nil
 }
 
 func migrationCommandPhase(args []string) (engine.OperationPhase, error) {
 	if len(args) == 2 {
-		return engine.OperationPhaseExpand, nil
+		return "", nil
 	}
 	if args[1] != migrationCheckAction && args[1] != migrationApplyAction {
 		return "", fmt.Errorf("migration action %q does not accept a phase; %s", args[1], migrationCommandUsage())
@@ -279,6 +396,7 @@ func runMigrationApply(
 	release engine.ReleaseDefinition,
 	namespaces []migrationNamespace,
 	phase engine.OperationPhase,
+	selection engine.MigrationSelection,
 ) (engine.MigrationRunResult, error) {
 	executionNamespaces, err := migrationExecutionNamespaces(namespaces, "apply")
 	if err != nil {
@@ -289,7 +407,7 @@ func runMigrationApply(
 	if err != nil {
 		return engine.MigrationRunResult{}, fmt.Errorf("create migration coordinator: %w", err)
 	}
-	result, err := coordinator.ApplyPhase(ctx, phase, engine.MigrationSelection{})
+	result, err := coordinator.ApplyPhase(ctx, phase, selection)
 	if err != nil {
 		return result, fmt.Errorf("apply migration: %w", err)
 	}
@@ -336,9 +454,6 @@ func runStartupCompatibilityCheck(
 	if dbProvider == nil {
 		return nil, errors.New("check startup migration compatibility: database provider is required")
 	}
-	if !startupCompatibilityCheckSupported(cfg) {
-		return nil, nil
-	}
 	releaseDefinition, err := current.Definition()
 	if err != nil {
 		return nil, fmt.Errorf("check startup migration compatibility: %w", err)
@@ -347,30 +462,45 @@ func runStartupCompatibilityCheck(
 	if err != nil {
 		return nil, fmt.Errorf("check startup migration compatibility: load release catalog: %w", err)
 	}
-	namespaces, err := migrationNamespaces(cfg, dbProvider)
+	namespaces, skippedStores, err := startupMigrationNamespaces(cfg, dbProvider)
 	if err != nil {
 		return nil, fmt.Errorf("check startup migration compatibility: %w", err)
 	}
-	report, err := runMigrationStatus(ctx, releaseDefinition.Manifest, namespaces, releaseCatalog...)
+	if len(namespaces) == 0 {
+		return nil, nil
+	}
+	report, err := runMigrationDeploymentStatus(
+		ctx, releaseDefinition.Manifest, namespaces, cfg.Server.Identifier, releaseCatalog...)
 	if err != nil {
 		return nil, fmt.Errorf("check startup migration compatibility: %w", err)
+	}
+	for index := range report.Stores {
+		if _, skipped := skippedStores[report.Stores[index].StoreID]; !skipped {
+			continue
+		}
+		report.Stores[index].Reason = engine.CompatibilityReasonUnsupportedProvider
+		report.Stores[index].Skipped = true
+		report.Stores[index].Err = nil
 	}
 	return &report, nil
 }
 
-func startupCompatibilityCheckSupported(cfg *config.Config) bool {
-	dataSources := []config.DataSource{
-		cfg.Database.Config,
-		cfg.Database.Entity,
-		cfg.Database.RuntimeTransient,
-		cfg.Database.RuntimePersistent,
+func runMigrationDeploymentStatus(
+	ctx context.Context,
+	manifest engine.ReleaseManifest,
+	namespaces []migrationNamespace,
+	deploymentID string,
+	releaseCatalog ...engine.ReleaseManifest,
+) (engine.CompatibilityReport, error) {
+	metadataStores, _, err := migrationReadResources(namespaces)
+	if err != nil {
+		return engine.CompatibilityReport{}, err
 	}
-	for _, dataSource := range dataSources {
-		if _, supported := migrationDatabaseAdapters[dataSource.Type]; !supported {
-			return false
-		}
+	gate, err := engine.NewCompatibilityGate(manifest, releaseCatalog...)
+	if err != nil {
+		return engine.CompatibilityReport{}, err
 	}
-	return true
+	return gate.CheckDeployment(ctx, metadataStores, deploymentID), nil
 }
 
 func runMigrationInitialize(
@@ -440,6 +570,22 @@ func runMigrationCheck(
 	return checker.CheckPhase(ctx, metadataStores, phase)
 }
 
+func runMigrationWorkflowCheck(
+	ctx context.Context,
+	release engine.ReleaseDefinition,
+	namespaces []migrationNamespace,
+) (engine.WorkflowPreflightReport, error) {
+	metadataStores, stores, err := migrationReadResources(namespaces)
+	if err != nil {
+		return engine.WorkflowPreflightReport{}, err
+	}
+	checker, err := engine.NewPreflightChecker(release, stores)
+	if err != nil {
+		return engine.WorkflowPreflightReport{}, fmt.Errorf("create migration preflight checker: %w", err)
+	}
+	return checker.CheckSafeWorkflow(ctx, metadataStores), nil
+}
+
 func migrationReadResources(
 	namespaces []migrationNamespace,
 ) (map[engine.StoreID]*engine.MetadataStore, map[engine.StoreID]engine.ReadStore, error) {
@@ -467,7 +613,32 @@ func migrationNamespaces(
 	cfg *config.Config,
 	dbProvider dbprovider.DBProviderInterface,
 ) ([]migrationNamespace, error) {
-	bindings := []migrationStoreBinding{
+	return migrationNamespacesForBindings(migrationStoreBindings(cfg, dbProvider))
+}
+
+func startupMigrationNamespaces(
+	cfg *config.Config,
+	dbProvider dbprovider.DBProviderInterface,
+) ([]migrationNamespace, map[engine.StoreID]struct{}, error) {
+	bindings := migrationStoreBindings(cfg, dbProvider)
+	supported := make([]migrationStoreBinding, 0, len(bindings))
+	skipped := make(map[engine.StoreID]struct{})
+	for _, binding := range bindings {
+		if _, exists := migrationDatabaseAdapters[binding.dataSource.Type]; !exists {
+			skipped[binding.storeID] = struct{}{}
+			continue
+		}
+		supported = append(supported, binding)
+	}
+	namespaces, err := migrationNamespacesForBindings(supported)
+	return namespaces, skipped, err
+}
+
+func migrationStoreBindings(
+	cfg *config.Config,
+	dbProvider dbprovider.DBProviderInterface,
+) []migrationStoreBinding {
+	return []migrationStoreBinding{
 		{
 			storeID: engine.StoreIDConfigDB, dataSource: cfg.Database.Config,
 			client: dbProvider.GetConfigDBClient, transactioner: dbProvider.GetConfigDBTransactioner,
@@ -487,7 +658,9 @@ func migrationNamespaces(
 			transactioner: dbProvider.GetRuntimePersistentDBTransactioner,
 		},
 	}
+}
 
+func migrationNamespacesForBindings(bindings []migrationStoreBinding) ([]migrationNamespace, error) {
 	namespaces := make([]migrationNamespace, 0, len(bindings))
 	namespaceIndexes := make(map[migrationNamespaceKey]int, len(bindings))
 	for _, binding := range bindings {

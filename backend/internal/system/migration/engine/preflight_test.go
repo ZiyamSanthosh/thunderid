@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -271,7 +272,7 @@ func TestPreflightCheckerAggregatesReadinessAndDependencyFailures(t *testing.T) 
 	})
 	require.NoError(t, err)
 
-	report := checker.check(context.Background())
+	report := checker.checkPhaseStores(context.Background(), OperationPhaseMigrate, nil, nil)
 
 	assert.False(t, report.Ready())
 	assert.Equal(t, manifest.ReleaseVersion, report.TargetVersion)
@@ -310,7 +311,7 @@ func TestPreflightCheckerConvertsCheckErrorsAndInvalidResultsToBlockers(t *testi
 	})
 	require.NoError(t, err)
 
-	report := checker.check(context.Background())
+	report := checker.checkPhaseStores(context.Background(), OperationPhaseMigrate, nil, nil)
 
 	assert.False(t, report.Ready())
 	require.Len(t, report.Operations, 2)
@@ -328,7 +329,7 @@ func TestPreflightCheckerAcceptsEmptyPlan(t *testing.T) {
 	}, nil)
 	require.NoError(t, err)
 
-	report := checker.check(context.Background())
+	report := checker.checkPhaseStores(context.Background(), OperationPhaseMigrate, nil, nil)
 
 	assert.True(t, report.Ready())
 	assert.Empty(t, report.Operations)
@@ -343,7 +344,7 @@ func TestReadinessEvaluatorDefaultsOperationWithoutCheckerToReady(t *testing.T) 
 	evaluator, err := newReadinessEvaluator(release, nil)
 	require.NoError(t, err)
 
-	report := evaluator.check(context.Background())
+	report := evaluator.checkPhaseStores(context.Background(), OperationPhaseMigrate, nil, nil)
 
 	assert.True(t, report.Ready())
 	require.Len(t, report.Operations, 1)
@@ -370,14 +371,91 @@ func TestMigrationPreflightCheckerAcceptsSourceAndRunsAffectedOperations(t *test
 	checker, err := NewPreflightChecker(release, stores)
 	require.NoError(t, err)
 
-	report := checker.Check(context.Background(), metadataStores)
+	report, err := checker.CheckPhase(context.Background(), metadataStores, OperationPhaseMigrate)
 
+	require.NoError(t, err)
 	assert.True(t, report.Ready())
 	assert.True(t, operationCalled)
 	require.Len(t, report.Stores, 4)
 	assert.Equal(t, StoreAssessmentMigrationRequired, report.Stores[1].State)
 	require.Len(t, report.Operations, 1)
 	assert.Equal(t, ReadinessReady, report.Operations[0].State)
+}
+
+func TestMigrationPreflightCheckerAcceptsAlreadyCompletedPhase(t *testing.T) {
+	release := phaseAwareStateControllerTestRelease()
+	metadataStores := make(map[StoreID]*MetadataStore, len(release.Manifest.Stores))
+	stores := make(map[StoreID]ReadStore, len(release.Manifest.Stores))
+	updatedAt := time.Date(2026, time.October, 8, 16, 0, 0, 0, time.UTC)
+	for _, requirement := range release.Manifest.Stores {
+		dbClient := providermock.NewDBClientInterfaceMock(t)
+		expectReadySchema(dbClient)
+		row := compatibilityStateRow(requirement.ID, requirement.RequiredLevel)
+		if requirement.ID == StoreIDConfigDB {
+			row = phaseStateRow(
+				MigrationStageExpanded, StatusCompleted, release.Manifest.ReleaseVersion, "", updatedAt)
+		}
+		dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(requirement.ID)).
+			Return([]map[string]interface{}{row}, nil).Once()
+		metadataStores[requirement.ID] = newTestMetadataStore(t, dbClient)
+		stores[requirement.ID] = ReadStore{DatabaseType: DatabaseTypePostgres, Client: dbClient}
+	}
+	checker, err := NewPreflightChecker(release, stores)
+	require.NoError(t, err)
+
+	report, err := checker.CheckPhase(context.Background(), metadataStores, OperationPhaseExpand)
+
+	require.NoError(t, err)
+	assert.True(t, report.Ready())
+	assert.Empty(t, report.Operations)
+	assert.Empty(t, migrationStoreSet(report))
+	for _, assessment := range report.Stores {
+		if assessment.StoreID == StoreIDConfigDB {
+			assert.Equal(t, StoreAssessmentPhaseComplete, assessment.State)
+		}
+	}
+}
+
+func TestMigrationPreflightCheckerChecksSafeWorkflowWithoutContract(t *testing.T) {
+	manifest := changedStoreManifest(StoreIDEntityDB)
+	expandCalled := false
+	migrateCalled := false
+	contractCalled := false
+	operation := func(id OperationID, called *bool) readinessTestOperation {
+		definition := readinessDefinition(id)
+		return readinessTestOperation{
+			definition: definition,
+			check: func(context.Context, ReadAccess, PlanContext) (ReadinessResult, error) {
+				*called = true
+				return ReadinessResult{State: ReadinessReady, Summary: "Operation is ready"}, nil
+			},
+		}
+	}
+	release := ReleaseDefinition{Manifest: manifest, Plan: MigrationPlan{
+		TargetVersion: manifest.ReleaseVersion,
+		Expand:        []Operation{operation("expand-entitydb", &expandCalled)},
+		Migrate:       []Operation{operation("migrate-entitydb", &migrateCalled)},
+		Contract:      []Operation{operation("contract-entitydb", &contractCalled)},
+	}}
+	metadataStores, stores := preflightStores(t, manifest, map[StoreID]string{
+		StoreIDEntityDB: "1.0.0",
+	})
+	checker, err := NewPreflightChecker(release, stores)
+	require.NoError(t, err)
+
+	report := checker.CheckSafeWorkflow(context.Background(), metadataStores)
+
+	assert.True(t, report.Ready())
+	assert.True(t, expandCalled)
+	assert.True(t, migrateCalled)
+	assert.False(t, contractCalled)
+	require.Len(t, report.Phases, 2)
+	assert.Equal(t, OperationPhaseExpand, report.Phases[0].Phase)
+	require.Len(t, report.Phases[0].Operations, 1)
+	assert.Equal(t, OperationID("expand-entitydb"), report.Phases[0].Operations[0].OperationID)
+	assert.Equal(t, OperationPhaseMigrate, report.Phases[1].Phase)
+	require.Len(t, report.Phases[1].Operations, 1)
+	assert.Equal(t, OperationID("migrate-entitydb"), report.Phases[1].Operations[0].OperationID)
 }
 
 func TestMigrationPreflightCheckerSkipsOperationsWhenStoreIsBlocked(t *testing.T) {
@@ -399,8 +477,9 @@ func TestMigrationPreflightCheckerSkipsOperationsWhenStoreIsBlocked(t *testing.T
 	checker, err := NewPreflightChecker(release, stores)
 	require.NoError(t, err)
 
-	report := checker.Check(context.Background(), metadataStores)
+	report, err := checker.CheckPhase(context.Background(), metadataStores, OperationPhaseMigrate)
 
+	require.NoError(t, err)
 	assert.False(t, report.Ready())
 	assert.False(t, operationCalled)
 	assert.Equal(t, StoreAssessmentBlocked, report.Stores[1].State)
@@ -445,8 +524,9 @@ func TestMigrationPreflightCheckerContinuesIndependentOperations(t *testing.T) {
 	checker, err := NewPreflightChecker(release, stores)
 	require.NoError(t, err)
 
-	report := checker.Check(context.Background(), metadataStores)
+	report, err := checker.CheckPhase(context.Background(), metadataStores, OperationPhaseMigrate)
 
+	require.NoError(t, err)
 	assert.False(t, report.Ready())
 	assert.True(t, entityOperationCalled)
 	require.Len(t, report.Operations, 1)

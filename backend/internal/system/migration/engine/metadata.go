@@ -15,10 +15,182 @@ import (
 )
 
 const (
-	maxFailureSummaryLength = 1024
-	maxOperationIDLength    = 255
-	maxCheckpointSize       = 64 * 1024
+	maxFailureSummaryLength    = 1024
+	maxOperationIDLength       = 255
+	maxExecutionTargetIDLength = 255
+	maxDeploymentIDLength      = 255
+	maxCheckpointSize          = 64 * 1024
 )
+
+// ExecutionDirection identifies whether a failed execution was applying or rolling back an operation.
+type ExecutionDirection string
+
+const (
+	ExecutionDirectionForward  ExecutionDirection = "forward"
+	ExecutionDirectionRollback ExecutionDirection = "rollback"
+)
+
+// MigrationRunMode identifies the command lifecycle that currently owns a migration run.
+type MigrationRunMode string
+
+const (
+	MigrationRunModeForward   MigrationRunMode = "forward"
+	MigrationRunModeRollback  MigrationRunMode = "rollback"
+	MigrationRunModeRevertAll MigrationRunMode = "revert_all"
+)
+
+// MigrationFailure identifies the operation and target that stopped one migration run.
+type MigrationFailure struct {
+	RunID              string
+	StoreID            StoreID
+	ForwardOperationID OperationID
+	CurrentOperationID OperationID
+	ExecutionTargetID  string
+	ExecutionDirection ExecutionDirection
+	RolledBack         bool
+	FailureSummary     string
+	UpdatedAt          time.Time
+}
+
+// Validate verifies that the failure identity can be persisted.
+func (f MigrationFailure) Validate() error {
+	if !isUUIDv7(f.RunID) {
+		return errors.New("migration failure run ID must be a canonical UUIDv7")
+	}
+	if !isSupportedStoreID(f.StoreID) {
+		return fmt.Errorf("unsupported migration failure store %q", f.StoreID)
+	}
+	operationIDs := []struct {
+		name string
+		id   OperationID
+	}{
+		{name: "forward", id: f.ForwardOperationID},
+		{name: "current", id: f.CurrentOperationID},
+	}
+	for _, operation := range operationIDs {
+		name, operationID := operation.name, operation.id
+		if strings.TrimSpace(string(operationID)) == "" {
+			return fmt.Errorf("migration failure %s operation ID is required", name)
+		}
+		if utf8.RuneCountInString(string(operationID)) > maxOperationIDLength {
+			return fmt.Errorf("migration failure %s operation ID exceeds %d characters",
+				name, maxOperationIDLength)
+		}
+	}
+	if f.ExecutionTargetID != strings.TrimSpace(f.ExecutionTargetID) {
+		return errors.New("migration failure execution target ID contains surrounding whitespace")
+	}
+	if utf8.RuneCountInString(f.ExecutionTargetID) > maxExecutionTargetIDLength {
+		return fmt.Errorf("migration failure execution target ID exceeds %d characters", maxExecutionTargetIDLength)
+	}
+	if f.ExecutionDirection != ExecutionDirectionForward &&
+		f.ExecutionDirection != ExecutionDirectionRollback {
+		return fmt.Errorf("unsupported migration failure execution direction %q", f.ExecutionDirection)
+	}
+	if strings.TrimSpace(f.FailureSummary) == "" {
+		return errors.New("migration failure summary is required")
+	}
+	if utf8.RuneCountInString(f.FailureSummary) > maxFailureSummaryLength {
+		return fmt.Errorf("migration failure summary exceeds %d characters", maxFailureSummaryLength)
+	}
+	if f.UpdatedAt.IsZero() {
+		return errors.New("migration failure update time is required")
+	}
+	return nil
+}
+
+// MigrationRun stores active run context that cannot be derived safely from operation progress.
+type MigrationRun struct {
+	ID            string
+	Mode          MigrationRunMode
+	Phase         OperationPhase
+	RollbackScope RollbackScope
+	Selection     MigrationSelection
+	Failure       *MigrationFailure
+	UpdatedAt     time.Time
+}
+
+// Validate verifies that the active migration run can be persisted.
+func (r MigrationRun) Validate() error {
+	if !isUUIDv7(r.ID) {
+		return errors.New("migration run ID must be a canonical UUIDv7")
+	}
+	switch r.Mode {
+	case MigrationRunModeForward:
+		if r.RollbackScope != "" {
+			return errors.New("forward migration run cannot contain a rollback scope")
+		}
+	case MigrationRunModeRollback:
+		if r.RollbackScope != RollbackScopeFailedOperation && r.RollbackScope != RollbackScopePhase {
+			return fmt.Errorf("unsupported migration rollback scope %q", r.RollbackScope)
+		}
+	case MigrationRunModeRevertAll:
+		if r.RollbackScope != RollbackScopeAll {
+			return errors.New("complete rollback run requires the all rollback scope")
+		}
+	default:
+		return fmt.Errorf("unsupported migration run mode %q", r.Mode)
+	}
+	if r.Mode == MigrationRunModeRevertAll {
+		if r.Phase != "" {
+			return errors.New("complete rollback run cannot contain a single operation phase")
+		}
+	} else if r.Phase != OperationPhaseExpand && r.Phase != OperationPhaseMigrate &&
+		r.Phase != OperationPhaseContract {
+		return fmt.Errorf("unsupported migration run phase %q", r.Phase)
+	}
+	if err := validateMigrationSelection(r.Selection); err != nil {
+		return fmt.Errorf("invalid migration run selection: %w", err)
+	}
+	if r.Failure != nil {
+		if r.Failure.RunID != r.ID {
+			return errors.New("migration run failure belongs to another run")
+		}
+		if err := r.Failure.Validate(); err != nil {
+			return err
+		}
+	}
+	if r.UpdatedAt.IsZero() {
+		return errors.New("migration run update time is required")
+	}
+	return nil
+}
+
+// DeploymentState records that one deployment has completed a release's data migration for a logical store.
+type DeploymentState struct {
+	ID               string
+	MigrationStateID string
+	DeploymentID     string
+	CompletedLevel   string
+	UpdatedAt        time.Time
+}
+
+// Validate verifies that the deployment completion marker can be persisted.
+func (s DeploymentState) Validate() error {
+	if !isUUIDv7(s.ID) {
+		return errors.New("deployment migration state ID must be a canonical UUIDv7")
+	}
+	if !isUUIDv7(s.MigrationStateID) {
+		return errors.New("deployment migration state parent ID must be a canonical UUIDv7")
+	}
+	if strings.TrimSpace(s.DeploymentID) == "" {
+		return errors.New("deployment migration state deployment ID is required")
+	}
+	if s.DeploymentID != strings.TrimSpace(s.DeploymentID) {
+		return errors.New("deployment migration state deployment ID contains surrounding whitespace")
+	}
+	if utf8.RuneCountInString(s.DeploymentID) > maxDeploymentIDLength {
+		return fmt.Errorf("deployment migration state deployment ID exceeds %d characters", maxDeploymentIDLength)
+	}
+	if !isCanonicalVersion(s.CompletedLevel) {
+		return fmt.Errorf("deployment migration state completed level %q is not canonical semantic version",
+			s.CompletedLevel)
+	}
+	if s.UpdatedAt.IsZero() {
+		return errors.New("deployment migration state update time is required")
+	}
+	return nil
+}
 
 // Status represents a migration state or operation status.
 type Status string
@@ -50,6 +222,8 @@ const (
 	MigrationStageContractReady MigrationStage = "contract_ready"
 	// MigrationStageContracting means that explicitly initiated cleanup is running.
 	MigrationStageContracting MigrationStage = "contracting"
+	// MigrationStageRollingBack means that the target representation is being reverted.
+	MigrationStageRollingBack MigrationStage = "rolling_back"
 )
 
 // State is the durable compatibility state of one logical store.
@@ -153,20 +327,22 @@ func (s State) validateActiveRun() error {
 }
 
 func (s MigrationStage) executing() bool {
-	return s == MigrationStageExpanding || s == MigrationStageMigrating || s == MigrationStageContracting
+	return s == MigrationStageExpanding || s == MigrationStageMigrating ||
+		s == MigrationStageContracting || s == MigrationStageRollingBack
 }
 
 // Progress is the durable execution state of one migration operation.
 type Progress struct {
-	ID               string
-	MigrationStateID string
-	RunID            string
-	TargetLevel      string
-	OperationID      string
-	OperationOrder   int
-	Status           Status
-	CheckpointData   json.RawMessage
-	UpdatedAt        time.Time
+	ID                string
+	MigrationStateID  string
+	RunID             string
+	TargetLevel       string
+	OperationID       string
+	OperationOrder    int
+	ExecutionTargetID string
+	Status            Status
+	CheckpointData    json.RawMessage
+	UpdatedAt         time.Time
 }
 
 // Validate verifies that the operation progress can be persisted by the migration engine.
@@ -191,6 +367,12 @@ func (p Progress) Validate() error {
 	}
 	if p.OperationOrder < 0 {
 		return errors.New("migration progress operation order cannot be negative")
+	}
+	if p.ExecutionTargetID != strings.TrimSpace(p.ExecutionTargetID) {
+		return errors.New("migration progress execution target ID contains surrounding whitespace")
+	}
+	if utf8.RuneCountInString(p.ExecutionTargetID) > maxExecutionTargetIDLength {
+		return fmt.Errorf("migration progress execution target ID exceeds %d characters", maxExecutionTargetIDLength)
 	}
 	if p.Status != StatusInProgress && p.Status != StatusCompleted && p.Status != StatusFailed {
 		return fmt.Errorf("unsupported migration progress status %q", p.Status)

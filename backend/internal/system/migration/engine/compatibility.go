@@ -29,8 +29,12 @@ const (
 	CompatibilityReasonTargetNotReady CompatibilityReason = "target_not_ready"
 	// CompatibilityReasonSourceRetired means that contract has started and the source binary must not serve.
 	CompatibilityReasonSourceRetired CompatibilityReason = "source_retired"
+	// CompatibilityReasonRollbackInProgress means that the target binary must not serve during rollback.
+	CompatibilityReasonRollbackInProgress CompatibilityReason = "rollback_in_progress"
 	// CompatibilityReasonLevelMismatch means that the completed and required store levels differ.
 	CompatibilityReasonLevelMismatch CompatibilityReason = "level_mismatch"
+	// CompatibilityReasonUnsupportedProvider means that no migration adapter can inspect the store.
+	CompatibilityReasonUnsupportedProvider CompatibilityReason = "unsupported_provider"
 )
 
 // StoreCompatibility is the read-only compatibility result for one logical store.
@@ -44,7 +48,9 @@ type StoreCompatibility struct {
 	TargetLevel     string
 	ActiveRunID     string
 	Reason          CompatibilityReason
-	Err             error
+	// Skipped reports that no migration adapter was available to inspect this store.
+	Skipped bool
+	Err     error
 }
 
 // Compatible reports whether this logical store can serve with the current release.
@@ -60,17 +66,19 @@ type CompatibilityReport struct {
 	RouteErr             error
 }
 
-// Compatible reports whether every required logical store is compatible.
+// Compatible reports whether at least one store was checked and every checked store is compatible.
 func (r CompatibilityReport) Compatible() bool {
-	if len(r.Stores) == 0 {
-		return false
-	}
+	checked := false
 	for _, store := range r.Stores {
+		if store.Skipped {
+			continue
+		}
+		checked = true
 		if !store.Compatible() {
 			return false
 		}
 	}
-	return true
+	return checked
 }
 
 // CompatibilityGate performs the read-only serving compatibility check.
@@ -108,6 +116,40 @@ func (g *CompatibilityGate) Check(
 		report.Stores = append(report.Stores, g.checkStore(ctx, requirement, metadataStore))
 	}
 	g.resolveMigrationRoute(&report)
+	return report
+}
+
+// CheckDeployment evaluates serving compatibility for one deployment in a shared physical store.
+func (g *CompatibilityGate) CheckDeployment(
+	ctx context.Context,
+	metadataStores map[StoreID]*MetadataStore,
+	deploymentID string,
+) CompatibilityReport {
+	if deploymentID == "" {
+		return g.Check(ctx, metadataStores)
+	}
+	report := CompatibilityReport{Stores: make([]StoreCompatibility, 0, len(g.manifest.Stores))}
+	for _, requirement := range g.manifest.Stores {
+		metadataStore := metadataStores[requirement.ID]
+		result := g.checkStore(ctx, requirement, metadataStore)
+		if result.Reason == CompatibilityReasonTargetNotReady && metadataStore != nil {
+			state, err := metadataStore.GetState(ctx, requirement.ID)
+			if err != nil {
+				result.Reason = CompatibilityReasonUnverifiable
+				result.Err = err
+			} else if state != nil {
+				deploymentState, err := metadataStore.GetDeploymentState(ctx, state.ID, deploymentID)
+				switch {
+				case err != nil:
+					result.Reason = CompatibilityReasonUnverifiable
+					result.Err = err
+				case deploymentState != nil && deploymentState.CompletedLevel == requirement.RequiredLevel:
+					result.Reason = CompatibilityReasonNone
+				}
+			}
+		}
+		report.Stores = append(report.Stores, result)
+	}
 	return report
 }
 
@@ -202,7 +244,7 @@ func servingCompatibilityReason(requirement StoreRequirement, state State) Compa
 	if servingAsSource {
 		switch state.Stage {
 		case MigrationStageExpanding, MigrationStageExpanded,
-			MigrationStageMigrating, MigrationStageContractReady:
+			MigrationStageMigrating, MigrationStageContractReady, MigrationStageRollingBack:
 			return CompatibilityReasonNone
 		case MigrationStageContracting:
 			return CompatibilityReasonSourceRetired
@@ -217,6 +259,8 @@ func servingCompatibilityReason(requirement StoreRequirement, state State) Compa
 		switch state.Stage {
 		case MigrationStageContractReady, MigrationStageContracting:
 			return CompatibilityReasonNone
+		case MigrationStageRollingBack:
+			return CompatibilityReasonRollbackInProgress
 		case MigrationStageExpanding, MigrationStageExpanded, MigrationStageMigrating:
 			return CompatibilityReasonTargetNotReady
 		default:

@@ -195,10 +195,13 @@ func logMigrationCommandResult(
 ) {
 	logMigrationInitialization(ctx, logger, result.initialization)
 	if result.compatibility != nil {
-		logMigrationCompatibility(ctx, logger, *result.compatibility)
+		fmt.Fprint(os.Stdout, formatMigrationCompatibility(*result.compatibility))
 	}
 	if result.preflight != nil {
-		logMigrationPreflight(ctx, logger, *result.preflight)
+		fmt.Fprint(os.Stdout, formatMigrationPreflight(*result.preflight))
+	}
+	if result.workflowCheck != nil {
+		fmt.Fprint(os.Stdout, formatMigrationWorkflowPreflight(*result.workflowCheck))
 	}
 	if result.application != nil {
 		logMigrationApplication(ctx, logger, *result.application, successful)
@@ -206,8 +209,40 @@ func logMigrationCommandResult(
 	if result.workflow != nil {
 		logMigrationWorkflow(ctx, logger, *result.workflow, successful)
 	}
-	logger.Info(ctx, "Migration command result",
-		log.String("action", result.action), log.Bool("successful", successful))
+	if result.rollback != nil {
+		logMigrationRollback(ctx, logger, *result.rollback, successful)
+	}
+	if result.compatibility == nil && result.preflight == nil && result.workflowCheck == nil &&
+		result.application == nil && result.workflow == nil && result.rollback == nil {
+		logger.Info(ctx, "Migration command result",
+			log.String("action", result.action), log.Bool("successful", successful))
+	}
+}
+
+func logMigrationRollback(
+	ctx context.Context,
+	logger *log.Logger,
+	result engine.MigrationRollbackResult,
+	successful bool,
+) {
+	for _, execution := range result.Operations {
+		logger.Info(ctx, "Migration rollback operation completed",
+			log.String("operation", execution.Progress.OperationID),
+			log.String("executionTarget", execution.Progress.ExecutionTargetID),
+			log.String("runID", execution.Progress.RunID),
+			log.Bool("executionSkipped", execution.ExecutionSkipped),
+			log.Int("committedBatches", execution.CommittedBatches))
+	}
+	message := "Migration rollback completed"
+	if !successful {
+		message = "Migration rollback incomplete"
+	}
+	logger.Info(ctx, message,
+		log.String("runID", result.RunID),
+		log.String("phase", string(result.Phase)),
+		log.String("scope", string(result.Scope)),
+		log.Int("operations", len(result.Operations)),
+		log.Int("restoredStores", len(result.Finalizations)))
 }
 
 func logMigrationWorkflow(
@@ -252,6 +287,7 @@ func logMigrationCompatibility(
 		fields := []log.Field{
 			log.String("store", string(store.StoreID)),
 			log.Bool("compatible", store.Compatible()),
+			log.Bool("skipped", store.Skipped),
 			log.String("completedLevel", store.CompletedLevel),
 			log.String("stage", string(store.Stage)),
 			log.String("requiredLevel", store.RequiredLevel),
@@ -261,7 +297,11 @@ func logMigrationCompatibility(
 		if store.Err != nil {
 			fields = append(fields, log.Error(store.Err))
 		}
-		logger.Info(ctx, "Migration compatibility checked", fields...)
+		message := "Migration compatibility checked"
+		if store.Skipped {
+			message = "Migration compatibility skipped"
+		}
+		logger.Info(ctx, message, fields...)
 	}
 	logger.Info(ctx, "Migration compatibility status", log.Bool("compatible", report.Compatible()))
 	if report.NextMigrationRelease != "" {
@@ -271,51 +311,6 @@ func logMigrationCompatibility(
 	} else if report.RouteErr != nil {
 		logger.Info(ctx, "Migration route unavailable", log.Error(report.RouteErr))
 	}
-}
-
-func logMigrationPreflight(
-	ctx context.Context,
-	logger *log.Logger,
-	report engine.PreflightReport,
-) {
-	for _, store := range report.Stores {
-		fields := []log.Field{
-			log.String("store", string(store.StoreID)),
-			log.String("state", string(store.State)),
-			log.String("completedLevel", store.CompletedLevel),
-			log.String("stage", string(store.Stage)),
-			log.String("acceptedSourceLevel", store.AcceptedSourceLevel),
-			log.String("requiredLevel", store.RequiredLevel),
-			log.String("reason", string(store.Reason)),
-		}
-		if store.Err != nil {
-			fields = append(fields, log.Error(store.Err))
-		}
-		logger.Info(ctx, "Migration store assessed", fields...)
-	}
-	for _, operation := range report.Operations {
-		fields := []log.Field{
-			log.String("operation", string(operation.OperationID)),
-			log.String("store", string(operation.StoreID)),
-			log.String("state", string(operation.State)),
-			log.String("summary", operation.Summary),
-		}
-		if operation.Err != nil {
-			fields = append(fields, log.Error(operation.Err))
-		}
-		logger.Info(ctx, "Migration preflight operation checked", fields...)
-		for _, finding := range operation.Findings {
-			logger.Info(ctx, "Migration preflight finding",
-				log.String("operation", string(operation.OperationID)),
-				log.String("code", finding.Code),
-				log.String("message", finding.Message),
-				log.String("remediation", finding.Remediation))
-		}
-	}
-	logger.Info(ctx, "Migration preflight status",
-		log.String("targetVersion", report.TargetVersion),
-		log.String("phase", string(report.Phase)),
-		log.Bool("ready", report.Ready()))
 }
 
 func logMigrationApplication(
@@ -333,6 +328,7 @@ func logMigrationApplication(
 	for _, execution := range result.Operations {
 		logger.Info(ctx, "Migration operation completed",
 			log.String("operation", execution.Progress.OperationID),
+			log.String("executionTarget", execution.Progress.ExecutionTargetID),
 			log.String("runID", execution.Progress.RunID),
 			log.Bool("executionSkipped", execution.ExecutionSkipped),
 			log.Int("committedBatches", execution.CommittedBatches))

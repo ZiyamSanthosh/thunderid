@@ -40,11 +40,39 @@ func migrationPlan(Dependencies) (engine.MigrationPlan, error) {
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
+	addEntityTypeHandle, err := newAddEntityTypeHandleOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	expandEntityTypeLength, err := newExpandEntityTypeLengthOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	backfillEntityTypeHandle := newBackfillEntityTypeHandleOperation()
+	addEntityTypeHandleUniqueness, err := newAddEntityTypeHandleUniquenessOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	finalizeEntityTypeHandle, err := newFinalizeEntityTypeHandleOperation()
+	if err != nil {
+		return engine.MigrationPlan{}, err
+	}
+	rollbackEntityTypeHandleBackfill := newRollbackEntityTypeHandleBackfillOperation()
 	return engine.MigrationPlan{
 		TargetVersion: "2.0.0",
 		Expand: []engine.Operation{
 			removeReasonCheck,
 			createAuthorizationPDPConnection,
+			addEntityTypeHandle,
+			expandEntityTypeLength,
+		},
+		Migrate: []engine.Operation{
+			backfillEntityTypeHandle,
+			addEntityTypeHandleUniqueness,
+		},
+		Contract: []engine.Operation{finalizeEntityTypeHandle},
+		Rollback: []engine.RollbackOperation{
+			rollbackEntityTypeHandleBackfill,
 		},
 	}, nil
 }

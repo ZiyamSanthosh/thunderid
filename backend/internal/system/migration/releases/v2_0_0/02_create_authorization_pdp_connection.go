@@ -16,9 +16,10 @@ const authorizationPDPConnectionIndex = "idx_authorization_pdp_connection_type_n
 var (
 	postgresQueryAuthorizationPDPConnectionTable = dbmodel.DBQuery{
 		ID: "MIG-CFG_MGT-01",
-		PostgresQuery: `SELECT TABLE_NAME
-            FROM INFORMATION_SCHEMA.TABLES
-            WHERE TABLE_SCHEMA = CURRENT_SCHEMA() AND TABLE_NAME = 'AUTHORIZATION_PDP_CONNECTION'`,
+		PostgresQuery: `SELECT c.relkind::TEXT AS RELATION_KIND
+			FROM pg_class c
+			INNER JOIN pg_namespace n ON n.oid = c.relnamespace
+			WHERE n.nspname = CURRENT_SCHEMA() AND c.relname = 'AUTHORIZATION_PDP_CONNECTION'`,
 	}
 	postgresQueryAuthorizationPDPConnectionColumns = dbmodel.DBQuery{
 		ID: "MIG-CFG_MGT-02",
@@ -58,6 +59,14 @@ var (
                 AND index_class.relname = 'idx_authorization_pdp_connection_type_name_deployment'
             ORDER BY key_position.ORDINALITY`,
 	}
+	postgresQueryAuthorizationPDPConnectionIndexName = dbmodel.DBQuery{
+		ID: "MIG-CFG_MGT-05",
+		PostgresQuery: `SELECT c.relkind::TEXT AS RELATION_KIND
+			FROM pg_class c
+			INNER JOIN pg_namespace n ON n.oid = c.relnamespace
+			WHERE n.nspname = CURRENT_SCHEMA()
+			AND c.relname = 'idx_authorization_pdp_connection_type_name_deployment'`,
+	}
 )
 
 type authorizationPDPConnectionInspection struct {
@@ -93,6 +102,7 @@ func newCreateAuthorizationPDPConnectionOperation() (engine.Operation, error) {
 			Kind:             engine.OperationKindSchemaChange,
 			InterruptionMode: engine.InterruptionModeAtomic,
 		},
+		ReadinessChecker: checkCreateAuthorizationPDPConnectionReadiness,
 		PreVerifier: func(
 			ctx context.Context,
 			access engine.ReadAccess,
@@ -116,6 +126,40 @@ func newCreateAuthorizationPDPConnectionOperation() (engine.Operation, error) {
 			return verifyAuthorizationPDPConnection(ctx, access)
 		},
 	})
+}
+
+func checkCreateAuthorizationPDPConnectionReadiness(
+	ctx context.Context,
+	access engine.ReadAccess,
+	_ engine.PlanContext,
+) (engine.ReadinessResult, error) {
+	inspection, err := inspectAuthorizationPDPConnection(ctx, access)
+	if err != nil {
+		return engine.ReadinessResult{}, err
+	}
+
+	switch inspection.state {
+	case engine.VerificationSource:
+		return engine.ReadinessResult{
+			State:   engine.ReadinessReady,
+			Summary: "The authorization PDP connection table is ready to be created",
+		}, nil
+	case engine.VerificationTarget:
+		return engine.ReadinessResult{
+			State:   engine.ReadinessReady,
+			Summary: "The authorization PDP connection table already matches the target schema",
+		}, nil
+	default:
+		return engine.ReadinessResult{
+			State:   engine.ReadinessBlocked,
+			Summary: inspection.summary,
+			Findings: []engine.Finding{{
+				Code:        "unexpected_authorization_pdp_connection_schema",
+				Message:     inspection.summary,
+				Remediation: "Remove or reconcile the conflicting or partial database object before retrying",
+			}},
+		}, nil
+	}
 }
 
 func verifyAuthorizationPDPConnection(
@@ -144,6 +188,16 @@ func inspectAuthorizationPDPConnection(
 		return authorizationPDPConnectionInspection{}, fmt.Errorf("inspect authorization PDP connection table: %w", err)
 	}
 	if len(tableRows) == 0 {
+		indexNameRows, err := access.Query(
+			ctx, engine.StoreIDConfigDB, postgresQueryAuthorizationPDPConnectionIndexName)
+		if err != nil {
+			return authorizationPDPConnectionInspection{},
+				fmt.Errorf("inspect authorization PDP connection index name: %w", err)
+		}
+		if len(indexNameRows) != 0 {
+			return invalidAuthorizationPDPConnection(fmt.Sprintf(
+				"Relation name %s is already in use", authorizationPDPConnectionIndex)), nil
+		}
 		return authorizationPDPConnectionInspection{
 			state: engine.VerificationSource, summary: "The authorization PDP connection table is absent",
 		}, nil
@@ -151,6 +205,15 @@ func inspectAuthorizationPDPConnection(
 	if len(tableRows) != 1 {
 		return invalidAuthorizationPDPConnection(
 			fmt.Sprintf("Expected one AUTHORIZATION_PDP_CONNECTION table, found %d", len(tableRows))), nil
+	}
+	relationKind, err := tableRows[0].String("relation_kind")
+	if err != nil {
+		return authorizationPDPConnectionInspection{},
+			fmt.Errorf("inspect authorization PDP connection relation kind: %w", err)
+	}
+	if relationKind != "r" {
+		return invalidAuthorizationPDPConnection(
+			"Relation name AUTHORIZATION_PDP_CONNECTION is not an ordinary table"), nil
 	}
 
 	columnRows, err := access.Query(ctx, engine.StoreIDConfigDB, postgresQueryAuthorizationPDPConnectionColumns)

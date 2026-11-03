@@ -89,14 +89,9 @@ func (e *AtomicOperationExecutor) Execute(
 	}
 	if len(targets) != 1 {
 		return OperationExecutionResult{}, fmt.Errorf(
-			"execute operation %q: basic atomic executor requires exactly one execution target", definition.ID)
+			"execute operation %q: atomic executor currently requires exactly one execution target", definition.ID)
 	}
 	target := targets[0]
-	if target.DeploymentID != "" {
-		return OperationExecutionResult{}, fmt.Errorf(
-			"execute operation %q: basic atomic executor does not support deployment-targeted execution",
-			definition.ID)
-	}
 
 	progressID, err := e.newID()
 	if err != nil {
@@ -117,10 +112,31 @@ func (e *AtomicOperationExecutor) Execute(
 		if err != nil {
 			return fmt.Errorf("execute operation %q: %w", definition.ID, err)
 		}
+		if definition.Kind == OperationKindSchemaChange {
+			existing, err := e.metadataStore.GetProgress(
+				txCtx, state.ID, state.TargetLevel, definition.ID, target.DeploymentID)
+			if err != nil {
+				return err
+			}
+			if existing != nil {
+				if existing.Status != StatusCompleted {
+					return fmt.Errorf(
+						"execute operation %q: existing complete-store progress has status %q",
+						definition.ID, existing.Status)
+				}
+				if err := verifyOperationTarget(txCtx, operation, executionAccess, target); err != nil {
+					return err
+				}
+				result.Progress = *existing
+				result.ExecutionSkipped = true
+				return nil
+			}
+		}
 		progress := Progress{
 			ID: progressID, MigrationStateID: state.ID, RunID: runID, TargetLevel: state.TargetLevel,
 			OperationID: string(definition.ID), OperationOrder: operationOrder,
-			Status: StatusInProgress, UpdatedAt: e.now(),
+			ExecutionTargetID: target.DeploymentID,
+			Status:            StatusInProgress, UpdatedAt: e.now(),
 		}
 		if err := e.metadataStore.InsertProgress(txCtx, progress); err != nil {
 			return err

@@ -1,7 +1,7 @@
 {
   "manifestVersion": 1,
   "releaseVersion": "2.0.0",
-  "migrationMetadataVersion": 1,
+  "migrationMetadataVersion": 2,
   "migrationDocumentation": "https://thunderid.dev/docs/migrations",
   "stores": [
     {
@@ -13,8 +13,8 @@
     {
       "id": "entitydb",
       "acceptedSourceLevel": "1.0.0",
-      "requiredLevel": "1.0.0",
-      "changed": false
+      "requiredLevel": "2.0.0",
+      "changed": true
     },
     {
       "id": "runtime_transient",

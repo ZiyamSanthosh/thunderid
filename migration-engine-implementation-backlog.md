@@ -14,8 +14,8 @@ The current implementation contains:
 
 - an embedded and validated release manifest;
 - canonical logical database identifiers;
-- empty PostgreSQL `MIGRATION_STATE` and `MIGRATION_PROGRESS` tables in every fresh database
-  creation script;
+- empty PostgreSQL `MIGRATION_STATE`, `MIGRATION_PROGRESS`, `MIGRATION_DEPLOYMENT_STATE` and
+  `MIGRATION_RUN` tables in every fresh database creation script;
 - Go models and validation for migration state and operation progress;
 - a metadata store for validated state and operation-progress reads and writes;
 - a transactional PostgreSQL initialization service for the fixed pre-framework baseline and fresh
@@ -87,14 +87,33 @@ The current implementation contains:
 - an explicit `migration apply contract` path that cannot be reached by the default workflow or the
   generic phase-execution API and retains engine-owned contract preflight checks;
 - a read-only PostgreSQL startup compatibility gate that runs before caches, bootstrap, background
-  workers and request listeners, while unsupported development database providers remain outside
-  the Phase 1 gate;
+  workers and request listeners, checks every store backed by a registered provider and explicitly
+  reports unsupported development-provider stores as skipped;
+- validated `full` and `restricted` operating modes, with `full` as the configured default and an
+  administrator-controlled restart required to change the mode on serving instances;
+- restricted-mode HTTP enforcement that keeps authentication, authorization, token, health,
+  discovery and required frontend-support endpoints available while rejecting management surfaces;
+- a generic feature gate that fences registration, user onboarding, recovery, administration, JIT
+  user provisioning and organization-unit creation before mutation, including nested flow-executor
+  paths;
+- unit and end-to-end integration coverage proving that restricted operations are rejected while
+  authentication and token issuance remain available;
+- deployment-selective migrate execution through repeatable `--deployment-id` arguments, with
+  deployment-level completion state, independently resumable operation targets and store-wide
+  completion of any remaining targets;
+- explicit administrator-controlled rollback for failed operations, completed work in a failed
+  phase and complete pre-contract releases, including reverse operation ordering,
+  deployment-specific targets, resumable rollback checkpoints and rejection after an uncompensated
+  contract operation;
 - a first 2.0.0 atomic PostgreSQL operation that removes the legacy `REVOKED_TOKEN` reason check
   constraint from `runtime_persistent`, with exact catalog-based pre-verification and
   post-verification plus a bounded DDL lock wait;
 - a second 2.0.0 atomic PostgreSQL operation that creates the `AUTHORIZATION_PDP_CONNECTION` table
   and its unique index in `configdb`, with exact catalog-based pre-verification and
   post-verification;
+- a representative 2.0.0 multi-phase PostgreSQL migration that adds and backfills entity-type
+  handles in bounded resumable batches, enforces uniqueness, finalizes the target representation
+  during contract and provides an explicit rollback operation for the backfill;
 - provider-neutral typed query-row helpers for operation readiness and verification queries;
 - a Docker Compose PostgreSQL integration test that builds the target ThunderID binary, obtains the
   configured source release schema from its published image, initializes all four logical
@@ -112,8 +131,10 @@ optional resume data.
 
 ## Migration engine foundation status
 
-The Phase 1 migration foundation is functionally complete for PostgreSQL. Implementation increments
-do not define a separate downtime-oriented architecture.
+The database-backed Phase 1 migration foundation is functionally complete for PostgreSQL. Integrated
+mixed-version qualification, service-enabled operations and the other in-place capabilities listed
+below remain follow-up work. Implementation increments do not define a separate downtime-oriented
+architecture.
 
 | Optional enhancement | Purpose |
 |---|---|
@@ -144,10 +165,25 @@ not depend on a Control Plane upgrade coordinator. Product-native Control Plane 
 future enhancement above the engine.
 
 The default operational model is a dedicated migration process or job started from the target
-ThunderID binary while old and target serving instances remain available. A later hosted mode may
-allow one elected target instance to serve traffic and run the background coordinator concurrently.
-Both modes use the same plans, metadata and database execution locks. Only one coordinator may own
-a physical database namespace at a time; this restriction does not prevent application traffic.
+ThunderID binary while source-version instances continue serving. Target-version serving instances
+start only after their required pre-serving phases complete. The migration job does not open an HTTP
+listener and exits after its requested work. A later hosted mode may allow one elected target
+instance to serve traffic and run the background coordinator concurrently, but it is not required
+for the base ZDM guarantee. Both modes use the same plans, metadata and database execution locks.
+Only one coordinator may own a physical database namespace at a time; this restriction does not
+prevent application traffic.
+
+## Restricted operating mode
+
+Restricted mode is a serving-product control, not migration-engine state. Administrators configure
+`operating_mode: restricted` consistently on every applicable source instance and restart those
+instances before running migration work that requires fenced writes. They restore `full` mode after
+the migration reaches the approved boundary. Automated phase-to-mode wiring is not required.
+
+The current feature set is a stable baseline. Developers adding new write-capable flows, executors
+or non-HTTP entry points are responsible for adding and enforcing the appropriate feature gate.
+Optional future work is limited to UI treatment for unavailable functions and deployment automation
+if either becomes a concrete product requirement.
 
 ## Deferred metadata additions
 
@@ -159,10 +195,9 @@ The following ideas were removed from the initial schema. They are not automatic
 | Structured failure code and failure timestamp | Commands need machine-readable remediation or reliable failure-time reporting. |
 | Run start, operation start and completion timestamps | Operational reporting or stale-run recovery has a defined use for them. |
 | Checkpoint representation version | A checkpoint format must remain readable across different migration-engine versions. |
-| `TARGET_ID` progress column | The engine implements independently resumable deployment-targeted migrations. |
 | Run and status indexes | Measured query plans show that metadata lookups require them. Metadata tables are expected to remain small. |
 | Compound database `CHECK` constraints | A rule is stable across engine versions and database enforcement materially improves correctness. |
-| Additional migration tables | A new durable concept cannot be represented clearly in the two existing metadata tables. |
+| Additional migration tables | A new durable concept cannot be represented clearly in the four existing metadata tables. |
 
 Primary keys, foreign keys, uniqueness and required-column constraints remain in the database.
 Behavioral rules and state transitions remain in Go unless there is a demonstrated reason to enforce
@@ -172,27 +207,35 @@ them in every supported database.
 
 These capabilities belong to the second implementation phase, after the basic engine works:
 
+The representative `expand`, `migrate` and `contract` migration, deployment-selective execution and
+rollback lifecycle are implemented. The next increment is integrated in-place qualification proving
+that:
+
+1. a source instance in restricted mode continues authentication, authorization and token traffic;
+2. the standalone target migration process executes and resumes the pre-serving phases;
+3. target readiness is reached only after migration verification;
+4. contract remains explicit until source instances are drained; and
+5. the resulting target instance serves successfully.
+
+Other remaining in-place capabilities are:
+
 - an engine-managed `contract_ready` boundary for stores with contract-only plans; the current safe
   workflow rejects such plans because no pre-contract phase can establish target-serving readiness;
-- a later decision on target serving during `migrate`; the base implementation waits for migration,
-  catch-up and verification, while an advanced mode requires verified dual-read or partial-data
-  compatibility;
-- capability fencing and restricted-mode behavior;
+- optional target serving during `migrate`; the base implementation intentionally waits for
+  migration, catch-up and verification, while a future hosted mode requires verified dual-read or
+  partial-data compatibility;
 - configurable backfill throttling and resource limits;
-- optional operation rollback after resumable execution or immediate post-verification failure;
-- programmatic operations wired with the normal ThunderID services they explicitly require;
+- standalone service-enabled execution for programmatic operations, including phase-aware service
+  initialization, release-specific dependency injection and transaction-context reuse without
+  starting request serving;
 - change capture for every affected record set that remains writable during backfill, including but
   not limited to login and token-related data;
 - ordering and conflict handling without adding migration-only versions to every business table;
 - transactional outbox support where application-level capture is required;
-- activation, observation and contract steps; and
-- mixed-version and interruption integration tests.
-
-The initial in-place ZDM increment may migrate a shared database as one unit. Deployment-selective
-migration is a required follow-up increment after that base works, enabling CP/DP environments to
-independently migrate chosen `DEPLOYMENT_ID` values. It requires target-aware progress,
-deployment-level readiness and resume behavior, but must not require the migration engine to manage
-traffic or deploy ThunderID instances.
+- activation and observation-period orchestration above the implemented explicit contract command;
+  and
+- mixed-version traffic tests and broader failure-injection qualification. Resumable interruption,
+  abandoned-run recovery and rollback interruption already have PostgreSQL integration coverage.
 
 ## Database-copy ZDM backlog
 
