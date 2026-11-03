@@ -11,6 +11,7 @@ import (
 	"github.com/thunder-id/thunderid/internal/flow/graphbuilder"
 	"github.com/thunder-id/thunderid/internal/flow/interceptor"
 	"github.com/thunder-id/thunderid/internal/flow/session"
+	"github.com/thunder-id/thunderid/internal/system/featuregate"
 	"github.com/thunder-id/thunderid/internal/system/jose/jwt"
 	"github.com/thunder-id/thunderid/internal/system/middleware"
 	"github.com/thunder-id/thunderid/pkg/thunderidengine/providers"
@@ -34,19 +35,20 @@ func Initialize(
 	ssoTransport session.HandleTransportInterface,
 	governance providers.IdentityGovernanceProvider,
 	variableValuesProvider variableValueProvider,
+	featureGate *featuregate.Gate,
 	cfg flowconfig.Config,
 ) (FlowExecServiceInterface, error) {
 	flowStore := newFlowStore(storeProvider)
 	interceptorRunner := newInterceptorRunner(interceptorRegistry)
 	flowEngine := newFlowEngine(executorRegistry, interceptorRunner, observabilitySvc,
-		flowProvider, graphBuilder, variableValuesProvider)
+		flowProvider, graphBuilder, variableValuesProvider, featureGate)
 	// Bound the SSO handle's lifetime to the session's configured absolute timeout (same fallback as
 	// the session executor's timeouts).
 	sessionTimeouts := session.NewTimeouts(cfg.Session.IdleTimeoutSeconds, cfg.Session.AbsoluteTimeoutSeconds,
 		cfg.Session.ActivityRefreshIntervalSeconds)
 	flowExecService := newFlowExecService(flowProvider, flowStore, flowEngine,
 		actorProvider, observabilitySvc, transactioner, cryptoSvc, attestationVerifier,
-		graphBuilder, jwtService, serverConfigSvc, governance, cfg, sessionTimeouts.Absolute)
+		graphBuilder, jwtService, serverConfigSvc, governance, featureGate, cfg, sessionTimeouts.Absolute)
 
 	handler := newFlowExecutionHandler(flowExecService, ssoTransport, sessionTimeouts.Absolute)
 	registerRoutes(mux, handler)

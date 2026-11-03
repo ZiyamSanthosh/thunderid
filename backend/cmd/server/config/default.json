@@ -35,6 +35,7 @@
       "direct_auth_secret": ""
     }
   },
+  "operating_mode": "full",
   "gate_client": {
     "path": "/gate"
   },

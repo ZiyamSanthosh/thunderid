@@ -327,3 +327,17 @@ var ErrorFlowConnectionNotSet = tidcommon.ServiceError{
 		DefaultValue: "The flow is not available for this organization yet. Contact your administrator",
 	},
 }
+
+// ErrorFlowFeatureDisabled defines the error returned when the current operating mode disables a flow feature.
+var ErrorFlowFeatureDisabled = tidcommon.ServiceError{
+	Code: "FES-1023",
+	Type: tidcommon.ClientErrorType,
+	Error: tidcommon.I18nMessage{
+		Key:          "error.flowexecservice.feature_disabled",
+		DefaultValue: "Operation temporarily unavailable",
+	},
+	ErrorDescription: tidcommon.I18nMessage{
+		Key:          "error.flowexecservice.feature_disabled_description",
+		DefaultValue: "This operation is unavailable while ThunderID is in restricted mode",
+	},
+}

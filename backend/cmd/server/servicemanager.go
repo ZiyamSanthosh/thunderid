@@ -93,6 +93,7 @@ import (
 	dbprovider "github.com/thunder-id/thunderid/internal/system/database/provider"
 	declarativeresource "github.com/thunder-id/thunderid/internal/system/declarative_resource"
 	"github.com/thunder-id/thunderid/internal/system/export"
+	"github.com/thunder-id/thunderid/internal/system/featuregate"
 	healthcheckservice "github.com/thunder-id/thunderid/internal/system/healthcheck/service"
 	httpservice "github.com/thunder-id/thunderid/internal/system/http"
 	i18nmgt "github.com/thunder-id/thunderid/internal/system/i18n/mgt"
@@ -422,6 +423,19 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 		runtime.Config.AttributeCache.Encryption.Enabled)
 
 	flowConfig := flowconfig.FromServerRuntime()
+
+	// The feature gate centralizes runtime feature availability for the configured operating mode.
+	featureGate := featuregate.NewGate()
+	if runtime.Config.OperatingMode.IsRestricted() {
+		featureGate = featuregate.NewGate(
+			featuregate.UserRegistration,
+			featuregate.AccountRecovery,
+			featuregate.AdministrativeOperations,
+			featuregate.UserProvisioning,
+			featuregate.OrganizationUnitCreation,
+		)
+	}
+
 	revocationEnforcer, revocationSvc, err := revocation.Initialize(oauthCfg, jwtService, observabilitySvc)
 	fatalOnError(ctx, logger, err, "Failed to initialize revocation service")
 	sessionRevoker := sessionCriteriaRevoker{revoker: revocationSvc}
@@ -469,6 +483,7 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 			IdentityGovernance:  governanceProvider,
 			ArtifactLifetime:    artifactLifetime,
 			AuthzDetailProvider: authzDetailService,
+			FeatureGate:         featureGate,
 		},
 		interceptor.InterceptorDependencies{},
 		flowConfig,
@@ -614,7 +629,7 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 	flowExecService, err := flowexec.Initialize(mux, flowMgtService, actorProvider,
 		execRegistry, interceptorRegistry, observabilitySvc, runtimeCryptoSvc, attestationProvider,
 		graphBuilder, jwtService, runtimeStoreProvider, transactioner, serverConfigService, ssoTransport,
-		governanceProvider, flowMgtService, flowConfig)
+		governanceProvider, flowMgtService, featureGate, flowConfig)
 	fatalOnError(ctx, logger, err, "Failed to initialize flow execution service")
 
 	// Initialize OAuth services.

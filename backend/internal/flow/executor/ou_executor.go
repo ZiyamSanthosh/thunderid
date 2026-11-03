@@ -13,6 +13,7 @@ import (
 	authnprovidermgr "github.com/thunder-id/thunderid/internal/authnprovider/manager"
 	"github.com/thunder-id/thunderid/internal/entitytype"
 	"github.com/thunder-id/thunderid/internal/flow/core"
+	"github.com/thunder-id/thunderid/internal/system/featuregate"
 	"github.com/thunder-id/thunderid/internal/system/log"
 )
 
@@ -26,6 +27,7 @@ type ouExecutor struct {
 	ouService         providers.OrganizationUnitProvider
 	authnProvider     providers.AuthnProviderManager
 	entityTypeService entitytype.EntityTypeServiceInterface
+	featureGate       *featuregate.Gate
 	logger            *log.Logger
 }
 
@@ -37,6 +39,7 @@ func newOUExecutor(
 	ouService providers.OrganizationUnitProvider,
 	authnProvider providers.AuthnProviderManager,
 	entityTypeService entitytype.EntityTypeServiceInterface,
+	featureGate *featuregate.Gate,
 ) *ouExecutor {
 	defaultInputs := []providers.Input{
 		{
@@ -66,6 +69,7 @@ func newOUExecutor(
 		ouService:         ouService,
 		authnProvider:     authnProvider,
 		entityTypeService: entityTypeService,
+		featureGate:       featureGate,
 		logger:            logger,
 	}
 }
@@ -107,6 +111,12 @@ func (o *ouExecutor) Execute(ctx *providers.NodeContext) (*providers.ExecutorRes
 			execResp.Status = providers.ExecComplete
 			return execResp, nil
 		}
+	}
+	if ctx.FlowType == providers.FlowTypeAuthentication &&
+		!o.featureGate.IsEnabled(featuregate.OrganizationUnitCreation) {
+		execResp.Status = providers.ExecFailure
+		execResp.Error = &ErrOUCreationRestricted
+		return execResp, nil
 	}
 
 	if !o.HasRequiredInputs(ctx, execResp) {

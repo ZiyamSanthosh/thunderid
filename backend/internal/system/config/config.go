@@ -785,6 +785,31 @@ func (c AuthZENPDPConfig) Validate() error {
 	return nil
 }
 
+// OperatingMode controls which product features the server exposes.
+type OperatingMode string
+
+const (
+	// OperatingModeFull exposes all configured product features.
+	OperatingModeFull OperatingMode = "full"
+	// OperatingModeRestricted exposes only the features allowed while the server is restricted.
+	OperatingModeRestricted OperatingMode = "restricted"
+)
+
+// IsRestricted reports whether the server is operating with feature restrictions.
+func (m OperatingMode) IsRestricted() bool {
+	return m == OperatingModeRestricted
+}
+
+// Validate checks that the configured operating mode is supported.
+func (m OperatingMode) Validate() error {
+	switch m {
+	case "", OperatingModeFull, OperatingModeRestricted:
+		return nil
+	default:
+		return fmt.Errorf("unsupported operating mode %q", m)
+	}
+}
+
 // HTTPConnectionConfig holds the configuration of HTTP endpoint connections.
 type HTTPConnectionConfig struct {
 	// Store defines the storage mode for HTTP connections.
@@ -798,6 +823,7 @@ type HTTPConnectionConfig struct {
 // Config holds the complete configuration details of the server.
 type Config struct {
 	Server                     engineconfig.ServerConfig         `yaml:"server"                json:"server"`
+	OperatingMode              OperatingMode                     `yaml:"operating_mode"        json:"operating_mode"`
 	Gateway                    GatewayConfig                     `yaml:"gateway"               json:"gateway"`
 	Import                     ImportConfig                      `yaml:"import"                json:"import"`
 	AuthZENPDP                 AuthZENPDPConfig                  `yaml:"authzen_pdp"           json:"authzen_pdp"`
@@ -1005,6 +1031,9 @@ func LoadConfig(configPath string, defaultPath string, serverHome string) (*Conf
 		return nil, err
 	}
 	if err := cfg.AuthZENPDP.Validate(); err != nil {
+		return nil, err
+	}
+	if err := cfg.OperatingMode.Validate(); err != nil {
 		return nil, err
 	}
 

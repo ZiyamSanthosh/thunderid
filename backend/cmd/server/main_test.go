@@ -106,6 +106,32 @@ func TestCreateHTTPServer_UnsetTimeoutsFallBackToTheShippedOnes(t *testing.T) {
 	assert.Equal(t, 120*time.Second, server.IdleTimeout)
 }
 
+func TestCreateHTTPServer_RestrictedModeRestrictsManagementAPI(t *testing.T) {
+	logger := log.GetLogger()
+	cfg := &config.Config{
+		Server: engineconfig.ServerConfig{
+			Hostname: "localhost",
+			Port:     0,
+			HTTPOnly: true,
+		},
+		OperatingMode: config.OperatingModeRestricted,
+	}
+
+	managementHandlerCalled := false
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /applications", func(w http.ResponseWriter, _ *http.Request) {
+		managementHandlerCalled = true
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	server := createHTTPServer(context.Background(), logger, cfg, mux, nil, nil)
+	recorder := httptest.NewRecorder()
+	server.Handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/applications", nil))
+
+	assert.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+	assert.False(t, managementHandlerCalled)
+}
+
 func TestCreateListener_Success(t *testing.T) {
 	logger := log.GetLogger()
 	server := &http.Server{

@@ -23,6 +23,7 @@ import (
 	"github.com/thunder-id/thunderid/internal/flow/common"
 	"github.com/thunder-id/thunderid/internal/group"
 	"github.com/thunder-id/thunderid/internal/role"
+	"github.com/thunder-id/thunderid/internal/system/featuregate"
 	"github.com/thunder-id/thunderid/internal/user"
 	"github.com/thunder-id/thunderid/tests/mocks/agentmgtprovidermock"
 	"github.com/thunder-id/thunderid/tests/mocks/authnprovider/managermock"
@@ -94,7 +95,7 @@ func (suite *ProvisioningExecutorTestSuite) SetupTest() {
 	suite.executor = newProvisioningExecutor(suite.mockFlowFactory,
 		suite.mockGroupService, suite.mockRoleService, suite.mockRoleAssignmentService, suite.mockEntityProvider,
 		suite.mockUserMgtProvider, suite.mockAgentMgtProvider, suite.mockEntityTypeService,
-		suite.mockAuthnProvider)
+		suite.mockAuthnProvider, nil)
 }
 
 // expectSchemaForProvisioning sets up the schema service mocks for Execute tests.
@@ -198,6 +199,37 @@ func (suite *ProvisioningExecutorTestSuite) TestExecute_NonRegistrationFlow() {
 	assert.NoError(suite.T(), err)
 	assert.NotNil(suite.T(), resp)
 	assert.Equal(suite.T(), providers.ExecComplete, resp.Status)
+}
+
+func (suite *ProvisioningExecutorTestSuite) TestExecute_RestrictedModeAllowsAuthenticationWithoutJIT() {
+	suite.executor.featureGate = featuregate.NewGate(featuregate.UserProvisioning)
+	ctx := &providers.NodeContext{
+		ExecutionID: "flow-123",
+		FlowType:    providers.FlowTypeAuthentication,
+	}
+
+	resp, err := suite.executor.Execute(ctx)
+
+	assert.NoError(suite.T(), err)
+	assert.Equal(suite.T(), providers.ExecComplete, resp.Status)
+}
+
+func (suite *ProvisioningExecutorTestSuite) TestExecute_RestrictedModeRejectsJITBeforeMutation() {
+	suite.executor.featureGate = featuregate.NewGate(featuregate.UserProvisioning)
+	ctx := &providers.NodeContext{
+		ExecutionID: "flow-123",
+		FlowType:    providers.FlowTypeAuthentication,
+		RuntimeData: map[string]string{
+			common.RuntimeKeyUserEligibleForProvisioning: dataValueTrue,
+		},
+	}
+
+	resp, err := suite.executor.Execute(ctx)
+
+	assert.NoError(suite.T(), err)
+	assert.Equal(suite.T(), providers.ExecFailure, resp.Status)
+	assert.Equal(suite.T(), ErrJITProvisionRestricted.Code, resp.Error.Code)
+	suite.mockUserMgtProvider.AssertNotCalled(suite.T(), "CreateUser", mock.Anything, mock.Anything)
 }
 
 func (suite *ProvisioningExecutorTestSuite) TestExecute_Success() {
@@ -851,7 +883,7 @@ func (suite *ProvisioningExecutorTestSuite) newExecutorWithNodeInputs(inputs []p
 	return newProvisioningExecutor(mockFlowFactory,
 		suite.mockGroupService, suite.mockRoleService, suite.mockRoleAssignmentService, suite.mockEntityProvider,
 		suite.mockUserMgtProvider, suite.mockAgentMgtProvider, suite.mockEntityTypeService,
-		suite.mockAuthnProvider)
+		suite.mockAuthnProvider, nil)
 }
 
 func (suite *ProvisioningExecutorTestSuite) TestGetAttributesForProvisioning_FilteredPath_RequiredAttrFromUserInputs() {

@@ -32,6 +32,7 @@ import (
 	"github.com/thunder-id/thunderid/internal/resource"
 	"github.com/thunder-id/thunderid/internal/revocation"
 	"github.com/thunder-id/thunderid/internal/role"
+	"github.com/thunder-id/thunderid/internal/system/featuregate"
 	httpservice "github.com/thunder-id/thunderid/internal/system/http"
 	"github.com/thunder-id/thunderid/internal/system/jose/jwt"
 	"github.com/thunder-id/thunderid/internal/system/log"
@@ -254,6 +255,7 @@ type ExecutorDependencies struct {
 	IdentityGovernance     providers.IdentityGovernanceProvider
 	ArtifactLifetime       artifactLifetimeResolver
 	AuthzDetailProvider    providers.AuthorizationDetailProvider
+	FeatureGate            *featuregate.Gate
 	tokenLeeway            time.Duration
 }
 
@@ -297,11 +299,11 @@ func newBuiltInExecutorRegistrars() map[string]builtInExecutorRegistrar {
 			reg.RegisterExecutor(ExecutorNameProvisioning, newProvisioningExecutor(
 				deps.FlowFactory, deps.GroupService, deps.RoleService, deps.RoleAssignmentService,
 				deps.EntityProvider, deps.UserMgtProvider, deps.AgentMgtProvider, deps.EntityTypeService,
-				deps.AuthnProvider))
+				deps.AuthnProvider, deps.FeatureGate))
 		},
 		ExecutorNameOUCreation: func(reg ExecutorRegistryInterface, deps ExecutorDependencies) {
 			reg.RegisterExecutor(ExecutorNameOUCreation, newOUExecutor(deps.FlowFactory, deps.OUService,
-				deps.AuthnProvider, deps.EntityTypeService))
+				deps.AuthnProvider, deps.EntityTypeService, deps.FeatureGate))
 		},
 		ExecutorNameAttributeCollect: func(reg ExecutorRegistryInterface, deps ExecutorDependencies) {
 			reg.RegisterExecutor(ExecutorNameAttributeCollect, newAttributeCollector(

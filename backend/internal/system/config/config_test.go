@@ -32,6 +32,32 @@ func TestAuthZENPDPDefaultsMergeAndValidation(t *testing.T) {
 	assert.Error(t, (AuthZENPDPConfig{RetryCount: &negative}).Validate())
 }
 
+func TestOperatingModeValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		mode    OperatingMode
+		wantErr bool
+	}{
+		{name: "unset defaults to normal", mode: ""},
+		{name: "full", mode: OperatingModeFull},
+		{name: "restricted", mode: OperatingModeRestricted},
+		{name: "unsupported", mode: "management_only", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.mode.Validate()
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+
+			assert.NoError(t, err)
+			assert.Equal(t, tt.mode == OperatingModeRestricted, tt.mode.IsRestricted())
+		})
+	}
+}
+
 type ConfigTestSuite struct {
 	suite.Suite
 	originalEnvVars map[string]string
