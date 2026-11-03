@@ -47,6 +47,9 @@ The current implementation contains:
 - an atomic complete-store executor that reuses ThunderID's transactioner to verify reservation
   ownership, pre-verify, execute or skip, post-verify and complete operation progress in one
   transaction;
+- an online schema executor that durably records in-progress work, executes PostgreSQL autocommit
+  DDL outside a transaction, and uses source and target verification to complete or safely resume
+  operations whose DDL and progress updates cannot be atomic;
 - a resumable complete-store executor that commits bounded data batches independently, persists
   each checkpoint in the same transaction as its data changes, rejects checkpoints that do not
   advance and continues an interrupted operation from its last committed checkpoint;
@@ -114,6 +117,12 @@ The current implementation contains:
 - a representative 2.0.0 multi-phase PostgreSQL migration that adds and backfills entity-type
   handles in bounded resumable batches, enforces uniqueness, finalizes the target representation
   during contract and provides an explicit rollback operation for the backfill;
+- operation-specific readiness checks for every forward 2.0.0 operation, including exact source and
+  target schema recognition, relation-name conflict detection, handle validation, dependency-aware
+  deferred readiness and null-handle contract validation;
+- online deployment-scoped primary-key operations for the affected configuration and entity
+  tables, including concurrent unique-index preparation, validated replacement foreign keys,
+  bounded transactional cutover and recovery from interrupted online preparation;
 - provider-neutral typed query-row helpers for operation readiness and verification queries;
 - a Docker Compose PostgreSQL integration test that builds the target ThunderID binary, obtains the
   configured source release schema from its published image, initializes all four logical
@@ -132,8 +141,9 @@ optional resume data.
 ## Migration engine foundation status
 
 The database-backed Phase 1 migration foundation is functionally complete for PostgreSQL. Integrated
-mixed-version qualification, service-enabled operations and the other in-place capabilities listed
-below remain follow-up work. Implementation increments do not define a separate downtime-oriented
+mixed-version qualification, serving-impact qualification, configurable backfill resource controls
+and operator documentation remain before ThunderID can claim the base database-changing ZDM path as
+production-qualified. Implementation increments do not define a separate downtime-oriented
 architecture.
 
 | Optional enhancement | Purpose |
@@ -205,7 +215,7 @@ them in every supported database.
 
 ## In-place ZDM backlog
 
-These capabilities belong to the second implementation phase, after the basic engine works:
+### Required before the base PostgreSQL ZDM claim
 
 The representative `expand`, `migrate` and `contract` migration, deployment-selective execution and
 rollback lifecycle are implemented. The next increment is integrated in-place qualification proving
@@ -217,25 +227,42 @@ that:
 4. contract remains explicit until source instances are drained; and
 5. the resulting target instance serves successfully.
 
-Other remaining in-place capabilities are:
+The qualification must also cover serving impact and operational recovery:
+
+- continuously exercise authentication, authorization, token, logout and revocation traffic while
+  the standalone migration process runs;
+- prove that restricted-mode feature gates reject fenced mutations before their first write;
+- measure request latency and PostgreSQL lock behavior during each schema operation;
+- exercise migration interruption, resume, readiness failure, target-startup failure and explicit
+  contract authorization in the integrated topology;
+- run against both separate logical databases and one shared physical database; and
+- verify the supported source and target artifact pair rather than only loading the source schema.
+
+Before production qualification, add configurable backfill batch sizing, pacing or throttling and
+resource limits so operators can bound migration load while source instances continue serving.
+
+Publish an operator runbook covering prerequisites, backups, restricted-mode activation, migration
+commands, monitoring, deployment-selective execution, source draining, contract authorization,
+failure recovery and rollback boundaries.
+
+### Conditional in-place capabilities
+
+The following capabilities are not required until a concrete release or deployment workflow needs
+them:
 
 - an engine-managed `contract_ready` boundary for stores with contract-only plans; the current safe
   workflow rejects such plans because no pre-contract phase can establish target-serving readiness;
 - optional target serving during `migrate`; the base implementation intentionally waits for
   migration, catch-up and verification, while a future hosted mode requires verified dual-read or
   partial-data compatibility;
-- configurable backfill throttling and resource limits;
-- standalone service-enabled execution for programmatic operations, including phase-aware service
-  initialization, release-specific dependency injection and transaction-context reuse without
-  starting request serving;
+- standalone service-enabled execution only after a real migration operation requires a ThunderID
+  business service; the dependency-injection seam is already present and no speculative operation
+  should be added;
 - change capture for every affected record set that remains writable during backfill, including but
   not limited to login and token-related data;
 - ordering and conflict handling without adding migration-only versions to every business table;
 - transactional outbox support where application-level capture is required;
-- activation and observation-period orchestration above the implemented explicit contract command;
-  and
-- mixed-version traffic tests and broader failure-injection qualification. Resumable interruption,
-  abandoned-run recovery and rollback interruption already have PostgreSQL integration coverage.
+- activation and observation-period orchestration above the implemented explicit contract command.
 
 ## Database-copy ZDM backlog
 

@@ -12,6 +12,12 @@ import (
 // Dependencies contains the dependencies available to the release compiled into this binary.
 type Dependencies = release.Dependencies
 
+// DeclarativeEntityTypes lists the entity types defined in declarative resource files.
+type DeclarativeEntityTypes = release.DeclarativeEntityTypes
+
+// DeclarativeEntityType is an entity type defined in a declarative resource file.
+type DeclarativeEntityType = release.DeclarativeEntityType
+
 // Definition returns the release definition selected for the current binary.
 func Definition() (*engine.ReleaseDefinition, error) {
 	return DefinitionWithDependencies(Dependencies{})

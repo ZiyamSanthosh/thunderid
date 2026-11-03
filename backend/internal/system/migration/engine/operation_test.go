@@ -112,6 +112,18 @@ func TestSQLOperationUsesOptionalReadinessChecker(t *testing.T) {
 	assert.Equal(t, "missing_prerequisite", result.Findings[0].Code)
 }
 
+func TestNewSQLOperationAcceptsOnlineSchemaOperation(t *testing.T) {
+	config := validSQLOperationConfig()
+	config.Definition.Kind = OperationKindSchemaChange
+	config.Definition.InterruptionMode = InterruptionModeOnline
+	config.TargetResolver = nil
+
+	operation, err := NewSQLOperation(config)
+
+	require.NoError(t, err)
+	assert.Equal(t, InterruptionModeOnline, operation.Definition().InterruptionMode)
+}
+
 func TestSQLOperationExecutesProviderStatementsInOrder(t *testing.T) {
 	config := validSQLOperationConfig()
 	config.Implementations[DatabaseTypePostgres] = SQLImplementation{Statements: []SQLStatement{

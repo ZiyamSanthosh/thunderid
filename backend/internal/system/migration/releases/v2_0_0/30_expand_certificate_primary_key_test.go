@@ -1,0 +1,16 @@
+// Copyright 2026 The ThunderID Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package v2_0_0
+
+import (
+	"testing"
+
+	"github.com/thunder-id/thunderid/internal/system/migration/engine"
+)
+
+func TestExpandCertificatePrimaryKeyDefinition(t *testing.T) {
+	assertOnlinePrimaryKeyDefinition(t, newExpandCertificatePrimaryKeyOperation,
+		"2.0.0/configdb/30_expand_certificate_primary_key", engine.StoreIDConfigDB,
+		"CERTIFICATE", `"DEPLOYMENT_ID", "ID"`)
+}

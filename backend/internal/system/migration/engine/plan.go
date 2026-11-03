@@ -42,6 +42,8 @@ type InterruptionMode string
 const (
 	// InterruptionModeAtomic requires the operation to complete in one transaction.
 	InterruptionModeAtomic InterruptionMode = "atomic"
+	// InterruptionModeOnline runs restartable schema work outside a transaction and recovers through verification.
+	InterruptionModeOnline InterruptionMode = "online"
 	// InterruptionModeResumable allows the operation to continue from durable progress.
 	InterruptionModeResumable InterruptionMode = "resumable"
 )
@@ -74,6 +76,13 @@ type Operation interface {
 type AtomicOperation interface {
 	Operation
 	Execute(context.Context, OperationExecution) error
+}
+
+// OnlineOperation completes restartable schema work outside a transaction.
+type OnlineOperation interface {
+	Operation
+	Execute(context.Context, OperationExecution) error
+	Finalize(context.Context, OperationExecution) error
 }
 
 // ResumableBatchResult describes the durable outcome of one committed operation batch.
@@ -304,6 +313,11 @@ func validateOperationImplementation(operation Operation) error {
 			return fmt.Errorf("operation %q declares atomic execution but does not implement AtomicOperation",
 				definition.ID)
 		}
+	case InterruptionModeOnline:
+		if _, ok := operation.(OnlineOperation); !ok {
+			return fmt.Errorf("operation %q declares online execution but does not implement OnlineOperation",
+				definition.ID)
+		}
 	case InterruptionModeResumable:
 		if _, ok := operation.(ResumableOperation); !ok {
 			return fmt.Errorf("operation %q declares resumable execution but does not implement ResumableOperation",
@@ -333,6 +347,7 @@ func validateOperationDefinition(
 		return fmt.Errorf("operation %q has unsupported operation kind %q", definition.ID, definition.Kind)
 	}
 	if definition.InterruptionMode != InterruptionModeAtomic &&
+		definition.InterruptionMode != InterruptionModeOnline &&
 		definition.InterruptionMode != InterruptionModeResumable {
 		return fmt.Errorf("operation %q has unsupported interruption mode %q",
 			definition.ID, definition.InterruptionMode)
@@ -340,6 +355,10 @@ func validateOperationDefinition(
 	if definition.InterruptionMode == InterruptionModeResumable &&
 		definition.Kind != OperationKindDataChange {
 		return fmt.Errorf("operation %q: resumable execution requires a data-change operation", definition.ID)
+	}
+	if definition.InterruptionMode == InterruptionModeOnline &&
+		definition.Kind != OperationKindSchemaChange {
+		return fmt.Errorf("operation %q: online execution requires a schema-change operation", definition.ID)
 	}
 	readStores := make(map[StoreID]struct{}, len(definition.ReadStoreIDs))
 	for _, storeID := range definition.ReadStoreIDs {

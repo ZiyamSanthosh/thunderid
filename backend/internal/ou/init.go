@@ -55,6 +55,20 @@ func Initialize(
 	return ouService, hierarchyResolver, hierarchyEnumerator, exporter, nil
 }
 
+// InitializeService creates the organization unit service without registering routes, MCP tools,
+// the hierarchy resolver or the exporter. It is for commands that need the service alone, such as
+// the migration command resolving organization unit handles in declarative resources.
+func InitializeService(
+	cacheManager cache.CacheManagerInterface,
+	authzService sysauthz.SystemAuthorizationServiceInterface,
+) (ConfigurableOUService, error) {
+	ouStore, transactioner, err := initializeStore(cacheManager)
+	if err != nil {
+		return nil, err
+	}
+	return newOrganizationUnitService(authzService, ouStore, transactioner), nil
+}
+
 // Store Selection (based on organization_unit.store configuration):
 //
 // 1. MUTABLE mode (store: "mutable"):

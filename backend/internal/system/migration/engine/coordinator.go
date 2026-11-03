@@ -81,6 +81,7 @@ type migrationNamespaceRuntime struct {
 	locker            MigrationExecutionLocker
 	controller        *MigrationStateController
 	atomicExecutor    *AtomicOperationExecutor
+	onlineExecutor    *OnlineOperationExecutor
 	resumableExecutor *ResumableOperationExecutor
 }
 
@@ -193,8 +194,14 @@ func NewMigrationCoordinator(
 		if err != nil {
 			return nil, err
 		}
+		onlineExecutor, err := NewOnlineOperationExecutor(
+			runtimes[index].metadataStore, runtimes[index].transactioner, stores)
+		if err != nil {
+			return nil, err
+		}
 		runtimes[index].controller = controller
 		runtimes[index].atomicExecutor = executor
+		runtimes[index].onlineExecutor = onlineExecutor
 		runtimes[index].resumableExecutor = resumableExecutor
 	}
 
@@ -578,6 +585,14 @@ func (c *MigrationCoordinator) executeOperation(
 		}
 		return c.namespaces[namespaceIndex].atomicExecutor.Execute(
 			ctx, atomicOperation, selection, runID, operationOrder)
+	case InterruptionModeOnline:
+		onlineOperation, ok := operation.(OnlineOperation)
+		if !ok {
+			return OperationExecutionResult{}, fmt.Errorf(
+				"execute operation %q: operation does not implement OnlineOperation", definition.ID)
+		}
+		return c.namespaces[namespaceIndex].onlineExecutor.Execute(
+			ctx, onlineOperation, selection, runID, operationOrder, progress)
 	case InterruptionModeResumable:
 		resumableOperation, ok := operation.(ResumableOperation)
 		if !ok {
@@ -800,13 +815,9 @@ func (c *MigrationCoordinator) storeCompletedPhase(
 		return state.Status == StatusClean && state.Stage == MigrationStageComplete &&
 			state.CompletedLevel == requirement.RequiredLevel, nil
 	}
-	completedStage, err := completedStageBeforePhase(phasePlan.next)
-	if err != nil {
-		return false, err
-	}
-	return state.Status == StatusCompleted && state.Stage == completedStage &&
-		state.CompletedLevel == requirement.AcceptedSourceLevel &&
-		state.TargetLevel == requirement.RequiredLevel && state.ActiveRunID == "", nil
+	return state.CompletedLevel == requirement.AcceptedSourceLevel &&
+		state.ActiveRunID == "" &&
+		requestedPhaseCompleted(phase, requirement.RequiredLevel, &state), nil
 }
 
 func (c *MigrationCoordinator) inspectCompletedProgress(
@@ -872,7 +883,8 @@ func (c *MigrationCoordinator) inspectCompletedProgress(
 					resume.completedOperations[operationID] = struct{}{}
 				}
 			case StatusInProgress:
-				if expected.operation.Definition().InterruptionMode != InterruptionModeResumable {
+				mode := expected.operation.Definition().InterruptionMode
+				if mode != InterruptionModeResumable && mode != InterruptionModeOnline {
 					return fmt.Errorf(
 						"inspect migration resume progress for store %q: atomic operation %q is in progress",
 						storeID, item.OperationID)

@@ -19,10 +19,42 @@ func verifyResumeAfterFinalizationFailure(t *testing.T, environment migrationhar
 	t.Helper()
 	t.Run("resume_after_finalization_failure", func(t *testing.T) {
 		configDB := environment.OpenDatabase(t, "configdb")
-		_, err := configDB.Exec(`DELETE FROM "MIGRATION_PROGRESS"
+		_, err := configDB.Exec(`UPDATE "INBOUND_CLIENT"
+			SET PROPERTIES = jsonb_build_object(
+				'allowedUserTypes', jsonb_build_array($1::text),
+				'subjectAttribute', jsonb_build_object($1::text, 'email'))
+			WHERE DEPLOYMENT_ID = 'migration-deployment'
+				AND ENTITY_ID = '0199a123-4794-7abc-8def-0123456789ab'`, legacyEntityTypeName)
+		require.NoError(t, err)
+		_, err = configDB.Exec(`UPDATE "IDP"
+			SET ATTRIBUTE_CONFIGURATION = jsonb_build_object(
+				'userTypeResolution', jsonb_build_object(
+					'default', $1::text,
+					'valueMapping', jsonb_build_object('legacy', $1::text)),
+				'userTypeAttributeMappings', jsonb_build_array(
+					jsonb_build_object('userType', $1::text, 'attributes', '[]'::jsonb)))
+			WHERE DEPLOYMENT_ID = 'migration-deployment'
+				AND ID = '0199a123-4792-7abc-8def-0123456789ab'`, legacyEntityTypeName)
+		require.NoError(t, err)
+		_, err = configDB.Exec(`UPDATE "FLOW_VERSION"
+			SET NODES = jsonb_build_array(jsonb_build_object(
+				'id', 'resolver',
+				'type', 'TASK_EXECUTION',
+				'executor', jsonb_build_object('name', 'UserTypeResolver'),
+				'properties', jsonb_build_object(
+					'allowedUserTypes', jsonb_build_array($1::text))))
+			WHERE DEPLOYMENT_ID = 'migration-deployment'
+				AND FLOW_ID = '0199a123-4791-7abc-8def-0123456789ab' AND VERSION = 1`, legacyEntityTypeName)
+		require.NoError(t, err)
+		_, err = configDB.Exec(`DELETE FROM "MIGRATION_PROGRESS"
 			WHERE OPERATION_ID IN (
-				'2.0.0/configdb/05_backfill_entity_type_handle',
-				'2.0.0/configdb/06_add_entity_type_handle_uniqueness'
+				'2.0.0/configdb/04_backfill_entity_type_handle',
+				'2.0.0/configdb/05_add_entity_type_handle_uniqueness',
+				'2.0.0/configdb/44_migrate_inbound_client_entity_type_references',
+				'2.0.0/configdb/45_migrate_idp_entity_type_references',
+				'2.0.0/configdb/46_migrate_authorization_pdp_entity_type_references',
+				'2.0.0/configdb/47_migrate_flow_entity_type_references',
+				'2.0.0/configdb/48_migrate_default_agent_name_schema'
 			)`)
 		require.NoError(t, err)
 
@@ -73,10 +105,6 @@ func verifyResumeAbandonedRun(t *testing.T, environment migrationharness.Environ
 		prepareAbandonedStore(t, configDB, "configdb")
 
 		runtimeDB := environment.OpenDatabase(t, "runtime_persistent")
-		_, err = runtimeDB.Exec(`ALTER TABLE "REVOKED_TOKEN"
-			ADD CONSTRAINT "REVOKED_TOKEN_revocation_reason_check"
-			CHECK (REVOCATION_REASON IN ('explicit', 'refresh_rotation'))`)
-		require.NoError(t, err)
 		prepareAbandonedStore(t, runtimeDB, "runtime_persistent")
 
 		environment.RunMigrationCommand(t, "resume")
@@ -91,8 +119,7 @@ func verifyResumeAbandonedRun(t *testing.T, environment migrationharness.Environ
 			"1.0.0:contract_ready:completed")
 		environment.RunMigrationCommand(t, "apply migrate")
 		verifyCreateAuthorizationPDPConnection(t, environment)
-		verifyRemoveRevocationReasonCheck(t, environment)
-		t.Log("verified: resume recovered an abandoned run and reapplied both pending operations")
+		t.Log("verified: resume recovered an abandoned run and reapplied pending operations")
 	})
 }
 

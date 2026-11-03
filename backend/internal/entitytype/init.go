@@ -57,6 +57,22 @@ func Initialize(
 	return entityTypeService, userTypeExporter, agentTypeExporter, nil
 }
 
+// InitializeDeclarativeService builds the entity type service over the declarative (file-based)
+// store only. It registers no routes or MCP tools and never reads the database, so a command that
+// runs while the database schema is changing (the migration command) can list the read-only entity
+// types defined in the resource files. The store mode configuration is intentionally ignored.
+func InitializeDeclarativeService(
+	ouService oupkg.OrganizationUnitServiceInterface,
+	authzService sysauthz.SystemAuthorizationServiceInterface,
+) (EntityTypeServiceInterface, error) {
+	fileStore, transactioner := newEntityTypeFileBasedStore()
+	entityTypeService := newEntityTypeService(ouService, fileStore, transactioner, authzService)
+	if err := loadDeclarativeResources(fileStore, entityTypeService); err != nil {
+		return nil, err
+	}
+	return entityTypeService, nil
+}
+
 // Store Selection (based on entity_type.store configuration):
 //
 // 1. MUTABLE mode (store: "mutable"):
