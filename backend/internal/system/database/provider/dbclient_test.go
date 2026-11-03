@@ -82,6 +82,26 @@ func (suite *DBClientTestSuite) TestQuerySuccess() {
 	assert.NoError(suite.T(), suite.mock.ExpectationsWereMet())
 }
 
+func (suite *DBClientTestSuite) TestWithSessionUsesPinnedConnection() {
+	testQuery := model.DBQuery{ID: "test_session_query", Query: "SELECT acquired"}
+	suite.mock.ExpectQuery("SELECT acquired").
+		WillReturnRows(sqlmock.NewRows([]string{"acquired"}).AddRow(true))
+
+	err := suite.dbClient.WithSession(context.Background(), func(session DBSessionInterface) error {
+		rows, queryErr := session.QueryContext(context.Background(), testQuery)
+		assert.Equal(suite.T(), []map[string]interface{}{{"acquired": true}}, rows)
+		return queryErr
+	})
+
+	assert.NoError(suite.T(), err)
+}
+
+func (suite *DBClientTestSuite) TestWithSessionRejectsMissingFunction() {
+	err := suite.dbClient.WithSession(context.Background(), nil)
+
+	assert.Error(suite.T(), err)
+}
+
 func (suite *DBClientTestSuite) TestQueryEmptyResults() {
 	testQuery := model.DBQuery{
 		ID:    "test_query_empty",

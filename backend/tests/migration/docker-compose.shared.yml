@@ -1,0 +1,4 @@
+services:
+  migration-runner:
+    volumes:
+      - ./releases/v2_0_0/deployment-shared.yaml:/opt/thunderid/deployment.yaml:ro

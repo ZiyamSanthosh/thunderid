@@ -1,0 +1,48 @@
+server:
+  hostname: "migration-runner"
+  port: 8090
+  http_only: true
+
+database:
+  config:
+    type: postgres
+    postgres:
+      hostname: postgres
+      port: 5432
+      name: configdb
+      username: migration_user
+      password: migration_password
+      sslmode: disable
+
+  runtime_transient:
+    type: postgres
+    postgres:
+      hostname: postgres
+      port: 5432
+      name: runtime_transient
+      username: migration_user
+      password: migration_password
+      sslmode: disable
+
+  entity:
+    type: postgres
+    postgres:
+      hostname: postgres
+      port: 5432
+      name: entitydb
+      username: migration_user
+      password: migration_password
+      sslmode: disable
+
+  runtime_persistent:
+    type: postgres
+    postgres:
+      hostname: postgres
+      port: 5432
+      name: runtime_persistent
+      username: migration_user
+      password: migration_password
+      sslmode: disable
+
+log:
+  level: info

@@ -1,0 +1,22 @@
+server:
+  hostname: "migration-runner"
+  port: 8090
+  http_only: true
+
+database:
+  config: &shared_database
+    type: postgres
+    postgres:
+      hostname: postgres
+      port: 5432
+      name: thunderid
+      username: migration_user
+      password: migration_password
+      sslmode: disable
+
+  runtime_transient: *shared_database
+  entity: *shared_database
+  runtime_persistent: *shared_database
+
+log:
+  level: info

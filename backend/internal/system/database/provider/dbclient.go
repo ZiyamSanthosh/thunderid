@@ -7,6 +7,7 @@ package provider
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 
 	"github.com/thunder-id/thunderid/internal/system/database/model"
@@ -32,6 +33,13 @@ type DBClientInterface interface {
 	BeginTx() (model.TxInterface, error)
 	// GetTransactioner returns the transactioner for this client.
 	GetTransactioner() (providers.Transactioner, error)
+	// WithSession executes a function using one pinned database session.
+	WithSession(ctx context.Context, fn func(DBSessionInterface) error) error
+}
+
+// DBSessionInterface provides query access bound to one physical database session.
+type DBSessionInterface interface {
+	QueryContext(ctx context.Context, query model.DBQuery, args ...interface{}) ([]map[string]interface{}, error)
 }
 
 // DBClient is the implementation of DBClientInterface.
@@ -86,42 +94,7 @@ func (client *DBClient) QueryContext(
 	if err != nil {
 		return nil, err
 	}
-	defer func() {
-		if closeErr := rows.Close(); closeErr != nil {
-			logger.Error(ctx, "Error closing rows", log.Error(closeErr))
-		}
-	}()
-
-	columns, err := rows.Columns()
-	if err != nil {
-		return nil, err
-	}
-
-	var results []map[string]interface{}
-	for rows.Next() {
-		row := make([]interface{}, len(columns))
-		rowPointers := make([]interface{}, len(columns))
-		for i := range row {
-			rowPointers[i] = &row[i]
-		}
-
-		if err := rows.Scan(rowPointers...); err != nil {
-			return nil, err
-		}
-
-		result := map[string]interface{}{}
-		for i, col := range columns {
-			// Normalize column names to lowercase for consistency.
-			result[strings.ToLower(col)] = row[i]
-		}
-		results = append(results, result)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	return results, nil
+	return readRows(ctx, rows)
 }
 
 // Execute executes a sql query without returning data in any rows, and returns number of rows affected.
@@ -170,6 +143,81 @@ func (client *DBClient) BeginTx() (model.TxInterface, error) {
 // GetTransactioner returns the transactioner for this client.
 func (client *DBClient) GetTransactioner() (providers.Transactioner, error) {
 	return transaction.NewTransactioner(client.db.GetSQLDB(), client.dbName), nil
+}
+
+// WithSession executes a function using one pinned database session.
+func (client *DBClient) WithSession(
+	ctx context.Context,
+	fn func(DBSessionInterface) error,
+) (err error) {
+	if fn == nil {
+		return errors.New("database session function is required")
+	}
+	conn, err := client.db.GetSQLDB().Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		err = errors.Join(err, conn.Close())
+	}()
+
+	return fn(&dbSession{conn: conn, dbType: client.dbType})
+}
+
+type dbSession struct {
+	conn   *sql.Conn
+	dbType string
+}
+
+func (s *dbSession) QueryContext(
+	ctx context.Context,
+	query model.DBQuery,
+	args ...interface{},
+) ([]map[string]interface{}, error) {
+	rows, err := s.conn.QueryContext(ctx, query.GetQuery(s.dbType), args...)
+	if err != nil {
+		return nil, err
+	}
+	return readRows(ctx, rows)
+}
+
+func readRows(ctx context.Context, rows *sql.Rows) ([]map[string]interface{}, error) {
+	logger := log.GetLogger().With(log.String(log.LoggerKeyComponentName, "DBClient"))
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			logger.Error(ctx, "Error closing rows", log.Error(closeErr))
+		}
+	}()
+
+	columns, err := rows.Columns()
+	if err != nil {
+		return nil, err
+	}
+
+	var results []map[string]interface{}
+	for rows.Next() {
+		row := make([]interface{}, len(columns))
+		rowPointers := make([]interface{}, len(columns))
+		for i := range row {
+			rowPointers[i] = &row[i]
+		}
+
+		if err := rows.Scan(rowPointers...); err != nil {
+			return nil, err
+		}
+
+		result := map[string]interface{}{}
+		for i, col := range columns {
+			result[strings.ToLower(col)] = row[i]
+		}
+		results = append(results, result)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return results, nil
 }
 
 // Close closes the database connection.
