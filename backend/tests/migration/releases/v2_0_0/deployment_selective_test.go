@@ -35,7 +35,7 @@ func TestPostgresDeploymentSelectiveMigration(t *testing.T) {
 			WHERE DEPLOYMENT_ID = 'deployment-b' AND HANDLE IS NOT NULL`, "1")
 	migrationharness.AssertQueryValue(t, db,
 		`SELECT COMPLETED_LEVEL FROM "MIGRATION_DEPLOYMENT_STATE" WHERE DEPLOYMENT_ID = 'deployment-a'`,
-		"2.0.0")
+		"2.0.0-m1-pidp")
 	migrationharness.AssertQueryValue(t, db,
 		`SELECT STAGE || ':' || STATUS FROM "MIGRATION_STATE" WHERE STORE_ID = 'configdb'`,
 		"expanded:completed")
@@ -47,7 +47,7 @@ func TestPostgresDeploymentSelectiveMigration(t *testing.T) {
 		`SELECT COUNT(*)::TEXT FROM "ENTITY_TYPES"
 			WHERE DEPLOYMENT_ID = 'deployment-b' AND HANDLE IS NOT NULL`, "1")
 	migrationharness.AssertQueryValue(t, db,
-		`SELECT COUNT(*)::TEXT FROM "MIGRATION_DEPLOYMENT_STATE" WHERE COMPLETED_LEVEL = '2.0.0'`, "1")
+		`SELECT COUNT(*)::TEXT FROM "MIGRATION_DEPLOYMENT_STATE" WHERE COMPLETED_LEVEL = '2.0.0-m1-pidp'`, "1")
 	migrationharness.AssertQueryValue(t, db,
 		`SELECT STAGE || ':' || STATUS FROM "MIGRATION_STATE" WHERE STORE_ID = 'configdb'`,
 		"contract_ready:completed")

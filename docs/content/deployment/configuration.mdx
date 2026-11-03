@@ -81,7 +81,7 @@ In restricted mode, the server serves the following:
 - Sign-in flows, <ProductName /> Gate, and the Console.
 - The OAuth and OpenID Connect endpoints for authorization, token issuance, including the OU-qualified token endpoint, token introspection and revocation, user information, JWKS, logout, pushed authorization requests, and backchannel authentication.
 - The discovery documents, the health endpoints, and the wallet-facing OpenID4VP endpoints.
-- Read access (`GET`, `HEAD`, and `OPTIONS`) to these management resources: agent types, agents, applications, connections, flows, gateways, groups, organization units, resource servers, roles, user types, and users.
+- Read access (`GET`, `HEAD`, and `OPTIONS`) to these management resources: agent types, agents, applications, connections, flows, gateways, groups, layouts, notification templates, organization units, resource servers, roles, server configuration, themes, translations, user types, users, and variables.
 
 Every other request returns `503` with the error code `SSE-5030`.
 
@@ -100,6 +100,14 @@ Inside flows, the server refuses the following operations:
 | Recording the passkey sign count | Skipped. Passkey sign-in works. The stored count catches up on the next sign-in after the server returns to `full` mode. |
 
 The Control Plane does not start in restricted mode. It stops at startup with an error when `operating_mode` is `restricted`.
+
+## Migration
+
+Controls how the <ProductName /> server relates to the migration state of its databases.
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `migration.startup_compatibility_check` | `false` | When `true`, the server reads the migration metadata of each database before it starts and refuses to start unless every database is at the level this release requires. Leave it `false` for a database created from this release's schema scripts, because such a database carries no migration metadata. Set it to `true` for a database that you migrate between releases. |
 
 ## Gate Client Configuration
 

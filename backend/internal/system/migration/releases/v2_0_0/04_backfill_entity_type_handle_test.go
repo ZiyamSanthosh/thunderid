@@ -16,6 +16,18 @@ import (
 	systemutils "github.com/thunder-id/thunderid/internal/system/utils"
 )
 
+func TestBackfillEntityTypeHandleCatchUpOperationRepeatsTheBackfillUnderItsOwnID(t *testing.T) {
+	operation := newBackfillEntityTypeHandleCatchUpOperation(nil)
+	definition := operation.Definition()
+
+	assert.Equal(t, backfillEntityTypeHandleCatchUpOperationID, definition.ID)
+	assert.NotEqual(t, backfillEntityTypeHandleOperationID, definition.ID)
+	assert.Equal(t, engine.StoreIDConfigDB, definition.StoreID)
+	assert.Equal(t, engine.OperationKindDataChange, definition.Kind)
+	assert.Equal(t, engine.InterruptionModeResumable, definition.InterruptionMode)
+	assert.Implements(t, (*engine.ResumableOperation)(nil), operation)
+}
+
 func TestBackfillEntityTypeHandleOperation(t *testing.T) {
 	operation := newBackfillEntityTypeHandleOperation(nil)
 	definition := operation.Definition()

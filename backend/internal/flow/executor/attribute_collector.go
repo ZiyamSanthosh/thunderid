@@ -395,6 +395,9 @@ func (a *attributeCollector) getInputAttributes(ctx *providers.NodeContext) map[
 	requiredInputAttrs := a.getInputs(ctx)
 
 	extIdentity := core.GetExternalIdentity(ctx.RuntimeData)
+	// While profile updates are refused, the identity provider's claims do not refresh the profile, so a
+	// changed claim does not fail a sign in that collected nothing. Values the flow collected still count.
+	claimsRefreshProfile := a.featureGate.IsEnabled(featuregate.UserAttributeUpdate)
 	for _, inputAttr := range requiredInputAttrs {
 		// Skip special attributes that shouldn't be stored/ updated in the user profile
 		if inputAttr.Identifier == userAttributeUserID {
@@ -408,6 +411,8 @@ func (a *attributeCollector) getInputAttributes(ctx *providers.NodeContext) map[
 			attributesMap[inputAttr.Identifier] = convertToSchemaType(value, schemaType)
 		} else if runtimeValue, exists := ctx.RuntimeData[inputAttr.Identifier]; exists {
 			attributesMap[inputAttr.Identifier] = convertToSchemaType(runtimeValue, schemaType)
+		} else if !claimsRefreshProfile {
+			continue
 		} else if claimValue, exists := extIdentity.Claim(inputAttr.Identifier); exists {
 			attributesMap[inputAttr.Identifier] = convertToSchemaType(claimValue, schemaType)
 		}

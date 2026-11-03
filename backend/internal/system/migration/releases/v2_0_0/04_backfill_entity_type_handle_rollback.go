@@ -14,13 +14,13 @@ import (
 
 var (
 	queryEntityTypeHandleRollbackBatch = dbmodel.DBQuery{
-		ID: "MIG-CFG_MGT-11",
+		ID: "MIG-CFG_MGT-16",
 		PostgresQuery: `SELECT ID, DEPLOYMENT_ID FROM "ENTITY_TYPES"
 			WHERE HANDLE IS NOT NULL AND ID > $1 AND ($2 = '' OR DEPLOYMENT_ID = $2)
 			ORDER BY ID LIMIT 100`,
 	}
 	queryClearEntityTypeHandle = dbmodel.DBQuery{
-		ID: "MIG-CFG_MGT-12",
+		ID: "MIG-CFG_MGT-17",
 		PostgresQuery: `UPDATE "ENTITY_TYPES" SET HANDLE = NULL
 			WHERE ID = $1 AND DEPLOYMENT_ID = $2`,
 	}

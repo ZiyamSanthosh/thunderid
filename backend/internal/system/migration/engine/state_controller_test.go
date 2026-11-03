@@ -958,3 +958,40 @@ func completedProgressRow(
 		"checkpoint_data": nil, "updated_at": updatedAt,
 	}
 }
+
+func TestMigrationStateControllerRollbackOfFirstDeclaredPhaseReturnsToCleanStore(t *testing.T) {
+	manifest := changedStoreManifest(StoreIDConfigDB)
+	migrate := validPlanOperation(StoreIDConfigDB)
+	migrate.definition.ID = "2.0.0/configdb/migrate"
+	release := ReleaseDefinition{Manifest: manifest, Plan: MigrationPlan{
+		TargetVersion: manifest.ReleaseVersion, Migrate: []Operation{migrate},
+	}}
+	startedAt := time.Date(2026, time.October, 12, 10, 0, 0, 0, time.UTC)
+	completedAt := startedAt.Add(time.Minute)
+	dbClient := providermock.NewDBClientInterfaceMock(t)
+	dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(StoreIDConfigDB)).
+		Return([]map[string]interface{}{phaseStateRow(
+			MigrationStageMigrating, StatusInProgress, manifest.ReleaseVersion, testRunID, startedAt,
+		)}, nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryDeleteMigrationProgressForRun,
+		testStateID, testRunID).Return(int64(1), nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryDeleteDeploymentStatesForLevel,
+		testStateID, manifest.ReleaseVersion).Return(int64(0), nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryDeleteInactiveMigrationRun,
+		testRunID).Return(int64(1), nil).Once()
+	dbClient.On("ExecuteContext", mock.Anything, queryTransitionMigrationState,
+		"1.0.0", nil, string(MigrationStageComplete), string(StatusClean), nil, nil, completedAt,
+		testStateID, string(StoreIDConfigDB), 1, "1.0.0", manifest.ReleaseVersion,
+		string(MigrationStageMigrating), string(StatusInProgress), testRunID, nil, startedAt).
+		Return(int64(1), nil).Once()
+	controller := newTestFinalizationController(t, release, dbClient, &testTransactioner{})
+	controller.now = func() time.Time { return completedAt }
+
+	result, err := controller.CompleteRollback(
+		context.Background(), StoreIDConfigDB, OperationPhaseMigrate, testRunID, MigrationSelection{})
+
+	require.NoError(t, err)
+	assert.Equal(t, MigrationStageComplete, result.State.Stage)
+	assert.Equal(t, StatusClean, result.State.Status)
+	assert.Empty(t, result.State.TargetLevel)
+}

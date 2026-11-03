@@ -6,6 +6,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -173,6 +174,17 @@ func TestSQLOperationExecutionFailures(t *testing.T) {
 			ExecutionTarget{DeploymentID: " deployment-a"}))
 
 		assert.ErrorContains(t, err, "surrounding whitespace")
+	})
+
+	t.Run("oversized target", func(t *testing.T) {
+		operation, err := NewSQLOperation(validSQLOperationConfig())
+		require.NoError(t, err)
+
+		err = operation.Execute(context.Background(), newOperationExecution(
+			&recordingExecutionAccess{databaseType: DatabaseTypePostgres},
+			ExecutionTarget{DeploymentID: strings.Repeat("d", maxExecutionTargetIDLength+1)}))
+
+		assert.ErrorContains(t, err, "longer than")
 	})
 
 	t.Run("database type unavailable", func(t *testing.T) {

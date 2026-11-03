@@ -30,10 +30,12 @@ func Initialize(
 ) {
 	// Step 1: Determine store mode and initialize store and transactioner
 	storeMode := getEntityTypeStoreMode()
-	entityTypeStore, transactioner, err := initializeStore(storeMode, cacheManager)
+	baseStore, transactioner, err := initializeStore(storeMode, cacheManager)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
+	snapshotCache := cache.GetCache[*entityTypeReferenceSnapshot](cacheManager, "EntityTypeReferenceCache")
+	entityTypeStore := newSnapshotInvalidatingStore(baseStore, snapshotCache)
 
 	// Step 2: Create service with store
 	entityTypeService := newEntityTypeService(ouService, entityTypeStore, transactioner,
@@ -41,7 +43,7 @@ func Initialize(
 
 	// Step 3: Load declarative resources into store (if applicable)
 	if storeMode == serverconst.StoreModeComposite || storeMode == serverconst.StoreModeDeclarative {
-		if err := loadDeclarativeResources(entityTypeStore, entityTypeService); err != nil {
+		if err := loadDeclarativeResources(baseStore, entityTypeService); err != nil {
 			return nil, nil, nil, nil, err
 		}
 	}
@@ -57,8 +59,7 @@ func Initialize(
 
 	userTypeExporter := newEntityTypeExporter(entityTypeService, TypeCategoryUser)
 	agentTypeExporter := newEntityTypeExporter(entityTypeService, TypeCategoryAgent)
-	referenceNormalizer := newEntityTypeReferenceNormalizer(entityTypeStore,
-		cache.GetCache[*entityTypeReferenceSnapshot](cacheManager, "EntityTypeReferenceCache"))
+	referenceNormalizer := newEntityTypeReferenceNormalizer(entityTypeStore, snapshotCache)
 	return entityTypeService, userTypeExporter, agentTypeExporter, referenceNormalizer, nil
 }
 

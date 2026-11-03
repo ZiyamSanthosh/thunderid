@@ -8,6 +8,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	serverconst "github.com/thunder-id/thunderid/internal/system/constants"
@@ -237,4 +238,54 @@ func TestResolveReferencesWrapsNormalizerError(t *testing.T) {
 
 	require.ErrorContains(t, err, "failed to normalize entity type references")
 	require.Nil(t, handles)
+}
+
+func TestSnapshotInvalidatingStoreClearsTheCategoryOnWrites(t *testing.T) {
+	ctx := context.Background()
+	writes := map[string]func(store entityTypeStoreInterface, storeMock *entityTypeStoreInterfaceMock) error{
+		"create": func(store entityTypeStoreInterface, storeMock *entityTypeStoreInterfaceMock) error {
+			storeMock.On("CreateEntityType", ctx, mock.Anything).Return(nil).Once()
+			return store.CreateEntityType(ctx, EntityType{Category: TypeCategoryUser})
+		},
+		"update": func(store entityTypeStoreInterface, storeMock *entityTypeStoreInterfaceMock) error {
+			storeMock.On("UpdateEntityTypeByID", ctx, TypeCategoryUser, "id-1", mock.Anything).Return(nil).Once()
+			return store.UpdateEntityTypeByID(ctx, TypeCategoryUser, "id-1", EntityType{})
+		},
+		"delete": func(store entityTypeStoreInterface, storeMock *entityTypeStoreInterfaceMock) error {
+			storeMock.On("DeleteEntityTypeByID", ctx, TypeCategoryUser, "id-1").Return(nil).Once()
+			return store.DeleteEntityTypeByID(ctx, TypeCategoryUser, "id-1")
+		},
+	}
+
+	for name, write := range writes {
+		t.Run(name, func(t *testing.T) {
+			snapshotData := map[string]*entityTypeReferenceSnapshot{}
+			snapshotCache := cachemock.NewCacheInterfaceMock[*entityTypeReferenceSnapshot](t)
+			setupCacheMock(snapshotCache, snapshotData)
+			snapshotData[string(TypeCategoryUser)] = &entityTypeReferenceSnapshot{}
+			snapshotData[string(TypeCategoryAgent)] = &entityTypeReferenceSnapshot{}
+
+			storeMock := newEntityTypeStoreInterfaceMock(t)
+			store := newSnapshotInvalidatingStore(storeMock, snapshotCache)
+
+			require.NoError(t, write(store, storeMock))
+
+			require.NotContains(t, snapshotData, string(TypeCategoryUser))
+			require.Contains(t, snapshotData, string(TypeCategoryAgent))
+		})
+	}
+}
+
+func TestSnapshotInvalidatingStoreKeepsTheSnapshotWhenAWriteFails(t *testing.T) {
+	ctx := context.Background()
+	snapshotData := map[string]*entityTypeReferenceSnapshot{string(TypeCategoryUser): {}}
+	snapshotCache := cachemock.NewCacheInterfaceMock[*entityTypeReferenceSnapshot](t)
+	setupCacheMock(snapshotCache, snapshotData)
+
+	storeMock := newEntityTypeStoreInterfaceMock(t)
+	storeMock.On("CreateEntityType", ctx, mock.Anything).Return(errors.New("db failure")).Once()
+	store := newSnapshotInvalidatingStore(storeMock, snapshotCache)
+
+	require.Error(t, store.CreateEntityType(ctx, EntityType{Category: TypeCategoryUser}))
+	require.Contains(t, snapshotData, string(TypeCategoryUser))
 }

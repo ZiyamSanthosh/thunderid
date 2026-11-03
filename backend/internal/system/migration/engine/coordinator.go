@@ -382,7 +382,7 @@ func (c *MigrationCoordinator) applyPhase(
 			if executeErr != nil {
 				failure := operationFailure{
 					storeID: definition.StoreID, forwardOperationID: definition.ID,
-					currentOperationID: definition.ID, executionTargetID: selectionTargetID(operationSelection),
+					currentOperationID: definition.ID, executionTargetID: operationTargetID(definition, operationSelection),
 					executionDirection: ExecutionDirectionForward,
 				}
 				return result, errors.Join(executeErr,
@@ -499,7 +499,7 @@ func (c *MigrationCoordinator) resume(ctx context.Context) (MigrationRunResult, 
 		}
 		namespaceIndex := namespaceByStore[definition.StoreID]
 		for _, operationSelection := range operationSelections(definition, resume.selection) {
-			key := operationTargetKey(definition.ID, selectionTargetID(operationSelection))
+			key := operationTargetKey(definition.ID, operationTargetID(definition, operationSelection))
 			if _, completed := resume.completedTargets[key]; completed {
 				continue
 			}
@@ -514,7 +514,7 @@ func (c *MigrationCoordinator) resume(ctx context.Context) (MigrationRunResult, 
 			if executeErr != nil {
 				failure := operationFailure{
 					storeID: definition.StoreID, forwardOperationID: definition.ID,
-					currentOperationID: definition.ID, executionTargetID: selectionTargetID(operationSelection),
+					currentOperationID: definition.ID, executionTargetID: operationTargetID(definition, operationSelection),
 					executionDirection: ExecutionDirectionForward,
 				}
 				return result, errors.Join(executeErr,
@@ -551,8 +551,10 @@ func (c *MigrationCoordinator) resume(ctx context.Context) (MigrationRunResult, 
 	return result, nil
 }
 
-func selectionTargetID(selection MigrationSelection) string {
-	if len(selection.DeploymentIDs) == 0 {
+// operationTargetID returns the execution target an operation records progress under. Schema changes always
+// apply to the complete store, so a deployment selection never names their target.
+func operationTargetID(definition OperationDefinition, selection MigrationSelection) string {
+	if definition.Kind != OperationKindDataChange || len(selection.DeploymentIDs) == 0 {
 		return ""
 	}
 	return selection.DeploymentIDs[0]
@@ -718,6 +720,9 @@ func (c *MigrationCoordinator) inspectResumableRun(ctx context.Context) (migrati
 			if err != nil {
 				return resume, err
 			}
+			if selectiveMigrateFinalized(requirement, state, resume.phase, resume.selection) {
+				completed = true
+			}
 			if !completed {
 				return resume, fmt.Errorf(
 					"inspect migration resume state for store %q: phase %q is not complete and is not owned by run %q",
@@ -748,10 +753,18 @@ func (c *MigrationCoordinator) rejectForwardResumeDuringRollback(
 	ctx context.Context,
 	resume migrationResumeContext,
 ) error {
+	namespaceIndexes := c.namespaceIndexes()
+	namespaces := make(map[int]struct{}, len(resume.failedByNamespace)+len(resume.activeStores))
 	for namespaceIndex, states := range resume.failedByNamespace {
-		if len(states) == 0 {
-			continue
+		if len(states) > 0 {
+			namespaces[namespaceIndex] = struct{}{}
 		}
+	}
+	// An interrupted rollback leaves its stores in progress instead of failed, so abandoned stores count too.
+	for storeID := range resume.activeStores {
+		namespaces[namespaceIndexes[storeID]] = struct{}{}
+	}
+	for namespaceIndex := range namespaces {
 		run, err := c.namespaces[namespaceIndex].metadataStore.GetRun(ctx, resume.runID)
 		if err != nil {
 			return fmt.Errorf("inspect migration resume run: %w", err)
@@ -771,6 +784,7 @@ func (c *MigrationCoordinator) loadResumeSelection(
 ) (MigrationSelection, error) {
 	visited := make(map[int]struct{})
 	var expected []string
+	loaded := false
 	indexes := c.namespaceIndexes()
 	for storeID, state := range statesByStore {
 		if state.ActiveRunID != runID {
@@ -788,8 +802,9 @@ func (c *MigrationCoordinator) loadResumeSelection(
 			return MigrationSelection{}, fmt.Errorf("inspect migration resume: run %q is missing", runID)
 		}
 		targets := run.Selection.DeploymentIDs
-		if expected == nil {
+		if !loaded {
 			expected = targets
+			loaded = true
 		} else if strings.Join(expected, "\x00") != strings.Join(targets, "\x00") {
 			return MigrationSelection{}, errors.New(
 				"inspect migration resume targets: database namespaces have different deployment selections")
@@ -797,6 +812,19 @@ func (c *MigrationCoordinator) loadResumeSelection(
 		visited[namespaceIndex] = struct{}{}
 	}
 	return MigrationSelection{DeploymentIDs: append([]string(nil), expected...)}, nil
+}
+
+// selectiveMigrateFinalized reports whether a store completed its part of a deployment-selective migrate run.
+// Such a store returns to the expanded boundary because deployments outside the selection have not migrated.
+func selectiveMigrateFinalized(
+	requirement StoreRequirement,
+	state State,
+	phase OperationPhase,
+	selection MigrationSelection,
+) bool {
+	return phase == OperationPhaseMigrate && len(selection.DeploymentIDs) > 0 &&
+		state.Stage == MigrationStageExpanded && state.Status == StatusCompleted &&
+		state.TargetLevel == requirement.RequiredLevel
 }
 
 func (c *MigrationCoordinator) storeCompletedPhase(

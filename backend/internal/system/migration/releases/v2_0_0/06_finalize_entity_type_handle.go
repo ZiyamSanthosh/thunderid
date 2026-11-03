@@ -12,7 +12,7 @@ import (
 )
 
 var queryEntityTypeNullHandles = dbmodel.DBQuery{
-	ID: "MIG-CFG_MGT-13",
+	ID: "MIG-CFG_MGT-18",
 	PostgresQuery: `SELECT EXISTS (
 		SELECT 1 FROM "ENTITY_TYPES" WHERE HANDLE IS NULL
 	) AS has_null_handles`,

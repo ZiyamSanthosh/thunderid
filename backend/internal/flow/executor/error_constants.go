@@ -1768,17 +1768,17 @@ var (
 		},
 	}
 
-	// ErrJITProvisionRestricted is returned when server policy fences JIT provisioning.
-	ErrJITProvisionRestricted = tidcommon.ServiceError{
+	// ErrEntityProvisionRestricted is returned when server policy fences creating an entity during authentication.
+	ErrEntityProvisionRestricted = tidcommon.ServiceError{
 		Type: tidcommon.ClientErrorType,
 		Code: "FET-1131",
 		Error: tidcommon.I18nMessage{
-			Key:          "flows.executor.errors.jit_provision_restricted",
-			DefaultValue: "JIT provisioning temporarily unavailable",
+			Key:          "flows.executor.errors.entity_provision_restricted",
+			DefaultValue: "Provisioning temporarily unavailable",
 		},
 		ErrorDescription: tidcommon.I18nMessage{
-			Key:          "flows.executor.errors.jit_provision_restricted_desc",
-			DefaultValue: "JIT provisioning is unavailable while the server is in restricted mode",
+			Key:          "flows.executor.errors.entity_provision_restricted_desc",
+			DefaultValue: "Provisioning is unavailable while the server is in restricted mode",
 		},
 	}
 

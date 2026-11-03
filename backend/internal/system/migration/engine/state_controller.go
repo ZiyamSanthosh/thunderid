@@ -610,23 +610,24 @@ func (r *MigrationStateController) CompleteRollback(
 				storeID, runID)
 		}
 
+		phasePlan, err := phasePlanForStore(r.plan, storeID, phase)
+		if err != nil {
+			return err
+		}
 		next := *state
 		next.ActiveRunID = ""
 		next.FailureSummary = ""
 		next.UpdatedAt = r.now()
-		switch phase {
-		case OperationPhaseExpand:
+		if phasePlan.previous == "" {
 			next.TargetLevel = ""
 			next.Stage = MigrationStageComplete
 			next.Status = StatusClean
-		case OperationPhaseMigrate:
-			next.Stage = MigrationStageExpanded
+		} else {
+			next.Stage, err = completedStageBeforePhase(phase)
+			if err != nil {
+				return err
+			}
 			next.Status = StatusCompleted
-		case OperationPhaseContract:
-			next.Stage = MigrationStageContractReady
-			next.Status = StatusCompleted
-		default:
-			return fmt.Errorf("complete migration rollback: unsupported phase %q", phase)
 		}
 		if err := r.metadataStore.DeleteProgressForRun(txCtx, state.ID, runID); err != nil {
 			return err

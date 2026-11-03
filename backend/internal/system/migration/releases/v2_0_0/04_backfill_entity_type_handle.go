@@ -15,10 +15,12 @@ import (
 )
 
 const (
-	entityTypeHandleBatchSize                              = 100
-	maxEntityTypeHandleLength                              = 100
-	addEntityTypeHandleOperationID      engine.OperationID = "2.0.0/configdb/02_add_entity_type_handle"
-	backfillEntityTypeHandleOperationID engine.OperationID = "2.0.0/configdb/04_backfill_entity_type_handle"
+	entityTypeHandleBatchSize                                     = 100
+	maxEntityTypeHandleLength                                     = 100
+	addEntityTypeHandleOperationID             engine.OperationID = "2.0.0/configdb/02_add_entity_type_handle"
+	backfillEntityTypeHandleOperationID        engine.OperationID = "2.0.0/configdb/04_backfill_entity_type_handle"
+	backfillEntityTypeHandleCatchUpOperationID engine.OperationID = "2.0.0/configdb/" +
+		"04_backfill_entity_type_handle_catch_up"
 )
 
 var (
@@ -47,7 +49,9 @@ var (
 )
 
 type backfillEntityTypeHandleOperation struct {
-	declared *declarativeEntityTypeSource
+	id          engine.OperationID
+	description string
+	declared    *declarativeEntityTypeSource
 }
 
 type entityTypeHandleCheckpoint struct {
@@ -63,7 +67,21 @@ type entityTypeHandleRecord struct {
 }
 
 func newBackfillEntityTypeHandleOperation(declared *declarativeEntityTypeSource) engine.Operation {
-	return &backfillEntityTypeHandleOperation{declared: declared}
+	return &backfillEntityTypeHandleOperation{
+		id:          backfillEntityTypeHandleOperationID,
+		description: "Create valid entity-type handles from legacy names",
+		declared:    declared,
+	}
+}
+
+// newBackfillEntityTypeHandleCatchUpOperation repeats operation 04 after the source has been drained, for
+// entity types the source created after the first pass and that therefore still have no handle.
+func newBackfillEntityTypeHandleCatchUpOperation(declared *declarativeEntityTypeSource) engine.Operation {
+	return &backfillEntityTypeHandleOperation{
+		id:          backfillEntityTypeHandleCatchUpOperationID,
+		description: "Create handles for entity types created after Expand",
+		declared:    declared,
+	}
 }
 
 // reservedHandles returns the handles of the declarative entity types, keyed by category. Declarative
@@ -85,10 +103,10 @@ func reservedEntityTypeHandleKey(category string, handle string) string {
 	return category + "\x00" + handle
 }
 
-func (*backfillEntityTypeHandleOperation) Definition() engine.OperationDefinition {
+func (o *backfillEntityTypeHandleOperation) Definition() engine.OperationDefinition {
 	return engine.OperationDefinition{
-		ID:               backfillEntityTypeHandleOperationID,
-		Description:      "Create valid entity-type handles from legacy names",
+		ID:               o.id,
+		Description:      o.description,
 		StoreID:          engine.StoreIDConfigDB,
 		Kind:             engine.OperationKindDataChange,
 		InterruptionMode: engine.InterruptionModeResumable,

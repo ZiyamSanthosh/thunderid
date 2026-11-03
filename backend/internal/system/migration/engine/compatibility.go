@@ -148,6 +148,7 @@ func (g *CompatibilityGate) CheckDeployment(
 		}
 		report.Stores = append(report.Stores, result)
 	}
+	g.resolveMigrationRoute(&report)
 	return report
 }
 

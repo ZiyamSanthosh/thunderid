@@ -810,6 +810,14 @@ func (m OperatingMode) Validate() error {
 	}
 }
 
+// MigrationConfig controls how the server relates to the migration state of its databases.
+type MigrationConfig struct {
+	// StartupCompatibilityCheck makes the server refuse to start when a database is not at the migration level
+	// this release requires. It is disabled by default, because a database created by this release's schema
+	// scripts carries no migration metadata.
+	StartupCompatibilityCheck bool `yaml:"startup_compatibility_check" json:"startup_compatibility_check"`
+}
+
 // HTTPConnectionConfig holds the configuration of HTTP endpoint connections.
 type HTTPConnectionConfig struct {
 	// Store defines the storage mode for HTTP connections.
@@ -824,6 +832,7 @@ type HTTPConnectionConfig struct {
 type Config struct {
 	Server                     engineconfig.ServerConfig         `yaml:"server"                json:"server"`
 	OperatingMode              OperatingMode                     `yaml:"operating_mode"        json:"operating_mode"`
+	Migration                  MigrationConfig                   `yaml:"migration"             json:"migration"`
 	Gateway                    GatewayConfig                     `yaml:"gateway"               json:"gateway"`
 	Import                     ImportConfig                      `yaml:"import"                json:"import"`
 	AuthZENPDP                 AuthZENPDPConfig                  `yaml:"authzen_pdp"           json:"authzen_pdp"`

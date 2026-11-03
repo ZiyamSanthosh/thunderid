@@ -56,10 +56,10 @@ func verifyReleaseState(t *testing.T, environment migrationharness.Environment) 
 			database string
 			level    string
 		}{
-			{database: "configdb", level: "2.0.0:complete:clean"},
-			{database: "entitydb", level: "2.0.0:complete:clean"},
+			{database: "configdb", level: "2.0.0-m1-pidp:complete:clean"},
+			{database: "entitydb", level: "2.0.0-m1-pidp:complete:clean"},
 			{database: "runtime_transient", level: "1.0.0:complete:clean"},
-			{database: "runtime_persistent", level: "2.0.0:complete:clean"},
+			{database: "runtime_persistent", level: "2.0.0-m1-pidp:complete:clean"},
 		}
 		for _, expected := range expectedLevels {
 			db := environment.OpenDatabase(t, expected.database)

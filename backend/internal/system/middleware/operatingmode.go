@@ -51,14 +51,20 @@ var restrictedModeReadOnlyPaths = security.MustNewPathMatcher(
 	"/agents/**",
 	"/applications/**",
 	"/connections/**",
+	"/design/layouts/**",
+	"/design/themes/**",
 	"/flows/**",
 	"/gateways/**",
 	"/groups/**",
+	"/i18n/languages/**",
+	"/notification-templates/**",
 	"/organization-units/**",
 	"/resource-servers/**",
 	"/roles/**",
+	"/server-config/**",
 	"/user-types/**",
 	"/users/**",
+	"/variables/**",
 )
 
 // RestrictedModeMiddleware restricts the HTTP surface to the endpoints allowed in restricted mode.

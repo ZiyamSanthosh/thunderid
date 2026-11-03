@@ -81,6 +81,9 @@ func main() {
 			logMigrationCommandResult(ctx, logger, result, commandErr == nil)
 		}
 		if commandErr != nil {
+			if closeErr != nil {
+				logger.Error(ctx, "Failed to close migration database connections", log.Error(closeErr))
+			}
 			logger.Fatal(ctx, "Migration command failed", log.Error(commandErr))
 		}
 		if closeErr != nil {
@@ -89,17 +92,12 @@ func main() {
 		return
 	}
 
-	startupCompatibility, err := runStartupCompatibilityCheck(ctx, cfg, provider.GetDBProvider())
+	compatible, err := checkStartupCompatibility(ctx, logger, cfg, provider.GetDBProvider())
 	if err != nil {
 		logger.Fatal(ctx, "Failed to check database compatibility before startup", log.Error(err))
 	}
-	if startupCompatibility == nil {
-		logger.Warn(ctx, "Migration compatibility startup gate is not available for the configured database providers")
-	} else {
-		logMigrationCompatibility(ctx, logger, *startupCompatibility)
-		if !startupCompatibility.Compatible() {
-			logger.Fatal(ctx, "ThunderID cannot start because its databases are not compatible with this release")
-		}
+	if !compatible {
+		logger.Fatal(ctx, "ThunderID cannot start because its databases are not compatible with this release")
 	}
 
 	// Initialize the cache manager.

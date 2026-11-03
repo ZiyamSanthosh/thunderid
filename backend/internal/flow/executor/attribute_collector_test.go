@@ -5,6 +5,7 @@ package executor
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	tidcommon "github.com/thunder-id/thunderid/pkg/thunderidengine/common"
@@ -15,6 +16,7 @@ import (
 	"github.com/stretchr/testify/suite"
 
 	"github.com/thunder-id/thunderid/internal/entityprovider"
+	"github.com/thunder-id/thunderid/internal/flow/common"
 	"github.com/thunder-id/thunderid/internal/system/featuregate"
 	"github.com/thunder-id/thunderid/tests/mocks/authnprovider/managermock"
 	"github.com/thunder-id/thunderid/tests/mocks/entityprovidermock"
@@ -254,6 +256,70 @@ func (suite *AttributeCollectorTestSuite) TestExecute_RestrictedUnchangedAttribu
 	assert.NoError(suite.T(), err)
 	assert.Equal(suite.T(), providers.ExecComplete, resp.Status)
 	suite.mockEntityProvider.AssertNotCalled(suite.T(), "UpdateAttributes", mock.Anything, mock.Anything)
+}
+
+// A changed claim from the identity provider does not fail a sign in while profile updates are refused.
+func (suite *AttributeCollectorTestSuite) TestExecute_RestrictedChangedClaimDoesNotFail() {
+	ctx := suite.restrictedContext(`{"email":"old@example.com"}`)
+	ctx.UserInputs = map[string]string{}
+	ctx.RuntimeData[common.RuntimeKeyExternalIdentity] = externalIdentityEntry("idp-a", "sub-1",
+		map[string]interface{}{"email": "new@example.com"})
+
+	resp, err := suite.executor.Execute(ctx)
+
+	assert.NoError(suite.T(), err)
+	assert.Equal(suite.T(), providers.ExecComplete, resp.Status)
+	suite.mockEntityProvider.AssertNotCalled(suite.T(), "UpdateAttributes", mock.Anything, mock.Anything)
+}
+
+// A value the flow collected still counts as a write, so it is refused even when a claim is present.
+func (suite *AttributeCollectorTestSuite) TestExecute_RestrictedCollectedValueStillFails() {
+	ctx := suite.restrictedContext(`{"email":"old@example.com"}`)
+	ctx.RuntimeData[common.RuntimeKeyExternalIdentity] = externalIdentityEntry("idp-a", "sub-1",
+		map[string]interface{}{"email": "new@example.com"})
+
+	resp, err := suite.executor.Execute(ctx)
+
+	assert.NoError(suite.T(), err)
+	assert.Equal(suite.T(), providers.ExecFailure, resp.Status)
+	assert.Equal(suite.T(), ErrUserAttributeUpdateRestricted.Code, resp.Error.Code)
+	suite.mockEntityProvider.AssertNotCalled(suite.T(), "UpdateAttributes", mock.Anything, mock.Anything)
+}
+
+// Outside restricted mode a changed claim still refreshes the profile.
+func (suite *AttributeCollectorTestSuite) TestExecute_ChangedClaimUpdatesProfile() {
+	authUser := newAuthenticatedAuthUser()
+	suite.mockAuthnProvider.On("GetUserAttributes", mock.Anything, mock.Anything, mock.Anything,
+		mock.Anything).Return(authUser,
+		(*providers.AttributesResponse)(nil), (*tidcommon.ServiceError)(nil)).Maybe()
+	suite.mockEntityProvider.On("GetEntityProfile", testUserID).Return(&providers.Entity{
+		ID:         testUserID,
+		OUID:       "ou-123",
+		Type:       "INTERNAL",
+		Attributes: json.RawMessage(`{"email":"old@example.com"}`),
+	}, nil)
+	suite.mockEntityProvider.On("UpdateAttributes", testUserID, mock.MatchedBy(func(attrs json.RawMessage) bool {
+		return strings.Contains(string(attrs), "new@example.com")
+	})).Return(nil).Once()
+
+	ctx := &providers.NodeContext{
+		ExecutionID: "flow-123",
+		FlowType:    providers.FlowTypeAuthentication,
+		AuthUser:    authUser,
+		RuntimeData: map[string]string{
+			userAttributeUserID: testUserID,
+			common.RuntimeKeyExternalIdentity: externalIdentityEntry("idp-a", "sub-1",
+				map[string]interface{}{"email": "new@example.com"}),
+		},
+		NodeInputs: []providers.Input{{Identifier: "email", Type: "string", Required: true}},
+		UserInputs: map[string]string{},
+	}
+
+	resp, err := suite.executor.Execute(ctx)
+
+	assert.NoError(suite.T(), err)
+	assert.Equal(suite.T(), providers.ExecComplete, resp.Status)
+	suite.mockEntityProvider.AssertExpectations(suite.T())
 }
 
 func (suite *AttributeCollectorTestSuite) TestExecute_UpdateUserFails() {

@@ -59,7 +59,9 @@ func TestDeclarativeEntityTypeListerListsTypesOfAllCategories(t *testing.T) {
 			entitytype.TypeCategoryAgent: {{Handle: "bot", DisplayName: "Bot"}},
 		},
 		schemas: map[string]json.RawMessage{
-			"agent\x00bot": json.RawMessage(`{"name":{"type":"string"}}`),
+			"user\x00customer": json.RawMessage(`{"email":{"type":"string"},"sub":{"type":"string"}}`),
+			"user\x00person":   json.RawMessage(`{"email":{"type":"string"}}`),
+			"agent\x00bot":     json.RawMessage(`{"name":{"type":"string"}}`),
 		},
 	}}
 	types, err := lister.ListDeclarativeEntityTypes(context.Background())
@@ -72,6 +74,10 @@ func TestDeclarativeEntityTypeListerListsTypesOfAllCategories(t *testing.T) {
 	assert.Equal(t, "agent", types[2].Category)
 	assert.Equal(t, "bot", types[2].Handle)
 	assert.True(t, types[2].SupportsNameAttribute)
+	assert.True(t, types[0].DeclaresSubAttribute)
+	assert.False(t, types[1].DeclaresSubAttribute)
+	assert.False(t, types[0].SupportsNameAttribute)
+	assert.False(t, types[2].DeclaresSubAttribute)
 }
 
 func TestDeclarativeEntityTypeListerPagesThroughAllTypes(t *testing.T) {

@@ -269,6 +269,28 @@ func TestCompatibilityGateReportsNextMigrationRelease(t *testing.T) {
 	assert.NoError(t, report.RouteErr)
 }
 
+func TestCompatibilityGateDeploymentCheckReportsNextMigrationRelease(t *testing.T) {
+	intermediate := routeManifest("1.1.0", "1.0.0", StoreIDConfigDB)
+	target := routeManifest("2.0.0", "1.1.0", StoreIDConfigDB)
+	metadataStores := make(map[StoreID]*MetadataStore, len(target.Stores))
+	for _, requirement := range target.Stores {
+		dbClient := providermock.NewDBClientInterfaceMock(t)
+		expectReadySchema(dbClient)
+		row := compatibilityStateRow(requirement.ID, "1.0.0")
+		dbClient.On("QueryContext", mock.Anything, queryGetMigrationState, string(requirement.ID)).
+			Return([]map[string]interface{}{row}, nil).Once()
+		metadataStores[requirement.ID] = newTestMetadataStore(t, dbClient)
+	}
+
+	gate, err := NewCompatibilityGate(target, intermediate, target)
+	require.NoError(t, err)
+	report := gate.CheckDeployment(context.Background(), metadataStores, "deployment-a")
+
+	assert.False(t, report.Compatible())
+	assert.Equal(t, "1.1.0", report.NextMigrationRelease)
+	assert.Equal(t, []string{"1.1.0", "2.0.0"}, report.MigrationRoute)
+}
+
 func TestCompatibilityGateClassifiesMetadataFailures(t *testing.T) {
 	tests := []struct {
 		name           string

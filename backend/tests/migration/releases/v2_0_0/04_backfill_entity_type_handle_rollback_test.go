@@ -155,7 +155,7 @@ func TestPostgresExpandPhaseRollbackRestoresEveryParticipatingStore(t *testing.T
 
 	entityDB := environment.OpenDatabase(t, "entitydb")
 	_, err := entityDB.Exec(`UPDATE "MIGRATION_STATE"
-		SET COMPLETED_LEVEL = '1.0.0', TARGET_LEVEL = '2.0.0', STAGE = 'expanding',
+		SET COMPLETED_LEVEL = '1.0.0', TARGET_LEVEL = '2.0.0-m1-pidp', STAGE = 'expanding',
 			STATUS = 'failed', ACTIVE_RUN_ID = $1,
 			FAILURE_SUMMARY = 'simulated expand finalization failure', UPDATED_AT = NOW()
 		WHERE STORE_ID = 'entitydb'`, expandPhaseRollbackRunID)
@@ -234,7 +234,7 @@ func TestPostgresMigrationCompleteRollback(t *testing.T) {
 		"1.0.0:complete:clean")
 	migrationharness.AssertQueryValue(t, db,
 		`SELECT COUNT(*)::TEXT FROM "MIGRATION_PROGRESS"
-			WHERE TARGET_LEVEL = '2.0.0'`, "0")
+			WHERE TARGET_LEVEL = '2.0.0-m1-pidp'`, "0")
 	verifyAgentNameSourceRepresentation(t, environment)
 	for _, database := range []string{"entitydb", "runtime_persistent"} {
 		migrationharness.AssertQueryValue(t, environment.OpenDatabase(t, database),
@@ -259,7 +259,7 @@ func TestPostgresMigrationCompleteRollbackResumesInterruptedRollback(t *testing.
 	_, err = configDB.Exec(`INSERT INTO "MIGRATION_PROGRESS"
 		(ID, MIGRATION_STATE_ID, RUN_ID, TARGET_LEVEL, OPERATION_ID, OPERATION_ORDER,
 		 EXECUTION_TARGET_ID, STATUS, CHECKPOINT_DATA, UPDATED_AT)
-		SELECT '0199a123-4951-7abc-8def-0123456789ab', ID, $1, '2.0.0',
+		SELECT '0199a123-4951-7abc-8def-0123456789ab', ID, $1, '2.0.0-m1-pidp',
 			'2.0.0/configdb/04_backfill_entity_type_handle_rollback', 4, '', 'in_progress',
 			jsonb_build_object('lastID', $2::TEXT)::TEXT, NOW()
 		FROM "MIGRATION_STATE" WHERE STORE_ID = 'configdb'`, interruptedRevertAllRunID, checkpointID)
@@ -271,7 +271,7 @@ func TestPostgresMigrationCompleteRollbackResumesInterruptedRollback(t *testing.
 			"2.0.0/configdb/04_backfill_entity_type_handle_rollback", "", "rollback",
 			"simulated interrupted complete rollback")
 		_, err = db.Exec(`UPDATE "MIGRATION_STATE"
-			SET COMPLETED_LEVEL = '1.0.0', TARGET_LEVEL = '2.0.0', STAGE = 'rolling_back',
+			SET COMPLETED_LEVEL = '1.0.0', TARGET_LEVEL = '2.0.0-m1-pidp', STAGE = 'rolling_back',
 				STATUS = 'failed', ACTIVE_RUN_ID = $1,
 				FAILURE_SUMMARY = 'simulated interrupted complete rollback', UPDATED_AT = NOW()
 			WHERE STORE_ID = $2`, interruptedRevertAllRunID, database)
@@ -310,7 +310,7 @@ func TestPostgresMigrationCompleteRollbackBlockedByContract(t *testing.T) {
 	migrationharness.AssertQueryValue(t, db,
 		`SELECT COMPLETED_LEVEL || ':' || STAGE || ':' || STATUS
 			FROM "MIGRATION_STATE" WHERE STORE_ID = 'configdb'`,
-		"2.0.0:complete:clean")
+		"2.0.0-m1-pidp:complete:clean")
 	migrationharness.AssertQueryValue(t, db,
 		`SELECT COUNT(*)::TEXT FROM "ENTITY_TYPES" WHERE HANDLE IS NULL`, "0")
 	t.Log("verified: a completed contract operation without rollback blocks complete rollback before mutation")
@@ -433,7 +433,7 @@ func prepareInterruptedRollbackRun(t *testing.T, db *sql.DB) {
 	_, err = db.Exec(`INSERT INTO "MIGRATION_PROGRESS"
 		(ID, MIGRATION_STATE_ID, RUN_ID, TARGET_LEVEL, OPERATION_ID, OPERATION_ORDER,
 		 EXECUTION_TARGET_ID, STATUS, CHECKPOINT_DATA, UPDATED_AT)
-		SELECT '0199a123-4931-7abc-8def-0123456789ab', ID, $1, '2.0.0',
+		SELECT '0199a123-4931-7abc-8def-0123456789ab', ID, $1, '2.0.0-m1-pidp',
 			'2.0.0/configdb/04_backfill_entity_type_handle_rollback', 4, '', 'in_progress',
 			jsonb_build_object('lastID', $2::TEXT)::TEXT, NOW()
 		FROM "MIGRATION_STATE" WHERE STORE_ID = 'configdb'`, interruptedRollbackRunID, checkpointID)

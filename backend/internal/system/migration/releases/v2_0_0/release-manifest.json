@@ -1,19 +1,19 @@
 {
   "manifestVersion": 1,
-  "releaseVersion": "2.0.0",
+  "releaseVersion": "2.0.0-m1-pidp",
   "migrationMetadataVersion": 2,
   "migrationDocumentation": "https://thunderid.dev/docs/migrations",
   "stores": [
     {
       "id": "configdb",
       "acceptedSourceLevel": "1.0.0",
-      "requiredLevel": "2.0.0",
+      "requiredLevel": "2.0.0-m1-pidp",
       "changed": true
     },
     {
       "id": "entitydb",
       "acceptedSourceLevel": "1.0.0",
-      "requiredLevel": "2.0.0",
+      "requiredLevel": "2.0.0-m1-pidp",
       "changed": true
     },
     {
@@ -25,7 +25,7 @@
     {
       "id": "runtime_persistent",
       "acceptedSourceLevel": "1.0.0",
-      "requiredLevel": "2.0.0",
+      "requiredLevel": "2.0.0-m1-pidp",
       "changed": true
     }
   ]

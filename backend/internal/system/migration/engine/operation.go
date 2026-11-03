@@ -413,6 +413,10 @@ func validateExecutionTarget(definition OperationDefinition, target ExecutionTar
 		return fmt.Errorf("operation %q resolved deployment target %q with surrounding whitespace",
 			definition.ID, target.DeploymentID)
 	}
+	if len(target.DeploymentID) > maxExecutionTargetIDLength {
+		return fmt.Errorf("operation %q resolved a deployment target longer than %d bytes",
+			definition.ID, maxExecutionTargetIDLength)
+	}
 	return nil
 }
 

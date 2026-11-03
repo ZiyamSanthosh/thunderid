@@ -65,7 +65,14 @@ var unscopedQueries = map[string]string{
 	"CNQ-CONSENT_MGT-07": "C.DEPLOYMENT_ID = $1 is the first of the conditions the builder joins into its WHERE",
 	"buildFilterQueryWithOffset": "extends a base query its callers pass in and scope with " +
 		"utils.AppendDeploymentIDToFilterQuery; the identifier subquery is scoped through the entity's own id",
-	"SHQ-SHARING_MGT-19": "built by a closure whose text ends in p.DEPLOYMENT_ID = <parameter>",
+	"SHQ-SHARING_MGT-19":  "built by a closure whose text ends in p.DEPLOYMENT_ID = <parameter>",
+	"MIG-METADATA_MGT-08": "creates the migration metadata tables, which hold no deployment rows",
+	"%s/%s  ": "runs the statements of a migration operation, which changes the schema of the whole database " +
+		"for every deployment at once",
+	"MIG-CFG_MGT-18": "a readiness check that must see the entity types of every deployment, since the " +
+		"migration changes the table for all of them",
+	"MIG-ENT_MGT-07": "a verification that must see the entities of every deployment, since the " +
+		"migration changes the table for all of them",
 }
 
 // backendRoot is the backend module, from this package's directory.

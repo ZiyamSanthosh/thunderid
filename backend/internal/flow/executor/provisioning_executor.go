@@ -203,11 +203,6 @@ func (p *provisioningExecutor) Execute(ctx *providers.NodeContext) (*providers.E
 			execResp.Status = providers.ExecComplete
 			return execResp, nil
 		}
-		if !p.featureGate.IsEnabled(featuregate.EntityProvisioning) {
-			execResp.Status = providers.ExecFailure
-			execResp.Error = &ErrJITProvisionRestricted
-			return execResp, nil
-		}
 	}
 
 	attributes, proceed, err := p.prepareProvisioning(ctx, category, execResp, logger)
@@ -215,6 +210,13 @@ func (p *provisioningExecutor) Execute(ctx *providers.NodeContext) (*providers.E
 		return nil, err
 	}
 	if !proceed {
+		return execResp, nil
+	}
+
+	// Checked as late as possible, so an entity that already exists is still found and reused.
+	if ctx.FlowType == providers.FlowTypeAuthentication && !p.featureGate.IsEnabled(featuregate.EntityProvisioning) {
+		execResp.Status = providers.ExecFailure
+		execResp.Error = &ErrEntityProvisionRestricted
 		return execResp, nil
 	}
 

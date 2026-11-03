@@ -215,12 +215,22 @@ func (suite *ProvisioningExecutorTestSuite) TestExecute_RestrictedModeAllowsAuth
 }
 
 func (suite *ProvisioningExecutorTestSuite) TestExecute_RestrictedModeRejectsJITBeforeMutation() {
+	suite.expectSchemaForProvisioning()
 	suite.executor.featureGate = featuregate.NewGate(featuregate.EntityProvisioning)
+	attrs := map[string]interface{}{"username": "newuser", attributeEmail: "new@example.com"}
+	suite.expectNoExistingUserFor(attrs)
 	ctx := &providers.NodeContext{
 		ExecutionID: "flow-123",
 		FlowType:    providers.FlowTypeAuthentication,
+		UserInputs:  map[string]string{"username": "newuser", attributeEmail: "new@example.com"},
 		RuntimeData: map[string]string{
 			common.RuntimeKeyUserEligibleForProvisioning: dataValueTrue,
+			ouIDKey:         testOUID,
+			categoryTypeKey: testUserType,
+		},
+		NodeInputs: []providers.Input{
+			{Identifier: "username", Type: "string", Required: true},
+			{Identifier: attributeEmail, Type: "string", Required: true},
 		},
 	}
 
@@ -228,7 +238,7 @@ func (suite *ProvisioningExecutorTestSuite) TestExecute_RestrictedModeRejectsJIT
 
 	assert.NoError(suite.T(), err)
 	assert.Equal(suite.T(), providers.ExecFailure, resp.Status)
-	assert.Equal(suite.T(), ErrJITProvisionRestricted.Code, resp.Error.Code)
+	assert.Equal(suite.T(), ErrEntityProvisionRestricted.Code, resp.Error.Code)
 	suite.mockUserMgtProvider.AssertNotCalled(suite.T(), "CreateUser", mock.Anything, mock.Anything)
 }
 

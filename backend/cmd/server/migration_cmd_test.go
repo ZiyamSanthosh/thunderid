@@ -14,6 +14,7 @@ import (
 
 	"github.com/thunder-id/thunderid/internal/system/config"
 	dbprovider "github.com/thunder-id/thunderid/internal/system/database/provider"
+	"github.com/thunder-id/thunderid/internal/system/log"
 	"github.com/thunder-id/thunderid/internal/system/migration/engine"
 	"github.com/thunder-id/thunderid/tests/mocks/database/providermock"
 )
@@ -27,6 +28,7 @@ func TestRunMigrationInitializeForSharedNamespace(t *testing.T) {
 	dbClient := providermock.NewDBClientInterfaceMock(t)
 	dbProvider.On("GetConfigDBClient").Return(dbClient, nil).Once()
 	dbProvider.On("GetConfigDBTransactioner").Return(immediateTransactioner{}, nil).Once()
+	expectMigrationExecutionLock(t, dbClient)
 	dbClient.On("QueryContext", mock.Anything, mock.Anything).
 		Return([]map[string]interface{}{}, nil).Once()
 	dbClient.On("ExecuteContext", mock.Anything, mock.Anything).
@@ -148,8 +150,8 @@ func TestRunMigrationStatusReportsDirectMigrationRoute(t *testing.T) {
 	require.ErrorIs(t, err, errMigrationStatusIncompatible)
 	require.NotNil(t, result)
 	require.NotNil(t, result.compatibility)
-	assert.Equal(t, "2.0.0", result.compatibility.NextMigrationRelease)
-	assert.Equal(t, []string{"2.0.0"}, result.compatibility.MigrationRoute)
+	assert.Equal(t, "2.0.0-m1-pidp", result.compatibility.NextMigrationRelease)
+	assert.Equal(t, []string{"2.0.0-m1-pidp"}, result.compatibility.MigrationRoute)
 	assert.NoError(t, result.compatibility.RouteErr)
 }
 
@@ -231,7 +233,7 @@ func TestRunStartupCompatibilityCheckAcceptsContractReadyTarget(t *testing.T) {
 		row := testMigrationStateRow(storeID)
 		if storeID == engine.StoreIDConfigDB || storeID == engine.StoreIDRuntimePersistent {
 			row["completed_level"] = "1.0.0"
-			row["target_level"] = "2.0.0"
+			row["target_level"] = "2.0.0-m1-pidp"
 			row["stage"] = string(engine.MigrationStageContractReady)
 			row["status"] = string(engine.StatusCompleted)
 		}
@@ -270,7 +272,7 @@ func TestRunStartupCompatibilityCheckAcceptsExpandedTarget(t *testing.T) {
 		row := testMigrationStateRow(storeID)
 		if storeID == engine.StoreIDConfigDB || storeID == engine.StoreIDRuntimePersistent {
 			row["completed_level"] = "1.0.0"
-			row["target_level"] = "2.0.0"
+			row["target_level"] = "2.0.0-m1-pidp"
 			row["stage"] = string(engine.MigrationStageExpanded)
 			row["status"] = string(engine.StatusCompleted)
 		}
@@ -662,10 +664,30 @@ func TestParseMigrationCommandOptionsRejectsConflictingRollbackScopes(t *testing
 	assert.ErrorContains(t, err, "cannot combine")
 }
 
+func TestParseMigrationCommandOptionsRejectsConflictingPhases(t *testing.T) {
+	_, err := parseMigrationCommandOptions([]string{
+		migrationSubcommand, migrationApplyAction, "expand", "--phase=migrate",
+	})
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "conflicts with --phase")
+
+	_, err = parseMigrationCommandOptions([]string{
+		migrationSubcommand, migrationRollbackAction, "--phase", "expand", "--phase=migrate",
+	})
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "only once")
+
+	options, err := parseMigrationCommandOptions([]string{
+		migrationSubcommand, migrationApplyAction, "migrate", "--phase=migrate",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, engine.OperationPhaseMigrate, options.phase)
+}
+
 func testMigrationStateRow(storeID engine.StoreID) map[string]interface{} {
 	completedLevel := "1.0.0"
 	if storeID != engine.StoreIDRuntimeTransient {
-		completedLevel = "2.0.0"
+		completedLevel = "2.0.0-m1-pidp"
 	}
 	return map[string]interface{}{
 		"id":               "0199a123-4567-7abc-8def-0123456789ab",
@@ -697,4 +719,151 @@ type immediateTransactioner struct{}
 
 func (immediateTransactioner) Transact(ctx context.Context, txFunc func(context.Context) error) error {
 	return txFunc(ctx)
+}
+
+func TestCheckStartupCompatibilityIsSkippedWhenDisabled(t *testing.T) {
+	dataSource := testPostgresDataSource("thunderid")
+	cfg := &config.Config{Database: config.DatabaseConfig{
+		Config: dataSource, Entity: dataSource, RuntimeTransient: dataSource, RuntimePersistent: dataSource,
+	}}
+	// The mock has no expectations, so any database access fails the test.
+	dbProvider := providermock.NewDBProviderInterfaceMock(t)
+
+	compatible, err := checkStartupCompatibility(context.Background(), log.GetLogger(), cfg, dbProvider)
+
+	require.NoError(t, err)
+	assert.True(t, compatible)
+}
+
+func TestCheckStartupCompatibilityBlocksIncompatibleDatabasesWhenEnabled(t *testing.T) {
+	dataSource := testPostgresDataSource("thunderid")
+	cfg := &config.Config{
+		Migration: config.MigrationConfig{StartupCompatibilityCheck: true},
+		Database: config.DatabaseConfig{
+			Config: dataSource, Entity: dataSource, RuntimeTransient: dataSource, RuntimePersistent: dataSource,
+		},
+	}
+	dbProvider := providermock.NewDBProviderInterfaceMock(t)
+	dbClient := providermock.NewDBClientInterfaceMock(t)
+	dbProvider.On("GetConfigDBClient").Return(dbClient, nil).Once()
+	dbClient.On("QueryContext", mock.Anything, mock.Anything).
+		Return([]map[string]interface{}{}, nil).Times(4)
+
+	compatible, err := checkStartupCompatibility(context.Background(), log.GetLogger(), cfg, dbProvider)
+
+	require.NoError(t, err)
+	assert.False(t, compatible)
+}
+
+func TestCheckStartupCompatibilityAdmitsCompatibleDatabasesWhenEnabled(t *testing.T) {
+	dataSource := testPostgresDataSource("thunderid")
+	cfg := &config.Config{
+		Migration: config.MigrationConfig{StartupCompatibilityCheck: true},
+		Database: config.DatabaseConfig{
+			Config: dataSource, Entity: dataSource, RuntimeTransient: dataSource, RuntimePersistent: dataSource,
+		},
+	}
+	dbProvider := providermock.NewDBProviderInterfaceMock(t)
+	dbClient := providermock.NewDBClientInterfaceMock(t)
+	dbProvider.On("GetConfigDBClient").Return(dbClient, nil).Once()
+	dbClient.On("QueryContext", mock.Anything, mock.Anything).
+		Return([]map[string]interface{}{
+			{"table_name": "MIGRATION_STATE"},
+			{"table_name": "MIGRATION_PROGRESS"},
+			{"table_name": "MIGRATION_DEPLOYMENT_STATE"},
+			{"table_name": "MIGRATION_RUN"},
+		}, nil).Times(4)
+	for _, storeID := range []engine.StoreID{
+		engine.StoreIDConfigDB,
+		engine.StoreIDEntityDB,
+		engine.StoreIDRuntimeTransient,
+		engine.StoreIDRuntimePersistent,
+	} {
+		dbClient.On("QueryContext", mock.Anything, mock.Anything, string(storeID)).
+			Return([]map[string]interface{}{testMigrationStateRow(storeID)}, nil).Once()
+	}
+
+	compatible, err := checkStartupCompatibility(context.Background(), log.GetLogger(), cfg, dbProvider)
+
+	require.NoError(t, err)
+	assert.True(t, compatible)
+}
+
+func TestCheckStartupCompatibilityRequiresRestrictedModeWhileMigrating(t *testing.T) {
+	run := func(t *testing.T, mode config.OperatingMode) (bool, error) {
+		dataSource := testPostgresDataSource("thunderid")
+		cfg := &config.Config{
+			Migration:     config.MigrationConfig{StartupCompatibilityCheck: true},
+			OperatingMode: mode,
+			Database: config.DatabaseConfig{
+				Config: dataSource, Entity: dataSource, RuntimeTransient: dataSource, RuntimePersistent: dataSource,
+			},
+		}
+		dbProvider := providermock.NewDBProviderInterfaceMock(t)
+		dbClient := providermock.NewDBClientInterfaceMock(t)
+		dbProvider.On("GetConfigDBClient").Return(dbClient, nil).Once()
+		dbClient.On("QueryContext", mock.Anything, mock.Anything).
+			Return([]map[string]interface{}{
+				{"table_name": "MIGRATION_STATE"},
+				{"table_name": "MIGRATION_PROGRESS"},
+				{"table_name": "MIGRATION_DEPLOYMENT_STATE"},
+				{"table_name": "MIGRATION_RUN"},
+			}, nil).Times(4)
+		for _, storeID := range []engine.StoreID{
+			engine.StoreIDConfigDB,
+			engine.StoreIDEntityDB,
+			engine.StoreIDRuntimeTransient,
+			engine.StoreIDRuntimePersistent,
+		} {
+			row := testMigrationStateRow(storeID)
+			if storeID == engine.StoreIDConfigDB {
+				row["completed_level"] = "1.0.0"
+				row["target_level"] = "2.0.0-m1-pidp"
+				row["stage"] = "expanded"
+				row["status"] = "completed"
+			}
+			dbClient.On("QueryContext", mock.Anything, mock.Anything, string(storeID)).
+				Return([]map[string]interface{}{row}, nil).Once()
+		}
+		return checkStartupCompatibility(context.Background(), log.GetLogger(), cfg, dbProvider)
+	}
+
+	t.Run("full mode is refused", func(t *testing.T) {
+		compatible, err := run(t, config.OperatingModeFull)
+
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "configdb")
+		assert.ErrorContains(t, err, "restricted")
+		assert.False(t, compatible)
+	})
+
+	t.Run("restricted mode is admitted", func(t *testing.T) {
+		compatible, err := run(t, config.OperatingModeRestricted)
+
+		require.NoError(t, err)
+		assert.True(t, compatible)
+	})
+}
+
+func TestCheckStartupCompatibilityAdmitsProvidersWithoutAMigrationAdapter(t *testing.T) {
+	sqlite := config.DataSource{Type: "sqlite"}
+	cfg := &config.Config{
+		Migration: config.MigrationConfig{StartupCompatibilityCheck: true},
+		Database: config.DatabaseConfig{
+			Config: sqlite, Entity: sqlite, RuntimeTransient: sqlite, RuntimePersistent: sqlite,
+		},
+	}
+
+	compatible, err := checkStartupCompatibility(
+		context.Background(), log.GetLogger(), cfg, providermock.NewDBProviderInterfaceMock(t))
+
+	require.NoError(t, err)
+	assert.True(t, compatible)
+}
+
+func TestCheckStartupCompatibilityRequiresConfiguration(t *testing.T) {
+	_, err := checkStartupCompatibility(context.Background(), log.GetLogger(), nil,
+		providermock.NewDBProviderInterfaceMock(t))
+
+	require.Error(t, err)
 }

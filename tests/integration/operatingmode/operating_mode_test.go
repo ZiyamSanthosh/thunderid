@@ -115,6 +115,7 @@ func (ts *OperatingModeTestSuite) TestAuthenticationAuthorizationAndTokenEndpoin
 		{name: "Console", method: http.MethodGet, path: "/console/"},
 		{name: "application list", method: http.MethodGet, path: "/applications"},
 		{name: "user list", method: http.MethodGet, path: "/users"},
+		{name: "server configuration", method: http.MethodGet, path: "/server-config"},
 	}
 
 	for _, tt := range tests {
@@ -137,7 +138,8 @@ func (ts *OperatingModeTestSuite) TestManagementEndpointsAreRestricted() {
 	}{
 		{name: "application creation", method: http.MethodPost, path: "/applications"},
 		{name: "user creation", method: http.MethodPost, path: "/users"},
-		{name: "server configuration", method: http.MethodGet, path: "/server-config"},
+		{name: "server configuration update", method: http.MethodPut, path: "/server-config/example"},
+		{name: "secrets", method: http.MethodGet, path: "/secrets"},
 		{name: "dynamic client registration", method: http.MethodPost, path: "/oauth2/dcr/register"},
 		{name: "MCP", method: http.MethodPost, path: "/mcp"},
 	}

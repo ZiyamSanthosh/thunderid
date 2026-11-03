@@ -300,9 +300,7 @@ func (c *MigrationCoordinator) inspectRollbackRun(ctx context.Context) (migratio
 			if err != nil {
 				return rollback, err
 			}
-			if rollback.phase == OperationPhaseMigrate && len(rollback.selection.DeploymentIDs) > 0 &&
-				state.Stage == MigrationStageExpanded && state.Status == StatusCompleted &&
-				state.TargetLevel == requirement.RequiredLevel {
+			if selectiveMigrateFinalized(requirement, state, rollback.phase, rollback.selection) {
 				completed = true
 			}
 			if !completed {
@@ -522,7 +520,8 @@ func (c *MigrationCoordinator) revertAll(ctx context.Context) (MigrationRollback
 				operationOrder: planned.order, forwardProgress: item,
 			})
 		}
-		if storeHasProgress {
+		// A store that failed before it recorded any progress still belongs to the run being reverted.
+		if storeHasProgress || state.Status == StatusFailed || state.Status == StatusInProgress {
 			statesByNamespace[namespaceIndex] = append(statesByNamespace[namespaceIndex], *state)
 			stores[requirement.ID] = struct{}{}
 		}

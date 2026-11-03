@@ -1,8 +1,11 @@
 // Copyright 2026 The ThunderID Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// This file is temporary compatibility code for references that still hold entity type names. It is
-// removed in a later release, together with the stores' entity type reference files.
+// This file is temporary compatibility code for references that still hold entity type names. It bridges
+// a target release that serves before the migrate phase of the migration engine has rewritten the stored
+// names to handles (the entity type reference operations of the v2.0.0 release). Once the stored values
+// are handles, the normalizer maps each of them to itself. It is removed in a later release, together
+// with the stores' entity type reference files.
 
 package entitytype
 
@@ -111,13 +114,64 @@ func (n *entityTypeReferenceNormalizer) NormalizeEntityTypeReferences(
 	return resolved, nil
 }
 
+func referenceSnapshotKey(category TypeCategory) cache.CacheKey {
+	return cache.CacheKey{Key: string(category)}
+}
+
+// snapshotInvalidatingStore clears a category's reference snapshot after an entity type of that category
+// is created, updated or deleted, so a renamed or new type is seen by the next normalization on this node
+// and not only after the cache lifetime.
+type snapshotInvalidatingStore struct {
+	entityTypeStoreInterface
+	snapshotCache cache.CacheInterface[*entityTypeReferenceSnapshot]
+}
+
+func newSnapshotInvalidatingStore(
+	store entityTypeStoreInterface, snapshotCache cache.CacheInterface[*entityTypeReferenceSnapshot],
+) entityTypeStoreInterface {
+	return &snapshotInvalidatingStore{entityTypeStoreInterface: store, snapshotCache: snapshotCache}
+}
+
+func (s *snapshotInvalidatingStore) CreateEntityType(ctx context.Context, entityType EntityType) error {
+	if err := s.entityTypeStoreInterface.CreateEntityType(ctx, entityType); err != nil {
+		return err
+	}
+	s.invalidate(ctx, entityType.Category)
+	return nil
+}
+
+func (s *snapshotInvalidatingStore) UpdateEntityTypeByID(
+	ctx context.Context, category TypeCategory, schemaID string, entityType EntityType,
+) error {
+	if err := s.entityTypeStoreInterface.UpdateEntityTypeByID(ctx, category, schemaID, entityType); err != nil {
+		return err
+	}
+	s.invalidate(ctx, category)
+	return nil
+}
+
+func (s *snapshotInvalidatingStore) DeleteEntityTypeByID(
+	ctx context.Context, category TypeCategory, schemaID string,
+) error {
+	if err := s.entityTypeStoreInterface.DeleteEntityTypeByID(ctx, category, schemaID); err != nil {
+		return err
+	}
+	s.invalidate(ctx, category)
+	return nil
+}
+
+// invalidate drops the category's snapshot. A failure only leaves the snapshot until its cache lifetime ends.
+func (s *snapshotInvalidatingStore) invalidate(ctx context.Context, category TypeCategory) {
+	_ = s.snapshotCache.Delete(ctx, referenceSnapshotKey(category))
+}
+
 // snapshotFor returns the category's snapshot, reading it from the store when the cache has none. The
-// cache entry lives for the configured cache lifetime, so a type created or renamed within that time is
-// seen only afterwards.
+// cache entry lives for the configured cache lifetime, and entity type writes on this node clear it, so a
+// type created or renamed elsewhere is seen only after the lifetime ends.
 func (n *entityTypeReferenceNormalizer) snapshotFor(
 	ctx context.Context, category TypeCategory,
 ) (*entityTypeReferenceSnapshot, error) {
-	key := cache.CacheKey{Key: string(category)}
+	key := referenceSnapshotKey(category)
 	if cached, ok := n.snapshotCache.Get(ctx, key); ok && cached != nil {
 		return cached, nil
 	}

@@ -689,6 +689,12 @@ func (c *PreflightChecker) assessPhaseStore(
 			assessment.Reason = CompatibilityReasonMigrationIncomplete
 			return assessment, false
 		}
+		if state.CompletedLevel != requirement.AcceptedSourceLevel &&
+			state.CompletedLevel != requirement.RequiredLevel {
+			assessment.State = StoreAssessmentBlocked
+			assessment.Reason = CompatibilityReasonLevelMismatch
+			return assessment, false
+		}
 		assessment.State = StoreAssessmentAtTarget
 		return assessment, false
 	}

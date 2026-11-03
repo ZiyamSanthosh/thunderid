@@ -15,6 +15,8 @@ type DeclarativeEntityType struct {
 	Handle                string
 	DisplayName           string
 	SupportsNameAttribute bool
+	// DeclaresSubAttribute reports whether the schema still declares the legacy sub attribute.
+	DeclaresSubAttribute bool
 }
 
 // DeclarativeEntityTypes lists the entity types defined in declarative resource files.

@@ -563,3 +563,29 @@ func readinessDefinition(operationID OperationID) OperationDefinition {
 		InterruptionMode: InterruptionModeAtomic,
 	}
 }
+
+func TestMigrationPreflightCheckerBlocksUndeclaredPhaseStoreAtUnexpectedLevel(t *testing.T) {
+	manifest := changedStoreManifest(StoreIDEntityDB)
+	operation := readinessTestOperation{
+		definition: readinessDefinition("migrate-entitydb"),
+		check: func(context.Context, ReadAccess, PlanContext) (ReadinessResult, error) {
+			return ReadinessResult{State: ReadinessReady, Summary: "Entity migration is ready"}, nil
+		},
+	}
+	release := ReleaseDefinition{Manifest: manifest, Plan: MigrationPlan{
+		TargetVersion: manifest.ReleaseVersion, Migrate: []Operation{operation},
+	}}
+	metadataStores, stores := preflightStores(t, manifest, map[StoreID]string{
+		StoreIDEntityDB: "1.0.0",
+		StoreIDConfigDB: "0.9.0",
+	})
+	checker, err := NewPreflightChecker(release, stores)
+	require.NoError(t, err)
+
+	report, err := checker.CheckPhase(context.Background(), metadataStores, OperationPhaseMigrate)
+
+	require.NoError(t, err)
+	assert.False(t, report.Ready())
+	assert.Equal(t, StoreAssessmentBlocked, report.Stores[0].State)
+	assert.Equal(t, CompatibilityReasonLevelMismatch, report.Stores[0].Reason)
+}

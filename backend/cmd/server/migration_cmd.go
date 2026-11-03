@@ -12,6 +12,7 @@ import (
 
 	"github.com/thunder-id/thunderid/internal/system/config"
 	dbprovider "github.com/thunder-id/thunderid/internal/system/database/provider"
+	"github.com/thunder-id/thunderid/internal/system/log"
 	"github.com/thunder-id/thunderid/internal/system/migration/current"
 	"github.com/thunder-id/thunderid/internal/system/migration/engine"
 	"github.com/thunder-id/thunderid/pkg/thunderidengine/providers"
@@ -126,6 +127,7 @@ func runMigrationCommand(
 
 	releaseDefinition, err := current.DefinitionWithDependencies(current.Dependencies{
 		DeclarativeEntityTypes: newDeclarativeEntityTypesProvider(cfg),
+		DeclarativeConnections: newDeclarativeConnectionsProvider(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("run migration %s: %w", args[1], err)
@@ -277,8 +279,14 @@ func parseMigrationCommandOptions(args []string) (migrationCommandOptions, error
 			if index >= len(args) {
 				return options, fmt.Errorf("--phase requires a value; %s", migrationCommandUsage())
 			}
+			if options.phase != "" {
+				return options, fmt.Errorf("--phase can be given only once; %s", migrationCommandUsage())
+			}
 			options.phase = engine.OperationPhase(args[index])
 		case strings.HasPrefix(argument, "--phase="):
+			if options.phase != "" {
+				return options, fmt.Errorf("--phase can be given only once; %s", migrationCommandUsage())
+			}
 			options.phase = engine.OperationPhase(strings.TrimPrefix(argument, "--phase="))
 		case argument == "--revert-all":
 			options.revertAll = true
@@ -306,6 +314,9 @@ func parseMigrationCommandOptions(args []string) (migrationCommandOptions, error
 	}
 	if options.phase == "" {
 		options.phase = positionalPhase
+	} else if positionalPhase != "" && positionalPhase != options.phase {
+		return options, fmt.Errorf("phase %q conflicts with --phase %q; %s",
+			positionalPhase, options.phase, migrationCommandUsage())
 	}
 	if options.phase != "" {
 		switch options.phase {
@@ -445,6 +456,54 @@ func migrationExecutionNamespaces(
 	return executionNamespaces, nil
 }
 
+// checkStartupCompatibility runs the startup compatibility gate when it is enabled and reports whether the server
+// may start. A disabled gate does not read the databases.
+func checkStartupCompatibility(
+	ctx context.Context,
+	logger *log.Logger,
+	cfg *config.Config,
+	dbProvider dbprovider.DBProviderInterface,
+) (bool, error) {
+	if cfg == nil {
+		return false, errors.New("check startup migration compatibility: configuration is required")
+	}
+	if !cfg.Migration.StartupCompatibilityCheck {
+		logger.Info(ctx, "Migration compatibility startup gate is disabled")
+		return true, nil
+	}
+	report, err := runStartupCompatibilityCheck(ctx, cfg, dbProvider)
+	if err != nil {
+		return false, err
+	}
+	if report == nil {
+		logger.Warn(ctx, "Migration compatibility startup gate is not available for the configured database providers")
+		return true, nil
+	}
+	logMigrationCompatibility(ctx, logger, *report)
+	if report.Compatible() && !cfg.OperatingMode.IsRestricted() {
+		if storeID, midMigration := storeServingMidMigration(*report); midMigration {
+			return false, fmt.Errorf(
+				"store %q is migrating to this release; set operating_mode to %q until the contract phase completes",
+				storeID, config.OperatingModeRestricted)
+		}
+	}
+	return report.Compatible(), nil
+}
+
+// storeServingMidMigration finds a store that this release serves as the migration target before the contract
+// phase completes. Legacy representations are still present then, so the server must run in restricted mode.
+func storeServingMidMigration(report engine.CompatibilityReport) (engine.StoreID, bool) {
+	for _, store := range report.Stores {
+		if store.Skipped || !store.Compatible() || store.Stage == engine.MigrationStageComplete {
+			continue
+		}
+		if store.TargetLevel != "" && store.TargetLevel == store.RequiredLevel {
+			return store.StoreID, true
+		}
+	}
+	return "", false
+}
+
 func runStartupCompatibilityCheck(
 	ctx context.Context,
 	cfg *config.Config,
@@ -528,7 +587,16 @@ func runMigrationInitialize(
 		if err != nil {
 			return results, fmt.Errorf("initialize stores %v: %w", namespace.storeIDs, err)
 		}
-		namespaceResults, err := initializer.Initialize(ctx, namespace.storeIDs)
+		locker, err := engine.NewMigrationExecutionLocker(client, namespace.databaseType)
+		if err != nil {
+			return results, fmt.Errorf("initialize stores %v: get execution locker: %w", namespace.storeIDs, err)
+		}
+		var namespaceResults []engine.InitializationResult
+		err = locker.WithLock(ctx, func(lockCtx context.Context) error {
+			var initializeErr error
+			namespaceResults, initializeErr = initializer.Initialize(lockCtx, namespace.storeIDs)
+			return initializeErr
+		})
 		if err != nil {
 			return results, fmt.Errorf("initialize stores %v: %w", namespace.storeIDs, err)
 		}
