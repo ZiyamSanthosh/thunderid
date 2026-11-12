@@ -22,6 +22,7 @@ import (
 	"github.com/thunder-id/thunderid/internal/flow/core"
 	"github.com/thunder-id/thunderid/internal/group"
 	"github.com/thunder-id/thunderid/internal/role"
+	"github.com/thunder-id/thunderid/internal/system/featuregate"
 	"github.com/thunder-id/thunderid/internal/system/log"
 	"github.com/thunder-id/thunderid/internal/system/security"
 	systemutils "github.com/thunder-id/thunderid/internal/system/utils"
@@ -49,6 +50,7 @@ type provisioningExecutor struct {
 	roleAssignmentService role.RoleAssignmentServiceInterface
 	entityTypeService     entitytype.EntityTypeServiceInterface
 	authnProvider         providers.AuthnProviderManager
+	featureGate           *featuregate.Gate
 	logger                *log.Logger
 }
 
@@ -67,6 +69,7 @@ func newProvisioningExecutor(
 	agentMgtProvider providers.AgentMgtProvider,
 	entityTypeService entitytype.EntityTypeServiceInterface,
 	authnProvider providers.AuthnProviderManager,
+	featureGate *featuregate.Gate,
 ) *provisioningExecutor {
 	logger := log.GetLogger().With(log.String(log.LoggerKeyComponentName, ExecutorNameProvisioning),
 		log.String(log.LoggerKeyExecutorName, ExecutorNameProvisioning))
@@ -108,6 +111,7 @@ func newProvisioningExecutor(
 		roleAssignmentService:        roleAssignmentService,
 		entityTypeService:            entityTypeService,
 		authnProvider:                authnProvider,
+		featureGate:                  featureGate,
 		logger:                       logger,
 	}
 }
@@ -215,6 +219,13 @@ func (p *provisioningExecutor) Execute(ctx *providers.NodeContext) (*providers.E
 		return nil, err
 	}
 	if !proceed {
+		return execResp, nil
+	}
+
+	// Checked as late as possible, so an entity that already exists is still found and reused.
+	if ctx.FlowType == providers.FlowTypeAuthentication && !p.featureGate.IsEnabled(featuregate.EntityProvisioning) {
+		execResp.Status = providers.ExecFailure
+		execResp.Error = &ErrEntityProvisionRestricted
 		return execResp, nil
 	}
 

@@ -30,16 +30,21 @@ func Initialize(
 	ouService oupkg.OrganizationUnitServiceInterface,
 	authzService sysauthz.SystemAuthorizationServiceInterface,
 	bus eventbus.EventBusInterface,
-) (EntityTypeServiceInterface, declarativeresource.ResourceExporter, declarativeresource.ResourceExporter, error) {
+) (
+	EntityTypeServiceInterface, declarativeresource.ResourceExporter, declarativeresource.ResourceExporter,
+	EntityTypeReferenceNormalizerInterface, error,
+) {
 	if bus == nil {
-		return nil, nil, nil, errNilEventBus
+		return nil, nil, nil, nil, errNilEventBus
 	}
 	// Step 1: Determine store mode and initialize store and transactioner
 	storeMode := getEntityTypeStoreMode()
-	entityTypeStore, transactioner, err := initializeStore(storeMode, cacheManager)
+	baseStore, transactioner, err := initializeStore(storeMode, cacheManager)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
+	snapshotCache := cache.GetCache[*entityTypeReferenceSnapshot](cacheManager, "EntityTypeReferenceCache")
+	entityTypeStore := newSnapshotInvalidatingStore(baseStore, snapshotCache)
 
 	// Step 2: Create service with store
 	entityTypeService := newEntityTypeService(ouService, entityTypeStore, transactioner,
@@ -48,8 +53,8 @@ func Initialize(
 
 	// Step 3: Load declarative resources into store (if applicable)
 	if storeMode == serverconst.StoreModeComposite || storeMode == serverconst.StoreModeDeclarative {
-		if err := loadDeclarativeResources(entityTypeStore, entityTypeService); err != nil {
-			return nil, nil, nil, err
+		if err := loadDeclarativeResources(baseStore, entityTypeService); err != nil {
+			return nil, nil, nil, nil, err
 		}
 	}
 
@@ -64,7 +69,24 @@ func Initialize(
 
 	userTypeExporter := newEntityTypeExporter(entityTypeService, TypeCategoryUser)
 	agentTypeExporter := newEntityTypeExporter(entityTypeService, TypeCategoryAgent)
-	return entityTypeService, userTypeExporter, agentTypeExporter, nil
+	referenceNormalizer := newEntityTypeReferenceNormalizer(entityTypeStore, snapshotCache)
+	return entityTypeService, userTypeExporter, agentTypeExporter, referenceNormalizer, nil
+}
+
+// InitializeDeclarativeService builds the entity type service over the declarative (file-based)
+// store only. It registers no routes or MCP tools and never reads the database, so a command that
+// runs while the database schema is changing (the migration command) can list the read-only entity
+// types defined in the resource files. The store mode configuration is intentionally ignored.
+func InitializeDeclarativeService(
+	ouService oupkg.OrganizationUnitServiceInterface,
+	authzService sysauthz.SystemAuthorizationServiceInterface,
+) (EntityTypeServiceInterface, error) {
+	fileStore, transactioner := newEntityTypeFileBasedStore()
+	entityTypeService := newEntityTypeService(ouService, fileStore, transactioner, authzService, eventbus.Discard)
+	if err := loadDeclarativeResources(fileStore, entityTypeService); err != nil {
+		return nil, err
+	}
+	return entityTypeService, nil
 }
 
 // Store Selection (based on entity_type.store configuration):

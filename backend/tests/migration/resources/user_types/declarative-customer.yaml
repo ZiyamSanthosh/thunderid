@@ -1,0 +1,11 @@
+resource_type: user_type
+id: 0199a123-4711-7abc-8def-0123456789ab
+category: user
+handle: declarative-customer
+displayName: Declarative Customer
+ouHandle: default
+schema:
+  username:
+    type: string
+    displayName: Username
+    required: false

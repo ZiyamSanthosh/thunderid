@@ -6,6 +6,7 @@ package passkey
 import (
 	"github.com/thunder-id/thunderid/internal/entity"
 	"github.com/thunder-id/thunderid/internal/identitygovernance"
+	"github.com/thunder-id/thunderid/internal/system/featuregate"
 	"github.com/thunder-id/thunderid/pkg/thunderidengine/providers"
 )
 
@@ -14,6 +15,7 @@ func Initialize(
 	entitySvc entity.EntityServiceInterface,
 	runtimeStore providers.RuntimeStoreProvider,
 	governance identitygovernance.IdentityGovernanceServiceInterface,
+	featureGate *featuregate.Gate,
 ) PasskeyServiceInterface {
-	return newPasskeyService(entitySvc, newSessionStore(runtimeStore), governance)
+	return newPasskeyService(entitySvc, newSessionStore(runtimeStore), governance, featureGate)
 }

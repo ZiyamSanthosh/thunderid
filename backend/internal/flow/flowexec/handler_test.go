@@ -80,6 +80,12 @@ func (s *HandlerTestSuite) TestHandleFlowError_FlowNotSharedWithOU_Returns403() 
 	s.Equal(http.StatusForbidden, w.Code)
 }
 
+func (s *HandlerTestSuite) TestHandleFlowError_FeatureDisabled_Returns503() {
+	w := httptest.NewRecorder()
+	handleFlowError(context.Background(), w, &ErrorFlowFeatureDisabled, nil)
+	s.Equal(http.StatusServiceUnavailable, w.Code)
+}
+
 func (s *HandlerTestSuite) TestHandleFlowError_ServerError_Returns500() {
 	w := httptest.NewRecorder()
 	svcErr := &tidcommon.ServiceError{

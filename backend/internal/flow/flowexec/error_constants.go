@@ -474,3 +474,17 @@ var ErrorFlowRestartRequired = tidcommon.ServiceError{
 		DefaultValue: "This flow was started by an earlier server version. Start the flow again",
 	},
 }
+
+// ErrorFlowFeatureDisabled defines the error returned when the current operating mode disables a flow feature.
+var ErrorFlowFeatureDisabled = tidcommon.ServiceError{
+	Code: "FES-1033",
+	Type: tidcommon.ClientErrorType,
+	Error: tidcommon.I18nMessage{
+		Key:          "error.flowexecservice.feature_disabled",
+		DefaultValue: "Operation temporarily unavailable",
+	},
+	ErrorDescription: tidcommon.I18nMessage{
+		Key:          "error.flowexecservice.feature_disabled_description",
+		DefaultValue: "This operation is unavailable while the server is in restricted mode",
+	},
+}

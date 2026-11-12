@@ -16,6 +16,7 @@ import (
 	"github.com/thunder-id/thunderid/internal/authn/passkey"
 	authnprovidercm "github.com/thunder-id/thunderid/internal/authnprovider/common"
 	authnprovidermgr "github.com/thunder-id/thunderid/internal/authnprovider/manager"
+	"github.com/thunder-id/thunderid/internal/system/featuregate"
 	"github.com/thunder-id/thunderid/tests/mocks/authnprovider/managermock"
 	"github.com/thunder-id/thunderid/tests/mocks/flow/coremock"
 )
@@ -57,7 +58,7 @@ func (suite *PasskeyAuthExecutorTestSuite) SetupTest() {
 		mock.Anything, mock.Anything, mock.Anything).Return(mockExec)
 
 	suite.executor = newPasskeyAuthExecutor(suite.mockFlowFactory, suite.mockAuthnProvider,
-		newAccessGuard(admitAllAccess(suite.T())))
+		newAccessGuard(admitAllAccess(suite.T())), nil)
 }
 
 func createMockPasskeyAuthExecutor(t *testing.T) providers.Executor {
@@ -139,6 +140,19 @@ func (suite *PasskeyAuthExecutorTestSuite) TestExecute_InvalidMode() {
 	assert.Error(suite.T(), err)
 	assert.Contains(suite.T(), err.Error(), "invalid executor mode")
 	assert.NotNil(suite.T(), resp)
+}
+
+func (suite *PasskeyAuthExecutorTestSuite) TestExecuteRegisterStart_RestrictedBeforeEnrollment() {
+	suite.executor.featureGate = featuregate.NewGate(featuregate.CredentialUpdate)
+	ctx := createPasskeyNodeContext(passkeyExecutorModeRegStart, providers.FlowTypeAuthentication)
+
+	resp, err := suite.executor.Execute(ctx)
+
+	assert.NoError(suite.T(), err)
+	assert.Equal(suite.T(), providers.ExecFailure, resp.Status)
+	assert.Equal(suite.T(), ErrCredentialUpdateRestricted.Code, resp.Error.Code)
+	suite.mockAuthnProvider.AssertNotCalled(suite.T(), "InitiateEnrollment", mock.Anything, mock.Anything,
+		mock.Anything, mock.Anything)
 }
 
 func (suite *PasskeyAuthExecutorTestSuite) TestExecuteChallenge_Success() {

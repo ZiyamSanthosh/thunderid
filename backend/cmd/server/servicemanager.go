@@ -97,6 +97,7 @@ import (
 	declarativeresource "github.com/thunder-id/thunderid/internal/system/declarative_resource"
 	"github.com/thunder-id/thunderid/internal/system/eventbus"
 	"github.com/thunder-id/thunderid/internal/system/export"
+	"github.com/thunder-id/thunderid/internal/system/featuregate"
 	healthcheckservice "github.com/thunder-id/thunderid/internal/system/healthcheck/service"
 	httpservice "github.com/thunder-id/thunderid/internal/system/http"
 	i18nmgt "github.com/thunder-id/thunderid/internal/system/i18n/mgt"
@@ -214,15 +215,15 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 	fatalOnError(ctx, logger, err, "Failed to initialize HashService")
 
 	// Initialize user type service
-	entityTypeService, entityTypeExporter, agentTypeExporter, err := entitytype.Initialize(
+	entityTypeService, entityTypeExporter, agentTypeExporter, entityTypeNormalizer, err := entitytype.Initialize(
 		mux, mcpServer, cacheManager, ouService, ouAuthzService, auditBus)
 	fatalOnError(ctx, logger, err, "Failed to initialize EntityTypeService")
 	exporters = append(exporters, entityTypeExporter)
 	exporters = append(exporters, agentTypeExporter)
 
 	// Initialize entity service
-	entityService, err := entity.Initialize(cacheManager, hashService, entityTypeService, ouService,
-		sharingService, observabilitySvc)
+	entityService, err := entity.Initialize(cacheManager, hashService, entityTypeService, entityTypeNormalizer,
+		ouService, sharingService, observabilitySvc)
 	fatalOnError(ctx, logger, err, "Failed to initialize EntityService")
 
 	// Initialize entity provider
@@ -362,7 +363,8 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 		roleService, resourceService, entityService, authZENPDPService)
 
 	idpService, err := idp.Initialize(
-		cacheManager, entityTypeService, roleService, groupService, resourceService, ouService, auditBus)
+		cacheManager, entityTypeService, entityTypeNormalizer, roleService, groupService, resourceService, ouService,
+		auditBus)
 	fatalOnError(ctx, logger, err, "Failed to initialize IDPService")
 
 	// Register the /connections API as a thin layer over the identity-provider and
@@ -398,8 +400,24 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 	oauthCfg := oauthconfig.FromServerRuntime()
 	deviceCodeVerifier := deviceauth.NewUserCodeVerifier(runtimeStoreProvider)
 
+	// The feature gate centralizes runtime feature availability for the configured operating mode.
+	featureGate := featuregate.NewGate()
+	if runtime.Config.OperatingMode.IsRestricted() {
+		featureGate = featuregate.NewGate(
+			featuregate.UserRegistration,
+			featuregate.AccountRecovery,
+			featuregate.AdministrativeOperations,
+			featuregate.EntityProvisioning,
+			featuregate.OrganizationUnitCreation,
+			featuregate.AccountLinking,
+			featuregate.UserAttributeUpdate,
+			featuregate.CredentialUpdate,
+			featuregate.PasskeySignCountUpdate,
+		)
+	}
+
 	// Initialize passkey service
-	passkeyService := passkey.Initialize(entityService, runtimeStoreProvider, governanceService)
+	passkeyService := passkey.Initialize(entityService, runtimeStoreProvider, governanceService, featureGate)
 
 	// Shared DPoP verifier (and its JTI replay cache) so OAuth and OpenID4VCI
 	// share JTI replay protection.
@@ -499,6 +517,7 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 			AuthzDetailProvider:   authzDetailService,
 			SharingService:        sharingService,
 			DeviceCodeVerifier:    deviceCodeVerifier,
+			FeatureGate:           featureGate,
 		},
 		interceptor.InterceptorDependencies{},
 		flowConfig,
@@ -507,7 +526,7 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 	flowMgtService, flowMgtExporter, err := flowmgt.Initialize(
 		mux, mcpServer, cacheManager, flowFactory, execRegistry, interceptorRegistry, graphBuilder,
 		serverConfigService, ouService, notifTemplateSvc, httpConnectionService, flowConfigHandler, idpService,
-		true, sharingService, auditBus, nil, ouAuthzService)
+		true, sharingService, auditBus, nil, ouAuthzService, entityTypeNormalizer)
 	fatalOnError(ctx, logger, err, "Failed to initialize FlowMgtService")
 
 	exporters = append(exporters, flowMgtExporter)
@@ -526,8 +545,8 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 	cimdService := cimd.Initialize(mux)
 	inboundClientService, err := inboundclient.Initialize(
 		cacheManager, certservice, entityProvider,
-		themeMgtService, layoutMgtService, flowMgtService, entityTypeService, runtimeCryptoSvc, jweService,
-		cimdService, sharingService, entityService)
+		themeMgtService, layoutMgtService, flowMgtService, entityTypeService, entityTypeNormalizer,
+		runtimeCryptoSvc, jweService, cimdService, sharingService, entityService)
 	fatalOnError(ctx, logger, err, "Failed to initialize InboundClientService")
 
 	// Two-phase initialization: the entity and inbound client services import the ou package, so they are
@@ -663,7 +682,7 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 	flowExecService, err := flowexec.Initialize(mux, mcpServer, flowMgtService, actorProvider, ouProvider,
 		execRegistry, interceptorRegistry, observabilitySvc, runtimeCryptoSvc, attestationProvider,
 		graphBuilder, jwtService, runtimeStoreProvider, transactioner, serverConfigService, ssoTransport,
-		governanceProvider, flowMgtService, flowMgtService, permissionResolver, flowConfig)
+		governanceProvider, flowMgtService, flowMgtService, permissionResolver, featureGate, flowConfig)
 	fatalOnError(ctx, logger, err, "Failed to initialize flow execution service")
 	err = application.SetSystemFlowProvider(applicationService, flowExecService)
 	fatalOnError(ctx, logger, err, "Failed to inject the system flow provider into the application service")

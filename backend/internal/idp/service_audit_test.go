@@ -376,7 +376,7 @@ func (s *IDPServiceAuditTestSuite) TestCreateIdentityProvider_SucceedsWhenTheBus
 
 func (s *IDPServiceAuditTestSuite) TestInitialize_RefusesANilEventBus() {
 	service, err := Initialize(cache.Initialize(config.GetServerRuntime().Config.Cache, "test-deployment"),
-		nil, nil, nil, nil, nil, nil)
+		nil, nil, nil, nil, nil, nil, nil)
 
 	s.ErrorIs(err, errNilEventBus)
 	s.Nil(service)

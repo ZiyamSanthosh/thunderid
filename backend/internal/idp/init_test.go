@@ -95,7 +95,7 @@ func (s *IDPInitTestSuite) TestInitialize() {
 	_ = config.InitializeServerRuntime("", testConfig)
 
 	service, err := Initialize(
-		cache.Initialize(config.GetServerRuntime().Config.Cache, "test-deployment"), nil, nil, nil, nil, nil,
+		cache.Initialize(config.GetServerRuntime().Config.Cache, "test-deployment"), nil, nil, nil, nil, nil, nil,
 		discardingBus{})
 	s.NoError(err)
 	s.NotNil(service)
@@ -207,7 +207,7 @@ func (suite *IDPInitTestSuite) TestInitialize_WithDeclarativeResourcesDisabled()
 
 	// Execute
 	service, err := Initialize(
-		cache.Initialize(config.GetServerRuntime().Config.Cache, "test-deployment"), nil, nil, nil, nil, nil,
+		cache.Initialize(config.GetServerRuntime().Config.Cache, "test-deployment"), nil, nil, nil, nil, nil, nil,
 		discardingBus{})
 
 	// Assert
@@ -350,7 +350,7 @@ func (s *IDPInitTestSuite) TestInitialize_DBClientError() {
 	}()
 
 	_, err := Initialize(
-		cache.Initialize(config.GetServerRuntime().Config.Cache, "test-deployment"), nil, nil, nil, nil, nil,
+		cache.Initialize(config.GetServerRuntime().Config.Cache, "test-deployment"), nil, nil, nil, nil, nil, nil,
 		discardingBus{})
 
 	s.Error(err)
@@ -375,7 +375,7 @@ func (s *IDPInitTestSuite) TestInitialize_TransactionerError() {
 	}()
 
 	_, err := Initialize(
-		cache.Initialize(config.GetServerRuntime().Config.Cache, "test-deployment"), nil, nil, nil, nil, nil,
+		cache.Initialize(config.GetServerRuntime().Config.Cache, "test-deployment"), nil, nil, nil, nil, nil, nil,
 		discardingBus{})
 
 	s.Error(err)

@@ -10,6 +10,7 @@ import (
 
 	"github.com/thunder-id/thunderid/internal/entityprovider"
 	"github.com/thunder-id/thunderid/internal/flow/core"
+	"github.com/thunder-id/thunderid/internal/system/featuregate"
 	"github.com/thunder-id/thunderid/internal/system/log"
 	"github.com/thunder-id/thunderid/pkg/thunderidengine/providers"
 )
@@ -17,6 +18,8 @@ import (
 const (
 	attrCollectLoggerComponentName = "AttributeCollector"
 )
+
+var errAttributeUpdateRestricted = errors.New("user attribute update is restricted")
 
 // TODO: Need to handle complex attributes and nested structures in the user profile.
 //  Currently executor only takes string inputs.
@@ -26,6 +29,7 @@ type attributeCollector struct {
 	providers.Executor
 	entityProvider entityprovider.EntityProviderInterface
 	authnProvider  providers.AuthnProviderManager
+	featureGate    *featuregate.Gate
 	logger         *log.Logger
 }
 
@@ -36,6 +40,7 @@ func newAttributeCollector(
 	flowFactory core.FlowFactoryInterface,
 	entityProvider entityprovider.EntityProviderInterface,
 	authnProvider providers.AuthnProviderManager,
+	featureGate *featuregate.Gate,
 ) *attributeCollector {
 	prerequisites := []providers.Input{
 		{
@@ -54,6 +59,7 @@ func newAttributeCollector(
 		Executor:       base,
 		entityProvider: entityProvider,
 		authnProvider:  authnProvider,
+		featureGate:    featureGate,
 		logger:         logger,
 	}
 }
@@ -96,6 +102,11 @@ func (a *attributeCollector) Execute(ctx *providers.NodeContext) (*providers.Exe
 	}
 
 	if err := a.updateUserInStore(ctx, execResp); err != nil {
+		if errors.Is(err, errAttributeUpdateRestricted) {
+			execResp.Status = providers.ExecFailure
+			execResp.Error = &ErrUserAttributeUpdateRestricted
+			return execResp, nil
+		}
 		logger.Error(ctx.Context, "Failed to update user attributes", log.Error(err))
 		execResp.Status = providers.ExecFailure
 		execResp.Error = &ErrAttributeCollectFailed
@@ -277,6 +288,9 @@ func (a *attributeCollector) updateUserInStore(ctx *providers.NodeContext, execR
 	if updatedUser == nil {
 		return errors.New("failed to create updated user object")
 	}
+	if !a.featureGate.IsEnabled(featuregate.UserAttributeUpdate) {
+		return errAttributeUpdateRestricted
+	}
 
 	if err := a.entityProvider.UpdateAttributes(ctx.Context, userID, updatedUser.Attributes); err != nil {
 		return fmt.Errorf("failed to update user attributes: %s", err.Message)
@@ -335,8 +349,16 @@ func (a *attributeCollector) getUpdatedUserObject(ctx *providers.NodeContext,
 	}
 
 	// Merge attributes
+	changed := false
 	for k, v := range newAttrs {
+		if !attributeValueEquals(existingAttrs[k], v) {
+			changed = true
+		}
 		existingAttrs[k] = v
+	}
+	if !changed {
+		logger.Debug(ctx.Context, "Provided attributes match the existing user attributes, returning existing user")
+		return false, userData, nil
 	}
 
 	// Marshal the merged attributes back to JSON
@@ -352,6 +374,19 @@ func (a *attributeCollector) getUpdatedUserObject(ctx *providers.NodeContext,
 	return true, updatedUser, nil
 }
 
+// attributeValueEquals reports whether two attribute values serialize to the same JSON.
+func attributeValueEquals(existing, updated interface{}) bool {
+	existingJSON, err := json.Marshal(existing)
+	if err != nil {
+		return false
+	}
+	updatedJSON, err := json.Marshal(updated)
+	if err != nil {
+		return false
+	}
+	return string(existingJSON) == string(updatedJSON)
+}
+
 // getInputAttributes retrieves the input attributes from the context. Values are converted from the
 // engine's string representation to the type implied by the input type, so that non-string
 // attributes satisfy schema validation when the collected profile is persisted.
@@ -360,6 +395,9 @@ func (a *attributeCollector) getInputAttributes(ctx *providers.NodeContext) map[
 	requiredInputAttrs := a.getInputs(ctx)
 
 	extIdentity := core.GetExternalIdentity(ctx.RuntimeData)
+	// While profile updates are refused, the identity provider's claims do not refresh the profile, so a
+	// changed claim does not fail a sign in that collected nothing. Values the flow collected still count.
+	claimsRefreshProfile := a.featureGate.IsEnabled(featuregate.UserAttributeUpdate)
 	for _, inputAttr := range requiredInputAttrs {
 		// Skip special attributes that shouldn't be stored/ updated in the user profile
 		if inputAttr.Identifier == userAttributeUserID {
@@ -373,6 +411,8 @@ func (a *attributeCollector) getInputAttributes(ctx *providers.NodeContext) map[
 			attributesMap[inputAttr.Identifier] = convertToSchemaType(value, schemaType)
 		} else if runtimeValue, exists := ctx.RuntimeData[inputAttr.Identifier]; exists {
 			attributesMap[inputAttr.Identifier] = convertToSchemaType(runtimeValue, schemaType)
+		} else if !claimsRefreshProfile {
+			continue
 		} else if claimValue, exists := extIdentity.Claim(inputAttr.Identifier); exists {
 			attributesMap[inputAttr.Identifier] = convertToSchemaType(claimValue, schemaType)
 		}

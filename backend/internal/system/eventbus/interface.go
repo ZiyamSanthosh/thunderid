@@ -39,3 +39,11 @@ type Subscriber[P Payload] interface {
 	// Stop gives up waiting.
 	Handle(ctx context.Context, env Envelope, payload P) error
 }
+
+// Discard is an event bus that drops every event. It is for a command that builds a service only to read, such
+// as the migration command, and has no audit subscriber to deliver to.
+var Discard EventBusInterface = discardBus{}
+
+type discardBus struct{}
+
+func (discardBus) Publish(context.Context, *Event) error { return nil }

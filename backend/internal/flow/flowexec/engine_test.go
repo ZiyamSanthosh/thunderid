@@ -23,6 +23,7 @@ import (
 	"github.com/thunder-id/thunderid/internal/flow/executormeta"
 	"github.com/thunder-id/thunderid/internal/system/cache"
 	"github.com/thunder-id/thunderid/internal/system/config"
+	"github.com/thunder-id/thunderid/internal/system/featuregate"
 	"github.com/thunder-id/thunderid/internal/system/log"
 	"github.com/thunder-id/thunderid/internal/system/observability/event"
 	"github.com/thunder-id/thunderid/tests/mocks/flow/coremock"
@@ -1942,7 +1943,7 @@ func (s *EngineTestSuite) TestNewFlowEngine() {
 	mockFlowProvider := NewFlowProviderMock(t)
 	mockGraphBuilder := NewGraphBuilderInterfaceMock(t)
 
-	engine := newFlowEngine(mockRegistry, mockInterceptorRunner, mockObs, mockFlowProvider, mockGraphBuilder, nil)
+	engine := newFlowEngine(mockRegistry, mockInterceptorRunner, mockObs, mockFlowProvider, mockGraphBuilder, nil, nil)
 	s.NotNil(engine)
 }
 
@@ -4489,6 +4490,39 @@ func (s *EngineTestSuite) TestHandleCallResponse_FixedAuthenticationFlowUsesDevi
 	s.Zero(ctx.SSOFlowVersion)
 }
 
+func (s *EngineTestSuite) TestHandleCallResponse_RestrictedCallee() {
+	t := s.T()
+	mockFlowProvider := NewFlowProviderMock(t)
+	mockGraphBuilder := NewGraphBuilderInterfaceMock(t)
+	mockCalleeGraph := coremock.NewGraphInterfaceMock(t)
+
+	flow := &providers.CompleteFlowDefinition{ID: "target-flow", FlowType: providers.FlowTypeRegistration}
+	mockFlowProvider.On("GetFlow", mock.Anything, "target-flow").Return(flow, nil)
+	mockGraphBuilder.On("GetGraph", mock.Anything, flow).Return(mockCalleeGraph, nil)
+	mockCalleeGraph.On("GetType").Return(providers.FlowTypeRegistration)
+
+	fe := &flowEngine{
+		logger:       log.GetLogger(),
+		flowProvider: mockFlowProvider,
+		graphBuilder: mockGraphBuilder,
+		featureGate:  featuregate.NewGate(featuregate.UserRegistration),
+	}
+	ctx := &EngineContext{
+		Context:  context.Background(),
+		FlowType: providers.FlowTypeAuthentication,
+	}
+
+	next, svcErr := fe.handleCallResponse(ctx, &common.NodeResponse{
+		Status: common.NodeStatusCall, CallTargetFlowID: "target-flow",
+	}, log.GetLogger())
+
+	s.Nil(next)
+	s.NotNil(svcErr)
+	s.Equal(ErrorFlowFeatureDisabled.Code, svcErr.Code)
+	s.Equal(0, ctx.frameDepth())
+	s.Equal(providers.FlowTypeAuthentication, ctx.FlowType)
+}
+
 func (s *EngineTestSuite) TestSharedRuntimeDataSurvivesAdministrationFlowCallAndReturn() {
 	t := s.T()
 	callerGraph := coremock.NewGraphInterfaceMock(t)
@@ -5416,10 +5450,10 @@ func (s *EngineTestSuite) TestApplyVariableValues_FailsWhenTheValuesCannotBeRead
 
 func (s *EngineTestSuite) TestNewFlowEngine_UsesTheVariableValuesItIsGiven() {
 	values := newVariableValueProviderMock(s.T())
-	engine := newFlowEngine(nil, nil, nil, NewFlowProviderMock(s.T()), nil, values).(*flowEngine)
+	engine := newFlowEngine(nil, nil, nil, NewFlowProviderMock(s.T()), nil, values, nil).(*flowEngine)
 	s.Same(values, engine.variableValuesProvider)
 
-	s.Nil(newFlowEngine(nil, nil, nil, NewFlowProviderMock(s.T()), nil, nil).(*flowEngine).
+	s.Nil(newFlowEngine(nil, nil, nil, NewFlowProviderMock(s.T()), nil, nil, nil).(*flowEngine).
 		variableValuesProvider, "an engine given none leaves every flow on the owner's defaults")
 }
 

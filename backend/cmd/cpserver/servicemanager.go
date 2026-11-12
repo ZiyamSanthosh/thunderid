@@ -179,14 +179,14 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 	hashService, err := cryptolib.Initialize(hashCfg)
 	fatalOnError(ctx, logger, err, "Failed to initialize HashService")
 
-	entityTypeService, entityTypeExporter, agentTypeExporter, err := entitytype.Initialize(
+	entityTypeService, entityTypeExporter, agentTypeExporter, entityTypeNormalizer, err := entitytype.Initialize(
 		mux, mcpServer, cacheManager, ouService, ouAuthzService, auditBus)
 	fatalOnError(ctx, logger, err, "Failed to initialize EntityTypeService")
 	exporters = append(exporters, entityTypeExporter)
 	exporters = append(exporters, agentTypeExporter)
 
-	entityService, err := entity.Initialize(cacheManager, hashService, entityTypeService, ouService,
-		sharingService, observabilitySvc)
+	entityService, err := entity.Initialize(cacheManager, hashService, entityTypeService, entityTypeNormalizer,
+		ouService, sharingService, observabilitySvc)
 	fatalOnError(ctx, logger, err, "Failed to initialize EntityService")
 
 	projectService, projectExporter, err := project.Initialize(mux, mcpServer, ouService, entityService,
@@ -311,7 +311,8 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 		role.NewEffectivePermissionResolver(roleService, groupService, entityService, resourceService))
 
 	idpService, err := idp.Initialize(
-		cacheManager, entityTypeService, roleService, groupService, resourceService, ouService, auditBus)
+		cacheManager, entityTypeService, entityTypeNormalizer, roleService, groupService, resourceService, ouService,
+		auditBus)
 	fatalOnError(ctx, logger, err, "Failed to initialize IDPService")
 
 	notifTemplateSvc, _, notifTemplateExporter, err := notificationtemplate.Initialize(
@@ -352,7 +353,7 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 	flowMgtService, flowMgtExporter, err := flowmgt.Initialize(
 		mux, mcpServer, cacheManager, flowFactory, execRegistry, interceptorRegistry, graphBuilder,
 		serverConfigService, ouService, notifTemplateSvc, httpConnectionService, flowConfigHandler, idpService,
-		false, sharingService, auditBus, projectService, ouAuthzService)
+		false, sharingService, auditBus, projectService, ouAuthzService, entityTypeNormalizer)
 	fatalOnError(ctx, logger, err, "Failed to initialize FlowMgtService")
 	projectService.AddResourceCheck(flowMgtService.ProjectHasFlows)
 
@@ -374,7 +375,8 @@ func registerServices(mux *http.ServeMux, cacheManager cache.CacheManagerInterfa
 	cimdService := cimd.Initialize(mux)
 	inboundClientService, err := inboundclient.Initialize(
 		cacheManager, certservice, entityProvider,
-		themeMgtService, layoutMgtService, flowMgtService, entityTypeService, runtimeCryptoSvc, jweService,
+		themeMgtService, layoutMgtService, flowMgtService, entityTypeService, entityTypeNormalizer,
+		runtimeCryptoSvc, jweService,
 		cimdService, nil, nil, inboundclient.KeepingValueReferences())
 	fatalOnError(ctx, logger, err, "Failed to initialize InboundClientService")
 

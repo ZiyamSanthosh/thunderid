@@ -1844,6 +1844,76 @@ var (
 			DefaultValue: "A handle could not be created from the organization unit name. Enter a handle",
 		},
 	}
+
+	// ErrEntityProvisionRestricted is returned when server policy fences creating an entity during authentication.
+	ErrEntityProvisionRestricted = tidcommon.ServiceError{
+		Type: tidcommon.ClientErrorType,
+		Code: "FET-1139",
+		Error: tidcommon.I18nMessage{
+			Key:          "flows.executor.errors.entity_provision_restricted",
+			DefaultValue: "Provisioning temporarily unavailable",
+		},
+		ErrorDescription: tidcommon.I18nMessage{
+			Key:          "flows.executor.errors.entity_provision_restricted_desc",
+			DefaultValue: "Provisioning is unavailable while the server is in restricted mode",
+		},
+	}
+
+	// ErrOUCreationRestricted is returned when server policy fences organization-unit creation.
+	ErrOUCreationRestricted = tidcommon.ServiceError{
+		Type: tidcommon.ClientErrorType,
+		Code: "FET-1140",
+		Error: tidcommon.I18nMessage{
+			Key:          "flows.executor.errors.ou_creation_restricted",
+			DefaultValue: "Organization unit creation temporarily unavailable",
+		},
+		ErrorDescription: tidcommon.I18nMessage{
+			Key:          "flows.executor.errors.ou_creation_restricted_desc",
+			DefaultValue: "Organization unit creation is unavailable while the server is in restricted mode",
+		},
+	}
+
+	// ErrAccountLinkingRestricted is returned when server policy fences account-link writes.
+	ErrAccountLinkingRestricted = tidcommon.ServiceError{
+		Type: tidcommon.ClientErrorType,
+		Code: "FET-1141",
+		Error: tidcommon.I18nMessage{
+			Key:          "flows.executor.errors.account_linking_restricted",
+			DefaultValue: "Account linking temporarily unavailable",
+		},
+		ErrorDescription: tidcommon.I18nMessage{
+			Key:          "flows.executor.errors.account_linking_restricted_desc",
+			DefaultValue: "Account linking is unavailable while the server is in restricted mode",
+		},
+	}
+
+	// ErrUserAttributeUpdateRestricted is returned when server policy fences profile updates.
+	ErrUserAttributeUpdateRestricted = tidcommon.ServiceError{
+		Type: tidcommon.ClientErrorType,
+		Code: "FET-1142",
+		Error: tidcommon.I18nMessage{
+			Key:          "flows.executor.errors.user_attribute_update_restricted",
+			DefaultValue: "Profile update temporarily unavailable",
+		},
+		ErrorDescription: tidcommon.I18nMessage{
+			Key:          "flows.executor.errors.user_attribute_update_restricted_desc",
+			DefaultValue: "Profile updates are unavailable while the server is in restricted mode",
+		},
+	}
+
+	// ErrCredentialUpdateRestricted is returned when server policy fences credential mutations.
+	ErrCredentialUpdateRestricted = tidcommon.ServiceError{
+		Type: tidcommon.ClientErrorType,
+		Code: "FET-1143",
+		Error: tidcommon.I18nMessage{
+			Key:          "flows.executor.errors.credential_update_restricted",
+			DefaultValue: "Credential update temporarily unavailable",
+		},
+		ErrorDescription: tidcommon.I18nMessage{
+			Key:          "flows.executor.errors.credential_update_restricted_desc",
+			DefaultValue: "Credential updates are unavailable while the server is in restricted mode",
+		},
+	}
 )
 
 // errForEntityCategory returns a copy of err whose messages name the entity category they are

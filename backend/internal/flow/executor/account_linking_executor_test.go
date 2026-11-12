@@ -14,6 +14,7 @@ import (
 
 	"github.com/thunder-id/thunderid/internal/entitytype"
 	"github.com/thunder-id/thunderid/internal/flow/common"
+	"github.com/thunder-id/thunderid/internal/system/featuregate"
 	tidcommon "github.com/thunder-id/thunderid/pkg/thunderidengine/common"
 	"github.com/thunder-id/thunderid/pkg/thunderidengine/providers"
 
@@ -48,7 +49,7 @@ func (suite *AccountLinkingExecutorTestSuite) SetupTest() {
 		[]providers.Input{}, mock.Anything).Return(suite.mockBaseExecutor)
 
 	suite.executor = newAccountLinkingExecutor(suite.mockFlowFactory, suite.mockAuthnProvider,
-		suite.mockEntityTypeService)
+		suite.mockEntityTypeService, nil)
 }
 
 // linkingCandidateID is the account every test here matches on, and linkingOtherCandidateID the
@@ -160,6 +161,7 @@ func linkingAction(actionType common.ActionType) map[string]interface{} {
 // is written, which the unstubbed ResolveLinkCandidates and LinkAccount assert on
 // their own.
 func (suite *AccountLinkingExecutorTestSuite) TestExecute_AuthenticatedUserCompletes() {
+	suite.executor.featureGate = featuregate.NewGate(featuregate.AccountLinking)
 	ctx := &providers.NodeContext{
 		ExecutionID: "flow-1",
 		FlowType:    providers.FlowTypeAuthentication,
@@ -225,6 +227,22 @@ func (suite *AccountLinkingExecutorTestSuite) TestExecute_NoCandidateCompletesAs
 	assert.NoError(suite.T(), err)
 	assert.Equal(suite.T(), providers.ExecComplete, resp.Status)
 	assert.NotContains(suite.T(), resp.RuntimeData, common.RuntimeKeyLinkingCandidateUserIDs)
+}
+
+func (suite *AccountLinkingExecutorTestSuite) TestExecute_RestrictedCandidateFailsBeforeVerification() {
+	suite.executor.featureGate = featuregate.NewGate(featuregate.AccountLinking)
+	ctx := &providers.NodeContext{ExecutionID: "flow-1", FlowType: providers.FlowTypeAuthentication}
+	suite.mockAuthnProvider.On("ResolveLinkCandidates", mock.Anything, mock.Anything).
+		Return(matchedCandidate(map[string]string{"email": "jane@example.com"}),
+			(*tidcommon.ServiceError)(nil))
+
+	resp, err := suite.executor.Execute(ctx)
+
+	assert.NoError(suite.T(), err)
+	assert.Equal(suite.T(), providers.ExecFailure, resp.Status)
+	assert.Equal(suite.T(), ErrAccountLinkingRestricted.Code, resp.Error.Code)
+	suite.mockAuthnProvider.AssertNotCalled(suite.T(), "LinkAccount", mock.Anything, mock.Anything,
+		mock.Anything, mock.Anything)
 }
 
 // Nobody authenticated at all: GetEntityReference must not be called, and being unauthenticated is
@@ -423,7 +441,7 @@ func (suite *AccountLinkingExecutorTestSuite) TestExecute_UnrestorableSavedAuthU
 		suite.Run(name, func() {
 			mockAuthnProvider := managermock.NewAuthnProviderManagerMock(suite.T())
 			executor := newAccountLinkingExecutor(suite.mockFlowFactory, mockAuthnProvider,
-				suite.mockEntityTypeService)
+				suite.mockEntityTypeService, nil)
 			ctx := &providers.NodeContext{
 				ExecutionID: "flow-1",
 				FlowType:    providers.FlowTypeAuthentication,
@@ -499,7 +517,7 @@ func (suite *AccountLinkingExecutorTestSuite) TestExecute_ServerErrorIsReturned(
 		suite.Run(name, func() {
 			mockAuthnProvider := managermock.NewAuthnProviderManagerMock(suite.T())
 			executor := newAccountLinkingExecutor(suite.mockFlowFactory, mockAuthnProvider,
-				suite.mockEntityTypeService)
+				suite.mockEntityTypeService, nil)
 			tc.stub(mockAuthnProvider)
 			ctx := &providers.NodeContext{
 				ExecutionID: "flow-1",
@@ -560,7 +578,7 @@ func (suite *AccountLinkingExecutorTestSuite) TestExecute_ReEntryByNonCandidateR
 		suite.Run(name, func() {
 			mockAuthnProvider := managermock.NewAuthnProviderManagerMock(suite.T())
 			executor := newAccountLinkingExecutor(suite.mockFlowFactory, mockAuthnProvider,
-				suite.mockEntityTypeService)
+				suite.mockEntityTypeService, nil)
 			runtime := returningFromVerification(withFederatedIdentity(verificationPendingFor(tc.candidates)))
 			ctx := &providers.NodeContext{
 				ExecutionID:       "flow-1",
@@ -606,7 +624,7 @@ func (suite *AccountLinkingExecutorTestSuite) TestExecute_ReEntryWithoutAuthenti
 		suite.Run(name, func() {
 			mockAuthnProvider := managermock.NewAuthnProviderManagerMock(suite.T())
 			executor := newAccountLinkingExecutor(suite.mockFlowFactory, mockAuthnProvider,
-				suite.mockEntityTypeService)
+				suite.mockEntityTypeService, nil)
 			ctx := &providers.NodeContext{
 				ExecutionID:       "flow-1",
 				FlowType:          providers.FlowTypeAuthentication,
@@ -731,6 +749,27 @@ func (suite *AccountLinkingExecutorTestSuite) TestExecute_VerifiedByTheCandidate
 	assert.NotContains(suite.T(), resp.RuntimeData, common.RuntimeKeyAllowRegistrationWithExistingUser)
 	suite.assertCycleEnded(resp)
 	suite.mockAuthnProvider.AssertExpectations(suite.T())
+}
+
+func (suite *AccountLinkingExecutorTestSuite) TestExecute_RestrictedVerificationDoesNotWriteLink() {
+	suite.executor.featureGate = featuregate.NewGate(featuregate.AccountLinking)
+	ctx := &providers.NodeContext{
+		ExecutionID: "flow-1",
+		FlowType:    providers.FlowTypeAuthentication,
+		AuthUser:    authenticatedAuthUser(),
+		RuntimeData: returningFromVerification(withFederatedIdentity(verificationPending())),
+	}
+	suite.mockAuthnProvider.On("GetEntityReference", mock.Anything, mock.Anything).
+		Return(providers.AuthUser{}, &providers.EntityReference{EntityID: linkingCandidateID},
+			(*tidcommon.ServiceError)(nil))
+
+	resp, err := suite.executor.Execute(ctx)
+
+	assert.NoError(suite.T(), err)
+	assert.Equal(suite.T(), providers.ExecFailure, resp.Status)
+	assert.Equal(suite.T(), ErrAccountLinkingRestricted.Code, resp.Error.Code)
+	suite.mockAuthnProvider.AssertNotCalled(suite.T(), "LinkAccount", mock.Anything, mock.Anything,
+		mock.Anything, mock.Anything)
 }
 
 // In registration a verified link lets provisioning complete as the linked account, which it would

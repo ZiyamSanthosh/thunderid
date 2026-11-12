@@ -33,6 +33,32 @@ func TestAuthZENPDPDefaultsMergeAndValidation(t *testing.T) {
 	assert.Error(t, (AuthZENPDPConfig{RetryCount: &negative}).Validate())
 }
 
+func TestOperatingModeValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		mode    OperatingMode
+		wantErr bool
+	}{
+		{name: "unset defaults to normal", mode: ""},
+		{name: "full", mode: OperatingModeFull},
+		{name: "restricted", mode: OperatingModeRestricted},
+		{name: "unsupported", mode: "management_only", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.mode.Validate()
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+
+			assert.NoError(t, err)
+			assert.Equal(t, tt.mode == OperatingModeRestricted, tt.mode.IsRestricted())
+		})
+	}
+}
+
 type ConfigTestSuite struct {
 	suite.Suite
 	originalEnvVars map[string]string
@@ -2092,4 +2118,33 @@ notification:
 		assert.Nil(suite.T(), cfg, unknown)
 		assert.Error(suite.T(), err, unknown)
 	}
+}
+
+func TestMigrationStartupCompatibilityCheckIsDisabledByDefault(t *testing.T) {
+	assert.False(t, (&Config{}).Migration.StartupCompatibilityCheck)
+}
+
+func TestMergeEnablesTheMigrationStartupCompatibilityCheck(t *testing.T) {
+	base := &Config{}
+	mergeConfigs(base, &Config{Migration: MigrationConfig{StartupCompatibilityCheck: true}})
+	assert.True(t, base.Migration.StartupCompatibilityCheck)
+
+	disabled := &Config{}
+	mergeConfigs(disabled, &Config{})
+	assert.False(t, disabled.Migration.StartupCompatibilityCheck)
+}
+
+func TestShippedDefaultsDisableTheMigrationStartupCompatibilityCheck(t *testing.T) {
+	data, err := os.ReadFile("../../../cmd/server/config/default.json")
+	assert.NoError(t, err)
+
+	var shipped Config
+	assert.NoError(t, json.Unmarshal(data, &shipped))
+	assert.False(t, shipped.Migration.StartupCompatibilityCheck)
+
+	var raw struct {
+		Migration map[string]interface{} `json:"migration"`
+	}
+	assert.NoError(t, json.Unmarshal(data, &raw))
+	assert.Contains(t, raw.Migration, "startup_compatibility_check")
 }

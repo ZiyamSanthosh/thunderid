@@ -65,7 +65,28 @@ var unscopedQueries = map[string]string{
 	"CNQ-CONSENT_MGT-07": "C.DEPLOYMENT_ID = $1 is the first of the conditions the builder joins into its WHERE",
 	"buildFilterQueryWithOffset": "extends a base query its callers pass in and scope with " +
 		"utils.AppendDeploymentIDToFilterQuery; the identifier subquery is scoped through the entity's own id",
-	"SHQ-SHARING_MGT-19": "built by a closure whose text ends in p.DEPLOYMENT_ID = <parameter>",
+	"SHQ-SHARING_MGT-19":  "built by a closure whose text ends in p.DEPLOYMENT_ID = <parameter>",
+	"MIG-METADATA_MGT-08": "creates the migration metadata tables, which hold no deployment rows",
+	"%s/%s  ": "runs the statements of a migration operation, which changes the schema of the whole database " +
+		"for every deployment at once",
+	"MIG-CFG_MGT-18": "a readiness check that must see the entity types of every deployment, since the " +
+		"migration changes the table for all of them",
+	"MIG-ENT_MGT-07": "a verification that must see the entities of every deployment, since the " +
+		"migration changes the table for all of them",
+	"MIG-OIX-AGT-01": "finds the organization units of every deployment that hold several agent types, " +
+		"since the unique index it guards spans them all",
+	"MIG-OWN-ou-exists": "looks for the system organization unit the server names by ID, in any deployment",
+	"-02": "creates an index concurrently, which changes the table for every deployment at once",
+	"-03": "drops an interrupted index, which changes the table for every deployment at once",
+	"MIG-USM-08-02": "reads the entities of the deployments it was given as an array parameter: every " +
+		"row is joined to the group's deployment on ON p.DEP = e.DEPLOYMENT_ID",
+	"MIG-USM-13-01": "joins each entity to the working table row of its own deployment: " +
+		"e.DEPLOYMENT_ID = merged.DEP",
+	"MIG-USM-13-04": "joins each entity and identifier to the working table row of its own deployment",
+	"MIG-USM-13-06": "joins each identifier to the working table row of its own deployment: " +
+		"i.DEPLOYMENT_ID = x.DEP, and the working table rows are scoped by the parameter",
+	"MIG-USM-13-07": "joins each entity and identifier to the working table row of its own deployment, " +
+		"and the working table rows are scoped by the parameter",
 }
 
 // backendRoot is the backend module, from this package's directory.

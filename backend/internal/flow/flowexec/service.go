@@ -23,6 +23,7 @@ import (
 	oauth2const "github.com/thunder-id/thunderid/internal/oauth/oauth2/constants"
 	sysContext "github.com/thunder-id/thunderid/internal/system/context"
 	"github.com/thunder-id/thunderid/internal/system/cryptolib"
+	"github.com/thunder-id/thunderid/internal/system/featuregate"
 	"github.com/thunder-id/thunderid/internal/system/jose/jwt"
 	"github.com/thunder-id/thunderid/internal/system/log"
 	"github.com/thunder-id/thunderid/internal/system/observability/event"
@@ -60,6 +61,7 @@ type flowExecService struct {
 	governance          providers.IdentityGovernanceProvider
 	flowVisibility      flowVisibilityProvider
 	permissionProvider  providers.PermissionProvider
+	featureGate         *featuregate.Gate
 	cfg                 flowconfig.Config
 	// ssoHandleTTL is how long a handle returned in the response body stays usable.
 	ssoHandleTTL time.Duration
@@ -80,6 +82,7 @@ func newFlowExecService(flowProvider providers.FlowProvider,
 	governance providers.IdentityGovernanceProvider,
 	flowVisibility flowVisibilityProvider,
 	permissionProvider providers.PermissionProvider,
+	featureGate *featuregate.Gate,
 	cfg flowconfig.Config,
 	ssoHandleTTL time.Duration) FlowExecServiceInterface {
 	return &flowExecService{
@@ -98,6 +101,7 @@ func newFlowExecService(flowProvider providers.FlowProvider,
 		governance:          governance,
 		flowVisibility:      flowVisibility,
 		permissionProvider:  permissionProvider,
+		featureGate:         featureGate,
 		cfg:                 cfg,
 		ssoHandleTTL:        ssoHandleTTL,
 	}
@@ -180,6 +184,9 @@ func (s *flowExecService) execute(ctx context.Context, flowID, appID, executionI
 			return nil, svcErr
 		}
 		engineCtx.Context = authorityCtx
+		if svcErr := s.validateFlowFeature(engineCtx.FlowType); svcErr != nil {
+			return nil, svcErr
+		}
 	}
 
 	// Checked after the context loads, so a flow started before the application was suspended is
@@ -453,6 +460,31 @@ func (s *flowExecService) validateSelfFlowCaller(ctx context.Context) *tidcommon
 	}
 
 	return nil
+
+}
+
+func (s *flowExecService) validateFlowFeature(flowType providers.FlowType) *tidcommon.ServiceError {
+	required, ok := requiredFlowFeature(flowType)
+	if !ok {
+		return nil
+	}
+	if s.featureGate.IsEnabled(required) {
+		return nil
+	}
+	return &ErrorFlowFeatureDisabled
+}
+
+func requiredFlowFeature(flowType providers.FlowType) (featuregate.Feature, bool) {
+	switch flowType {
+	case providers.FlowTypeRegistration, providers.FlowTypeUserOnboarding:
+		return featuregate.UserRegistration, true
+	case providers.FlowTypeRecovery:
+		return featuregate.AccountRecovery, true
+	case providers.FlowTypeAdministration:
+		return featuregate.AdministrativeOperations, true
+	default:
+		return "", false
+	}
 }
 
 // applyInboundSSO selects the SSO handle carried for this flow and stashes it on the engine context
@@ -551,6 +583,9 @@ func (s *flowExecService) loadNewContext(ctx context.Context, flowID, appID, flo
 	// application lookups or context creation.
 	ctx, svcErr := s.startAuthority(ctx, flowType)
 	if svcErr != nil {
+		return nil, svcErr
+	}
+	if svcErr := s.validateFlowFeature(flowType); svcErr != nil {
 		return nil, svcErr
 	}
 
@@ -1385,6 +1420,9 @@ func (s *flowExecService) InitiateFlow(ctx context.Context,
 	if svcErr != nil {
 		return "", svcErr
 	}
+	if svcErr := s.validateFlowFeature(flowType); svcErr != nil {
+		return "", svcErr
+	}
 
 	// Application ID is required for all flows except Invite Registration
 	if flowType != providers.FlowTypeUserOnboarding && initContext.ApplicationID == "" {
@@ -1452,6 +1490,9 @@ func (s *flowExecService) InitiateAndExecute(ctx context.Context,
 	// See InitiateFlow: decided here so no initiation entry point bypasses it.
 	ctx, svcErr := s.startAuthority(ctx, flowType)
 	if svcErr != nil {
+		return nil, svcErr
+	}
+	if svcErr := s.validateFlowFeature(flowType); svcErr != nil {
 		return nil, svcErr
 	}
 
