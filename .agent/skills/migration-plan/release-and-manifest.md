@@ -3,15 +3,18 @@
 ## What a release package is
 
 One directory per release under `backend/internal/system/migration/releases/`, named after the
-version with underscores, for example `v2_0_0`. It is a Go package that holds:
+version with underscores, for example `v2_0_0`. It is a Go package that chooses and orders operations. The operations themselves live in
+`backend/internal/system/migration/operations/`, shared by every release. A release package holds:
 
 | File | Purpose |
 |---|---|
 | `release-manifest.json` | Embedded manifest: release version, metadata version, per store levels |
-| `release.go` | `Dependencies`, `Definition()`, `DefinitionWithDependencies()` and `migrationPlan()` that builds the ordered plan |
-| `NN_name.go` | One operation per file. `NN_name_rollback.go` for its rollback operation |
-| Helper files | Shared builders: table specs, primary key operations, JSON rewriting, declarative sources |
-| `*_test.go` | Unit tests next to each file |
+| `release.go` | `Definition()`, `DefinitionWithDependencies()` and `migrationPlan()` that builds the ordered plan from `operations.New...` constructors |
+| `release_test.go` | Pins the plan: sizes and ordered operation ids |
+
+The `operations` package holds `NN_name.go` (one operation per file, `NN_name_rollback.go` for its rollback
+operation), the shared helpers (table specs, primary key operations, JSON rewriting, declarative sources),
+`Dependencies`, and the unit tests next to each file.
 
 `current/current.go` selects the release compiled into the binary and exposes the catalog of manifests.
 
@@ -21,7 +24,8 @@ A release is **immutable once shipped**. Operators may already have run it.
 
 - The release is still in development (no published tag or release for that version): add the new
   operations to its package.
-- The release has shipped: create a new release package. Never edit a shipped plan or manifest.
+- The release has shipped: create a new release package. Never edit a shipped plan or manifest, or an operation
+  it lists. Add a new operation in `operations/` instead.
 
 Ask the developer which case applies. Look at `version.txt`, git tags and the release notes if unsure.
 A test compares the manifest's release version with `version.txt`, so the two move together.
@@ -80,7 +84,7 @@ Dependencies for service backed operations are added as narrowly typed fields on
 |---|---|---|
 | Operation file | `NN_snake_name.go`, `NN` is a two digit authoring number unique in the release | `02_add_entity_type_handle.go` |
 | Rollback file | same name plus `_rollback` | `04_backfill_entity_type_handle_rollback.go` |
-| Operation id | `<release>/<store>/<NN>_<snake_name>` | `2.0.0/configdb/02_add_entity_type_handle` |
+| Operation id | `<store>/<NN>_<snake_name>` | `configdb/02_add_entity_type_handle` |
 | Rollback id | forward id plus `_rollback` | `.../04_backfill_entity_type_handle_rollback` |
 | Catch-up id | forward id plus `_catch_up`, or its own number | `.../04_backfill_entity_type_handle_catch_up` |
 | Query id | `MIG-<STORE>_MGT-<n>`, unique across the whole release package | `MIG-CFG_MGT-05` |

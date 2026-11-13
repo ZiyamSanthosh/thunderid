@@ -38,7 +38,7 @@ Every changed store needs at least one operation. An operation is described by:
 
 | Field | Values |
 |---|---|
-| `ID` | `<release>/<store>/<NN>_<snake_name>`, unique in the plan |
+| `ID` | `<store>/<NN>_<snake_name>`, unique in the plan |
 | `StoreID` | The one store it writes |
 | `ReadStoreIDs` | Extra stores it may read |
 | `Kind` | `schema_change` or `data_change` |

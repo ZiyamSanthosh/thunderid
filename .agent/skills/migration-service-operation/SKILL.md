@@ -21,7 +21,7 @@ existing `engine.Operation`, `engine.AtomicOperation` and `engine.ResumableOpera
 
 Service injection happens while a release builds its plan. An operation declares the smallest
 interface it needs, receives it through its constructor, and is returned to the engine as an ordinary
-operation. The release keeps a release specific `Dependencies` struct, and the forwarding path runs
+operation. The `operations` package keeps one `Dependencies` struct shared by every release, and the forwarding path runs
 through `current` and `cmd/server`.
 
 Do not add speculative dependency fields, a global service registry or a separate "programmatic
@@ -33,8 +33,8 @@ operation" executor before a real migration requires them.
 cmd/server composition
         | constructs concrete services when required (lazily)
         v
-current release selector           (alias of the release Dependencies, forwards them)
-        | forwards the selected release dependencies
+current release selector           (alias of operations.Dependencies, forwards them)
+        | forwards the dependencies to the selected release
         v
 release plan construction          (migrationPlan in release.go)
         | injects narrow interfaces into operation constructors
@@ -47,8 +47,9 @@ migration engine                   (never imports business packages)
 
 | Layer | Owns |
 |---|---|
-| Operation file in the release package | The narrow interface, the logic using it |
-| `release.go` | The `Dependencies` struct, constructing sources, operation order and phase membership |
+| Operation file in `operations/` | The narrow interface, the logic using it |
+| `operations/dependencies.go` | The `Dependencies` struct |
+| `release.go` | Constructing sources, operation order and phase membership |
 | `current/current.go` | Release selection. Forwards types with aliases. No initialisation, no logic |
 | `cmd/server/migration_*.go` | Concrete provider construction from real services and configuration |
 | Engine | Dispatching atomic, online or resumable operations. Nothing service specific |
@@ -58,7 +59,7 @@ migration engine                   (never imports business packages)
 ### 1. Define a narrow interface next to the operation
 
 Declare only the methods the migration uses. Do not depend on a large service interface because the
-concrete implementation happens to provide it. The interface belongs in the release package, in the
+concrete implementation happens to provide it. The interface belongs in the `operations` package, in the
 operation file when only that operation uses it.
 
 ```go
@@ -105,7 +106,7 @@ changes.
 
 ### 3. Declare the release dependency
 
-Add a narrowly typed, lazy field to the existing release `Dependencies` struct, only when an
+Add a narrowly typed, lazy field to the existing `operations.Dependencies` struct, only when an
 operation consumes it. Document what it provides and what happens when it is nil.
 
 ```go
@@ -130,8 +131,8 @@ backfill := newBackfillEntityTypeHandleOperation(declaredEntityTypes)
 Use type aliases when no adaptation is needed. `current` never initialises services.
 
 ```go
-type Dependencies = release.Dependencies
-type DeclarativeEntityTypes = release.DeclarativeEntityTypes
+type Dependencies = operations.Dependencies
+type DeclarativeEntityTypes = operations.DeclarativeEntityTypes
 ```
 
 ### 5. Construct the service in `cmd/server`

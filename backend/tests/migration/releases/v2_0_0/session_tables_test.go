@@ -14,7 +14,7 @@ import (
 	migrationharness "github.com/thunder-id/thunderid/tests/migration/harness"
 )
 
-const sessionOperationPrefix = "2.0.0/runtime_persistent/"
+const sessionOperationPrefix = "runtime_persistent/"
 
 var expandedSessionOperations = []string{
 	"51_rename_session_tables",

@@ -36,7 +36,8 @@ Do not write an operation before the plan exists and the developer has confirmed
 | Path | Holds |
 |---|---|
 | `backend/internal/system/migration/engine/` | The engine: coordinator, state controller, executors, preflight, compatibility gate, rollback, metadata store, locks |
-| `backend/internal/system/migration/releases/<version>/` | One immutable release: `release.go` (plan), `release-manifest.json`, one file per operation (`NN_name.go`), shared helpers |
+| `backend/internal/system/migration/operations/` | Every operation (`NN_name.go`, one per file, numbered as the plan lists them), the helpers they share, `Dependencies`, and their unit tests. No operation belongs to one release |
+| `backend/internal/system/migration/releases/<version>/` | One release: `release.go` (the ordered plan and target version), `release-manifest.json`, `release_test.go`. It picks operations from `operations/`; it defines none |
 | `backend/internal/system/migration/current/` | Selects the release compiled into the binary and exposes the manifest catalog |
 | `backend/cmd/server/migration_*.go` | CLI wiring: argument parsing, namespace building, declarative providers, startup gate |
 | `backend/internal/system/middleware/operatingmode.go` and `featuregate` | Restricted mode fences |
@@ -54,7 +55,7 @@ Do not write an operation before the plan exists and the developer has confirmed
    bookkeeping outside the engine's executors.
 5. **Contract is explicit and irreversible by default.** The generic phase command refuses it. Once a
    contract operation completes without a rollback operation, complete rollback is blocked.
-6. **Releases are immutable once shipped.** Never edit the operations or manifest of a released version.
+6. **Releases are immutable once shipped.** Never edit the plan or manifest of a released version, or an operation that a released version uses. Operations are shared, so an edit changes every release that lists them. Add a new operation instead.
    Fix forward with a new release.
 7. **PostgreSQL only.** Every SQL operation needs an explicit PostgreSQL implementation. A query with no
    text for the active database type is refused.

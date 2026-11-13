@@ -38,7 +38,7 @@ func verifyExpandRevocationCriterionValue(t *testing.T, environment migrationhar
 			`SELECT LENGTH(CRITERION_VALUE)::TEXT FROM "REVOCATION_CRITERIA"
 				WHERE ID = '0199a123-4794-7abc-8def-0123456789ab'`, "2048")
 		migrationharness.AssertOperationCompleted(t, db,
-			"2.0.0/runtime_persistent/40_expand_revocation_criterion_value")
+			"runtime_persistent/40_expand_revocation_criterion_value")
 		t.Log("verified: revocation criterion values accept 2048 characters without changing existing values")
 	})
 }

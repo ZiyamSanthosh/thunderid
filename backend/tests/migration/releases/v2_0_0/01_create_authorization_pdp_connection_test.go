@@ -24,7 +24,7 @@ func verifyCreateAuthorizationPDPConnection(t *testing.T, environment migrationh
 			"1",
 		)
 		migrationharness.AssertOperationCompleted(t, db,
-			"2.0.0/configdb/01_create_authorization_pdp_connection")
+			"configdb/01_create_authorization_pdp_connection")
 		t.Log("verified: authorization PDP connection table and index exist and operation progress is completed")
 	})
 }

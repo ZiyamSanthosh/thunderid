@@ -92,9 +92,9 @@ The release plan in
 
 ### 01: Create authorization PDP connection table
 
-- **ID:** `2.0.0/configdb/01_create_authorization_pdp_connection`
+- **ID:** `configdb/01_create_authorization_pdp_connection`
 - **Definition:**
-  [`01_create_authorization_pdp_connection.go`](backend/internal/system/migration/releases/v2_0_0/01_create_authorization_pdp_connection.go)
+  [`01_create_authorization_pdp_connection.go`](backend/internal/system/migration/operations/01_create_authorization_pdp_connection.go)
 - **Purpose:** Add storage for authorization PDP connection configurations.
 - **Source state:** `AUTHORIZATION_PDP_CONNECTION` is absent and the intended index name is unused.
 - **Readiness:** Ready for the absent source state or an exact target table. A partial table, a
@@ -109,9 +109,9 @@ The release plan in
 
 ### 02: Add entity-type handle column
 
-- **ID:** `2.0.0/configdb/02_add_entity_type_handle`
+- **ID:** `configdb/02_add_entity_type_handle`
 - **Definition:**
-  [`02_add_entity_type_handle.go`](backend/internal/system/migration/releases/v2_0_0/02_add_entity_type_handle.go)
+  [`02_add_entity_type_handle.go`](backend/internal/system/migration/operations/02_add_entity_type_handle.go)
 - **Purpose:** Introduce the nullable `ENTITY_TYPES.HANDLE VARCHAR(100)` compatibility column needed
   before handles are populated.
 - **Source state:** `ENTITY_TYPES.NAME` is the accepted non-null `VARCHAR(100)` column and `HANDLE`
@@ -129,9 +129,9 @@ The release plan in
 
 ### 03: Expand entity type length
 
-- **ID:** `2.0.0/entitydb/03_expand_entity_type_length`
+- **ID:** `entitydb/03_expand_entity_type_length`
 - **Definition:**
-  [`03_expand_entity_type_length.go`](backend/internal/system/migration/releases/v2_0_0/03_expand_entity_type_length.go)
+  [`03_expand_entity_type_length.go`](backend/internal/system/migration/operations/03_expand_entity_type_length.go)
 - **Purpose:** Increase `ENTITY.TYPE` from `VARCHAR(50)` to `VARCHAR(100)`.
 - **Source state:** Exactly one non-null `VARCHAR(50)` `ENTITY.TYPE` column.
 - **Readiness:** Ready for the exact source or target definition. Missing, nullable, non-varchar, or
@@ -144,9 +144,9 @@ The release plan in
 
 ### 04: Backfill entity-type handles
 
-- **ID:** `2.0.0/configdb/04_backfill_entity_type_handle`
+- **ID:** `configdb/04_backfill_entity_type_handle`
 - **Definition:**
-  [`04_backfill_entity_type_handle.go`](backend/internal/system/migration/releases/v2_0_0/04_backfill_entity_type_handle.go)
+  [`04_backfill_entity_type_handle.go`](backend/internal/system/migration/operations/04_backfill_entity_type_handle.go)
 - **Purpose:** Create valid, unique handles from legacy entity-type names.
 - **Source state:** The exact name and nullable handle columns exist. Handles may be entirely absent
   or partially populated, but every populated handle must already be valid and unique within its
@@ -169,9 +169,9 @@ The release plan in
 
 ### 04 rollback: Remove entity-type handle representation
 
-- **ID:** `2.0.0/configdb/04_backfill_entity_type_handle_rollback`
+- **ID:** `configdb/04_backfill_entity_type_handle_rollback`
 - **Definition:**
-  [`04_backfill_entity_type_handle_rollback.go`](backend/internal/system/migration/releases/v2_0_0/04_backfill_entity_type_handle_rollback.go)
+  [`04_backfill_entity_type_handle_rollback.go`](backend/internal/system/migration/operations/04_backfill_entity_type_handle_rollback.go)
 - **Purpose:** Return entity-type data to the source representation before source rollback.
 - **Source state for rollback:** One or more entity types in scope have a non-null handle.
 - **Execution:** Clear handles in batches of at most 100 rows and checkpoint the last processed ID.
@@ -187,9 +187,9 @@ The release plan in
 
 ### 04 catch-up: Backfill entity-type handles added after Expand
 
-- **ID:** `2.0.0/configdb/04_backfill_entity_type_handle_catch_up`
+- **ID:** `configdb/04_backfill_entity_type_handle_catch_up`
 - **Definition:**
-  [`04_backfill_entity_type_handle.go`](backend/internal/system/migration/releases/v2_0_0/04_backfill_entity_type_handle.go)
+  [`04_backfill_entity_type_handle.go`](backend/internal/system/migration/operations/04_backfill_entity_type_handle.go)
 - **Purpose:** Give a handle to every entity type the source created after operation 04, while it still
   served. Operations 42 to 47 and the contract operation 06 require every entity type to have a handle.
 - **Execution and verification:** The same implementation as operation 04, registered at the start of
@@ -198,9 +198,9 @@ The release plan in
 
 ### 05: Add entity-type handle uniqueness
 
-- **ID:** `2.0.0/configdb/05_add_entity_type_handle_uniqueness`
+- **ID:** `configdb/05_add_entity_type_handle_uniqueness`
 - **Definition:**
-  [`05_add_entity_type_handle_uniqueness.go`](backend/internal/system/migration/releases/v2_0_0/05_add_entity_type_handle_uniqueness.go)
+  [`05_add_entity_type_handle_uniqueness.go`](backend/internal/system/migration/operations/05_add_entity_type_handle_uniqueness.go)
 - **Purpose:** Enforce unique `(HANDLE, CATEGORY, DEPLOYMENT_ID)` values while retaining legacy
   `(NAME, CATEGORY, DEPLOYMENT_ID)` uniqueness.
 - **Source state:** Exact name and nullable handle columns, legacy name uniqueness present, target
@@ -221,9 +221,9 @@ The release plan in
 
 ### 06: Finalize entity-type handles
 
-- **ID:** `2.0.0/configdb/06_finalize_entity_type_handle`
+- **ID:** `configdb/06_finalize_entity_type_handle`
 - **Definition:**
-  [`06_finalize_entity_type_handle.go`](backend/internal/system/migration/releases/v2_0_0/06_finalize_entity_type_handle.go)
+  [`06_finalize_entity_type_handle.go`](backend/internal/system/migration/operations/06_finalize_entity_type_handle.go)
 - **Purpose:** Make handles mandatory and remove legacy name uniqueness after the source version is
   drained.
 - **Source state:** Exact name and nullable handle columns, no null handles, and both legacy name and
@@ -241,9 +241,9 @@ The release plan in
 
 ### 07: Expand entity identifier primary key
 
-- **ID:** `2.0.0/entitydb/07_expand_entity_identifier_primary_key`
+- **ID:** `entitydb/07_expand_entity_identifier_primary_key`
 - **Definition:**
-  [`07_expand_entity_identifier_primary_key.go`](backend/internal/system/migration/releases/v2_0_0/07_expand_entity_identifier_primary_key.go)
+  [`07_expand_entity_identifier_primary_key.go`](backend/internal/system/migration/operations/07_expand_entity_identifier_primary_key.go)
 - **Purpose:** Allow more than one value for the same entity identifier name by changing the primary
   key from `(ENTITY_ID, DEPLOYMENT_ID, NAME)` to `(ENTITY_ID, DEPLOYMENT_ID, NAME, VALUE)`.
 - **Source state:** Exact accepted `ENTITY_IDENTIFIER` columns and the exact three-column legacy
@@ -267,9 +267,9 @@ The release plan in
 
 ### 08: Create entity runtime data table
 
-- **ID:** `2.0.0/runtime_persistent/08_create_entity_runtime_data`
+- **ID:** `runtime_persistent/08_create_entity_runtime_data`
 - **Definition:**
-  [`08_create_entity_runtime_data.go`](backend/internal/system/migration/releases/v2_0_0/08_create_entity_runtime_data.go)
+  [`08_create_entity_runtime_data.go`](backend/internal/system/migration/operations/08_create_entity_runtime_data.go)
 - **Purpose:** Add `ENTITY_RUNTIME_DATA` for entity state, runtime attributes, revision, and audit
   timestamps in `runtime_persistent`.
 - **Source state:** The table is absent.
@@ -294,9 +294,9 @@ The release plan in
 
 ### 09: Add temporary entity state default
 
-- **ID:** `2.0.0/entitydb/09_add_entity_state_default`
+- **ID:** `entitydb/09_add_entity_state_default`
 - **Definition:**
-  [`09_add_entity_state_default.go`](backend/internal/system/migration/releases/v2_0_0/09_add_entity_state_default.go)
+  [`09_add_entity_state_default.go`](backend/internal/system/migration/operations/09_add_entity_state_default.go)
 - **Purpose:** Keep source-schema entity creation compatible when the target stops supplying the
   legacy `ENTITY.STATE` column.
 - **Source state:** Exact non-null `VARCHAR(50)` state column, no default, and every persisted value
@@ -316,9 +316,9 @@ The release plan in
 
 ### 10: Remove legacy entity state
 
-- **ID:** `2.0.0/entitydb/10_remove_entity_state`
+- **ID:** `entitydb/10_remove_entity_state`
 - **Definition:**
-  [`10_remove_entity_state.go`](backend/internal/system/migration/releases/v2_0_0/10_remove_entity_state.go)
+  [`10_remove_entity_state.go`](backend/internal/system/migration/operations/10_remove_entity_state.go)
 - **Purpose:** Remove `ENTITY.STATE` after entity runtime state has moved to
   `runtime_persistent.ENTITY_RUNTIME_DATA`.
 - **Source state:** The runtime-data table exactly matches its target schema. `ENTITY.STATE` is the
@@ -336,9 +336,9 @@ The release plan in
 
 ### 11: Create notification template table
 
-- **ID:** `2.0.0/configdb/11_create_notification_template`
+- **ID:** `configdb/11_create_notification_template`
 - **Definition:**
-  [`11_create_notification_template.go`](backend/internal/system/migration/releases/v2_0_0/11_create_notification_template.go)
+  [`11_create_notification_template.go`](backend/internal/system/migration/operations/11_create_notification_template.go)
 - **Purpose:** Add deployment-scoped storage for channel-specific notification templates.
 - **Source state:** `NOTIFICATION_TEMPLATE` is absent and the PostgreSQL-generated primary-key and
   unique-index relation names are unused.
@@ -357,9 +357,9 @@ The release plan in
 
 ### 12: Create variable table
 
-- **ID:** `2.0.0/configdb/12_create_variable`
+- **ID:** `configdb/12_create_variable`
 - **Definition:**
-  [`12_create_variable.go`](backend/internal/system/migration/releases/v2_0_0/12_create_variable.go)
+  [`12_create_variable.go`](backend/internal/system/migration/operations/12_create_variable.go)
 - **Purpose:** Add deployment-scoped storage for readable configuration variables.
 - **Source state:** `VARIABLE` is absent and its explicit index name is unused.
 - **Readiness:** Ready for the absent source or exact target table. Any partial or conflicting
@@ -372,9 +372,9 @@ The release plan in
 
 ### 13: Create secret table
 
-- **ID:** `2.0.0/configdb/13_create_secret`
+- **ID:** `configdb/13_create_secret`
 - **Definition:**
-  [`13_create_secret.go`](backend/internal/system/migration/releases/v2_0_0/13_create_secret.go)
+  [`13_create_secret.go`](backend/internal/system/migration/operations/13_create_secret.go)
 - **Purpose:** Add deployment-scoped storage for encrypted configuration secrets.
 - **Source state:** `SECRET` is absent and its explicit index name is unused.
 - **Readiness:** Ready for the absent source or exact target table. Any partial or conflicting
@@ -387,9 +387,9 @@ The release plan in
 
 ### 14: Create gateway table
 
-- **ID:** `2.0.0/configdb/14_create_gateway`
+- **ID:** `configdb/14_create_gateway`
 - **Definition:**
-  [`14_create_gateway.go`](backend/internal/system/migration/releases/v2_0_0/14_create_gateway.go)
+  [`14_create_gateway.go`](backend/internal/system/migration/operations/14_create_gateway.go)
 - **Purpose:** Store gateways administered by the control plane and identify one default gateway per
   deployment.
 - **Source state:** `GATEWAY` is absent and the default-gateway index name is unused.
@@ -404,9 +404,9 @@ The release plan in
 
 ### 15: Create configuration version table
 
-- **ID:** `2.0.0/configdb/15_create_configuration_version`
+- **ID:** `configdb/15_create_configuration_version`
 - **Definition:**
-  [`15_create_configuration_version.go`](backend/internal/system/migration/releases/v2_0_0/15_create_configuration_version.go)
+  [`15_create_configuration_version.go`](backend/internal/system/migration/operations/15_create_configuration_version.go)
 - **Purpose:** Store captured configuration versions.
 - **Source state:** `CONFIGURATION_VERSION` is absent.
 - **Readiness:** Ready for the absent source or exact target table. Any partial or conflicting
@@ -419,9 +419,9 @@ The release plan in
 
 ### 16: Create gateway applied-version table
 
-- **ID:** `2.0.0/configdb/16_create_gateway_applied_version`
+- **ID:** `configdb/16_create_gateway_applied_version`
 - **Definition:**
-  [`16_create_gateway_applied_version.go`](backend/internal/system/migration/releases/v2_0_0/16_create_gateway_applied_version.go)
+  [`16_create_gateway_applied_version.go`](backend/internal/system/migration/operations/16_create_gateway_applied_version.go)
 - **Purpose:** Store the current and previous configuration version applied to each gateway.
 - **Source state:** `GATEWAY_APPLIED_VERSION` is absent.
 - **Readiness:** Ready for the absent source or exact target table. Any partial or conflicting
@@ -434,9 +434,9 @@ The release plan in
 
 ### 17: Create gateway excluded-resource table
 
-- **ID:** `2.0.0/configdb/17_create_gateway_excluded_resource`
+- **ID:** `configdb/17_create_gateway_excluded_resource`
 - **Definition:**
-  [`17_create_gateway_excluded_resource.go`](backend/internal/system/migration/releases/v2_0_0/17_create_gateway_excluded_resource.go)
+  [`17_create_gateway_excluded_resource.go`](backend/internal/system/migration/operations/17_create_gateway_excluded_resource.go)
 - **Purpose:** Persist resources that each gateway must leave unchanged during configuration apply.
 - **Source state:** `GATEWAY_EXCLUDED_RESOURCE` is absent.
 - **Readiness:** Ready for the absent source or exact target table. Any conflicting relation or
@@ -450,9 +450,9 @@ The release plan in
 
 ### 18: Create resource sharing policy table
 
-- **ID:** `2.0.0/configdb/18_create_resource_sharing_policy`
+- **ID:** `configdb/18_create_resource_sharing_policy`
 - **Definition:**
-  [`18_create_resource_sharing_policy.go`](backend/internal/system/migration/releases/v2_0_0/18_create_resource_sharing_policy.go)
+  [`18_create_resource_sharing_policy.go`](backend/internal/system/migration/operations/18_create_resource_sharing_policy.go)
 - **Purpose:** Store the root policy representation for resource sharing.
 - **Source state:** `RESOURCE_SHARING_POLICY` is absent and its explicit index name is unused.
 - **Readiness:** Ready for the absent source or exact target table. Any partial or conflicting
@@ -466,9 +466,9 @@ The release plan in
 
 ### 19: Create resource sharing policy unit table
 
-- **ID:** `2.0.0/configdb/19_create_resource_sharing_policy_unit`
+- **ID:** `configdb/19_create_resource_sharing_policy_unit`
 - **Definition:**
-  [`19_create_resource_sharing_policy_unit.go`](backend/internal/system/migration/releases/v2_0_0/19_create_resource_sharing_policy_unit.go)
+  [`19_create_resource_sharing_policy_unit.go`](backend/internal/system/migration/operations/19_create_resource_sharing_policy_unit.go)
 - **Purpose:** Store organizational-unit reach rules belonging to a resource sharing policy.
 - **Source state:** `RESOURCE_SHARING_POLICY_UNIT` is absent and its explicit index name is unused.
 - **Readiness:** Deferred to operation 18 when the policy table is absent. Otherwise ready for the
@@ -484,9 +484,9 @@ The release plan in
 
 ### 20: Create resource sharing policy overlay-rule table
 
-- **ID:** `2.0.0/configdb/20_create_resource_sharing_policy_overlay_rule`
+- **ID:** `configdb/20_create_resource_sharing_policy_overlay_rule`
 - **Definition:**
-  [`20_create_resource_sharing_policy_overlay_rule.go`](backend/internal/system/migration/releases/v2_0_0/20_create_resource_sharing_policy_overlay_rule.go)
+  [`20_create_resource_sharing_policy_overlay_rule.go`](backend/internal/system/migration/operations/20_create_resource_sharing_policy_overlay_rule.go)
 - **Purpose:** Store field-level overlay rules belonging to a resource sharing policy.
 - **Source state:** `RESOURCE_SHARING_POLICY_OVERLAY_RULE` is absent and its index names are unused.
 - **Readiness:** Deferred to operation 18 when the policy table is absent. Otherwise ready for the
@@ -502,9 +502,9 @@ The release plan in
 
 ### 21: Create resource overlay value table
 
-- **ID:** `2.0.0/configdb/21_create_resource_overlay_value`
+- **ID:** `configdb/21_create_resource_overlay_value`
 - **Definition:**
-  [`21_create_resource_overlay_value.go`](backend/internal/system/migration/releases/v2_0_0/21_create_resource_overlay_value.go)
+  [`21_create_resource_overlay_value.go`](backend/internal/system/migration/operations/21_create_resource_overlay_value.go)
 - **Purpose:** Store resolved overlay values per deployment, resource, organizational unit, and field.
 - **Source state:** `RESOURCE_OVERLAY_VALUE` is absent.
 - **Readiness:** Ready for the absent source or exact target table. Any partial or conflicting
@@ -517,9 +517,9 @@ The release plan in
 
 ### 22: Scope ENTITY_TYPES primary key by deployment
 
-- **ID:** `2.0.0/configdb/22_expand_entity_types_primary_key`
+- **ID:** `configdb/22_expand_entity_types_primary_key`
 - **Definition:**
-  [`22_expand_entity_types_primary_key.go`](backend/internal/system/migration/releases/v2_0_0/22_expand_entity_types_primary_key.go)
+  [`22_expand_entity_types_primary_key.go`](backend/internal/system/migration/operations/22_expand_entity_types_primary_key.go)
 - **Purpose:** Replace the globally unique `ENTITY_TYPES.ID` primary key with
   `(DEPLOYMENT_ID, ID)`.
 - **Source state:** `ENTITY_TYPES` is an ordinary table with non-null `DEPLOYMENT_ID` and `ID`
@@ -558,8 +558,8 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
 
 ### 23: Scope ROLE primary key by deployment
 
-- **ID:** `2.0.0/configdb/23_expand_role_primary_key`
-- **Definition:** [`23_expand_role_primary_key.go`](backend/internal/system/migration/releases/v2_0_0/23_expand_role_primary_key.go)
+- **ID:** `configdb/23_expand_role_primary_key`
+- **Definition:** [`23_expand_role_primary_key.go`](backend/internal/system/migration/operations/23_expand_role_primary_key.go)
 - **Purpose:** Change `ROLE` from primary key `(ID)` to `(DEPLOYMENT_ID, ID)`.
 - **Source state and readiness:** Requires non-null key columns, the legacy key, and the legacy
   `ROLE_PERMISSION(ROLE_ID)` foreign key. Exact target and recoverable prepared states are accepted.
@@ -571,8 +571,8 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
 
 ### 24: Scope THEME primary key by deployment
 
-- **ID:** `2.0.0/configdb/24_expand_theme_primary_key`
-- **Definition:** [`24_expand_theme_primary_key.go`](backend/internal/system/migration/releases/v2_0_0/24_expand_theme_primary_key.go)
+- **ID:** `configdb/24_expand_theme_primary_key`
+- **Definition:** [`24_expand_theme_primary_key.go`](backend/internal/system/migration/operations/24_expand_theme_primary_key.go)
 - **Purpose:** Change `THEME` from primary key `(ID)` to `(DEPLOYMENT_ID, ID)`.
 - **Source state and readiness:** Requires the ordinary table, non-null key columns, the legacy key,
   and no conflicting migration index. Exact target and recoverable interrupted-index states pass.
@@ -590,8 +590,8 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
 
 ### 25: Scope LAYOUT primary key by deployment
 
-- **ID:** `2.0.0/configdb/25_expand_layout_primary_key`
-- **Definition:** [`25_expand_layout_primary_key.go`](backend/internal/system/migration/releases/v2_0_0/25_expand_layout_primary_key.go)
+- **ID:** `configdb/25_expand_layout_primary_key`
+- **Definition:** [`25_expand_layout_primary_key.go`](backend/internal/system/migration/operations/25_expand_layout_primary_key.go)
 - **Purpose:** Change `LAYOUT` from primary key `(ID)` to `(DEPLOYMENT_ID, ID)`.
 - **Source state and readiness:** Requires non-null key columns and the exact legacy or target key;
   an invalid interrupted target index is recoverable, while other schema shapes are blocked.
@@ -608,8 +608,8 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
 
 ### 26: Scope INBOUND_CLIENT primary key by deployment
 
-- **ID:** `2.0.0/configdb/26_expand_inbound_client_primary_key`
-- **Definition:** [`26_expand_inbound_client_primary_key.go`](backend/internal/system/migration/releases/v2_0_0/26_expand_inbound_client_primary_key.go)
+- **ID:** `configdb/26_expand_inbound_client_primary_key`
+- **Definition:** [`26_expand_inbound_client_primary_key.go`](backend/internal/system/migration/operations/26_expand_inbound_client_primary_key.go)
 - **Purpose:** Change `INBOUND_CLIENT` from `(ENTITY_ID)` to `(DEPLOYMENT_ID, ENTITY_ID)`.
 - **Source state and readiness:** Requires both non-null key columns and the legacy
   `OAUTH_INBOUND_PROFILE(ENTITY_ID)` foreign key, or the exact completed target.
@@ -621,8 +621,8 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
 
 ### 27: Scope IDP primary key by deployment
 
-- **ID:** `2.0.0/configdb/27_expand_idp_primary_key`
-- **Definition:** [`27_expand_idp_primary_key.go`](backend/internal/system/migration/releases/v2_0_0/27_expand_idp_primary_key.go)
+- **ID:** `configdb/27_expand_idp_primary_key`
+- **Definition:** [`27_expand_idp_primary_key.go`](backend/internal/system/migration/operations/27_expand_idp_primary_key.go)
 - **Purpose:** Change `IDP` from primary key `(ID)` to `(DEPLOYMENT_ID, ID)`.
 - **Source state and readiness:** Accepts only the exact legacy, prepared, or target catalog state
   with non-null key columns.
@@ -634,8 +634,8 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
 
 ### 28: Scope NOTIFICATION_SENDER primary key by deployment
 
-- **ID:** `2.0.0/configdb/28_expand_notification_sender_primary_key`
-- **Definition:** [`28_expand_notification_sender_primary_key.go`](backend/internal/system/migration/releases/v2_0_0/28_expand_notification_sender_primary_key.go)
+- **ID:** `configdb/28_expand_notification_sender_primary_key`
+- **Definition:** [`28_expand_notification_sender_primary_key.go`](backend/internal/system/migration/operations/28_expand_notification_sender_primary_key.go)
 - **Purpose:** Change `NOTIFICATION_SENDER` from `(ID)` to `(DEPLOYMENT_ID, ID)`.
 - **Source state and readiness:** Requires the exact table, non-null key columns, and recognized key
   and migration-index states.
@@ -647,8 +647,8 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
 
 ### 29: Scope CERTIFICATE primary key by deployment
 
-- **ID:** `2.0.0/configdb/29_expand_certificate_primary_key`
-- **Definition:** [`29_expand_certificate_primary_key.go`](backend/internal/system/migration/releases/v2_0_0/29_expand_certificate_primary_key.go)
+- **ID:** `configdb/29_expand_certificate_primary_key`
+- **Definition:** [`29_expand_certificate_primary_key.go`](backend/internal/system/migration/operations/29_expand_certificate_primary_key.go)
 - **Purpose:** Change `CERTIFICATE` from `(ID)` to `(DEPLOYMENT_ID, ID)`.
 - **Source state and readiness:** Requires non-null key columns and an exact legacy, prepared, or
   target catalog state.
@@ -660,8 +660,8 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
 
 ### 30: Scope RESOURCE_SERVER primary key by deployment
 
-- **ID:** `2.0.0/configdb/30_expand_resource_server_primary_key`
-- **Definition:** [`30_expand_resource_server_primary_key.go`](backend/internal/system/migration/releases/v2_0_0/30_expand_resource_server_primary_key.go)
+- **ID:** `configdb/30_expand_resource_server_primary_key`
+- **Definition:** [`30_expand_resource_server_primary_key.go`](backend/internal/system/migration/operations/30_expand_resource_server_primary_key.go)
 - **Purpose:** Change `RESOURCE_SERVER` from `(ID)` to `(DEPLOYMENT_ID, ID)`.
 - **Source state and readiness:** Requires the legacy key and the legacy `RESOURCE` and `ACTION`
   foreign keys, or an exact recoverable prepared or completed state.
@@ -674,8 +674,8 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
 
 ### 31: Scope RESOURCE primary key by deployment
 
-- **ID:** `2.0.0/configdb/31_expand_resource_primary_key`
-- **Definition:** [`31_expand_resource_primary_key.go`](backend/internal/system/migration/releases/v2_0_0/31_expand_resource_primary_key.go)
+- **ID:** `configdb/31_expand_resource_primary_key`
+- **Definition:** [`31_expand_resource_primary_key.go`](backend/internal/system/migration/operations/31_expand_resource_primary_key.go)
 - **Purpose:** Change `RESOURCE` from `(ID)` to `(DEPLOYMENT_ID, ID)`.
 - **Source state and readiness:** Requires the legacy self-reference and `ACTION` foreign key, or an
   exact recoverable prepared or completed state.
@@ -689,8 +689,8 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
 
 ### 32: Scope ACTION primary key by deployment
 
-- **ID:** `2.0.0/configdb/32_expand_action_primary_key`
-- **Definition:** [`32_expand_action_primary_key.go`](backend/internal/system/migration/releases/v2_0_0/32_expand_action_primary_key.go)
+- **ID:** `configdb/32_expand_action_primary_key`
+- **Definition:** [`32_expand_action_primary_key.go`](backend/internal/system/migration/operations/32_expand_action_primary_key.go)
 - **Purpose:** Change `ACTION` from `(ID)` to `(DEPLOYMENT_ID, ID)`.
 - **Source state and readiness:** Requires non-null key columns and an exact legacy, prepared, or
   target catalog state.
@@ -702,8 +702,8 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
 
 ### 33: Scope FLOW primary key by deployment
 
-- **ID:** `2.0.0/configdb/33_expand_flow_primary_key`
-- **Definition:** [`33_expand_flow_primary_key.go`](backend/internal/system/migration/releases/v2_0_0/33_expand_flow_primary_key.go)
+- **ID:** `configdb/33_expand_flow_primary_key`
+- **Definition:** [`33_expand_flow_primary_key.go`](backend/internal/system/migration/operations/33_expand_flow_primary_key.go)
 - **Purpose:** Change `FLOW` from `(ID)` to `(DEPLOYMENT_ID, ID)`.
 - **Source state and readiness:** Requires the legacy key and `FLOW_VERSION(FLOW_ID)` foreign key,
   or an exact recoverable prepared or target state.
@@ -715,8 +715,8 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
 
 ### 34: Scope PRESENTATION_DEFINITION primary key by deployment
 
-- **ID:** `2.0.0/configdb/34_expand_presentation_definition_primary_key`
-- **Definition:** [`34_expand_presentation_definition_primary_key.go`](backend/internal/system/migration/releases/v2_0_0/34_expand_presentation_definition_primary_key.go)
+- **ID:** `configdb/34_expand_presentation_definition_primary_key`
+- **Definition:** [`34_expand_presentation_definition_primary_key.go`](backend/internal/system/migration/operations/34_expand_presentation_definition_primary_key.go)
 - **Purpose:** Change `PRESENTATION_DEFINITION` from `(ID)` to `(DEPLOYMENT_ID, ID)`.
 - **Source state and readiness:** Requires non-null key columns and an exact legacy, prepared, or
   target catalog state.
@@ -728,8 +728,8 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
 
 ### 35: Scope CREDENTIAL_CONFIGURATION primary key by deployment
 
-- **ID:** `2.0.0/configdb/35_expand_credential_configuration_primary_key`
-- **Definition:** [`35_expand_credential_configuration_primary_key.go`](backend/internal/system/migration/releases/v2_0_0/35_expand_credential_configuration_primary_key.go)
+- **ID:** `configdb/35_expand_credential_configuration_primary_key`
+- **Definition:** [`35_expand_credential_configuration_primary_key.go`](backend/internal/system/migration/operations/35_expand_credential_configuration_primary_key.go)
 - **Purpose:** Change `CREDENTIAL_CONFIGURATION` from `(ID)` to `(DEPLOYMENT_ID, ID)`.
 - **Source state and readiness:** Requires non-null key columns and an exact legacy, prepared, or
   target catalog state.
@@ -741,8 +741,8 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
 
 ### 36: Scope ORGANIZATION_UNIT primary key by deployment
 
-- **ID:** `2.0.0/entitydb/36_expand_organization_unit_primary_key`
-- **Definition:** [`36_expand_organization_unit_primary_key.go`](backend/internal/system/migration/releases/v2_0_0/36_expand_organization_unit_primary_key.go)
+- **ID:** `entitydb/36_expand_organization_unit_primary_key`
+- **Definition:** [`36_expand_organization_unit_primary_key.go`](backend/internal/system/migration/operations/36_expand_organization_unit_primary_key.go)
 - **Purpose:** Change `ORGANIZATION_UNIT` from `(OU_ID)` to `(DEPLOYMENT_ID, OU_ID)`.
 - **Source state and readiness:** Requires non-null key columns and an exact legacy, prepared, or
   target catalog state.
@@ -754,8 +754,8 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
 
 ### 37: Scope ENTITY primary key by deployment
 
-- **ID:** `2.0.0/entitydb/37_expand_entity_primary_key`
-- **Definition:** [`37_expand_entity_primary_key.go`](backend/internal/system/migration/releases/v2_0_0/37_expand_entity_primary_key.go)
+- **ID:** `entitydb/37_expand_entity_primary_key`
+- **Definition:** [`37_expand_entity_primary_key.go`](backend/internal/system/migration/operations/37_expand_entity_primary_key.go)
 - **Purpose:** Change `ENTITY` from `(ID)` to `(DEPLOYMENT_ID, ID)`.
 - **Source state and readiness:** Requires the legacy key and
   `ENTITY_IDENTIFIER(ENTITY_ID)` foreign key, or an exact recoverable prepared or target state.
@@ -767,8 +767,8 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
 
 ### 38: Scope GROUP primary key by deployment
 
-- **ID:** `2.0.0/entitydb/38_expand_group_primary_key`
-- **Definition:** [`38_expand_group_primary_key.go`](backend/internal/system/migration/releases/v2_0_0/38_expand_group_primary_key.go)
+- **ID:** `entitydb/38_expand_group_primary_key`
+- **Definition:** [`38_expand_group_primary_key.go`](backend/internal/system/migration/operations/38_expand_group_primary_key.go)
 - **Purpose:** Change `GROUP` from `(ID)` to `(DEPLOYMENT_ID, ID)`.
 - **Source state and readiness:** Requires non-null key columns and an exact legacy, prepared, or
   target catalog state.
@@ -780,9 +780,9 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
 
 ### 39: Expand certificate reference ID length
 
-- **ID:** `2.0.0/configdb/39_expand_certificate_reference_id`
+- **ID:** `configdb/39_expand_certificate_reference_id`
 - **Definition:**
-  [`39_expand_certificate_reference_id.go`](backend/internal/system/migration/releases/v2_0_0/39_expand_certificate_reference_id.go)
+  [`39_expand_certificate_reference_id.go`](backend/internal/system/migration/operations/39_expand_certificate_reference_id.go)
 - **Purpose:** Increase `CERTIFICATE.REF_ID` from `VARCHAR(36)` to `VARCHAR(2048)` so references such
   as metadata document URLs can be stored.
 - **Source state:** Exactly one non-null `VARCHAR(36)` `CERTIFICATE.REF_ID` column.
@@ -797,9 +797,9 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
 
 ### 40: Expand revocation criterion value length
 
-- **ID:** `2.0.0/runtime_persistent/40_expand_revocation_criterion_value`
+- **ID:** `runtime_persistent/40_expand_revocation_criterion_value`
 - **Definition:**
-  [`40_expand_revocation_criterion_value.go`](backend/internal/system/migration/releases/v2_0_0/40_expand_revocation_criterion_value.go)
+  [`40_expand_revocation_criterion_value.go`](backend/internal/system/migration/operations/40_expand_revocation_criterion_value.go)
 - **Purpose:** Increase `REVOCATION_CRITERIA.CRITERION_VALUE` from `VARCHAR(255)` to
   `VARCHAR(2048)` so longer revocation identifiers can be stored.
 - **Source state:** Exactly one non-null `VARCHAR(255)` `REVOCATION_CRITERIA.CRITERION_VALUE`
@@ -818,9 +818,9 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
 
 ### 41: Add SSO participant application lookup index
 
-- **ID:** `2.0.0/runtime_persistent/41_add_sso_session_participant_application_index`
+- **ID:** `runtime_persistent/41_add_sso_session_participant_application_index`
 - **Definition:**
-  [`41_add_sso_session_participant_application_index.go`](backend/internal/system/migration/releases/v2_0_0/41_add_sso_session_participant_application_index.go)
+  [`41_add_sso_session_participant_application_index.go`](backend/internal/system/migration/operations/41_add_sso_session_participant_application_index.go)
 - **Purpose:** Add the `idx_sso_session_participant_app` non-unique index on
   `SSO_SESSION_PARTICIPANT (DEPLOYMENT_ID, APP_ID)` for application-participation lookups.
 - **Source state:** The required non-null columns exist and the named index is absent, or an
@@ -839,9 +839,9 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
 
 ### 42: Migrate entity record type references
 
-- **ID:** `2.0.0/entitydb/42_migrate_entity_type_references`
+- **ID:** `entitydb/42_migrate_entity_type_references`
 - **Definition:**
-  [`42_migrate_entity_type_references.go`](backend/internal/system/migration/releases/v2_0_0/42_migrate_entity_type_references.go)
+  [`42_migrate_entity_type_references.go`](backend/internal/system/migration/operations/42_migrate_entity_type_references.go)
 - **Purpose:** Replace legacy entity-type names in `ENTITY.TYPE` with the exact handles persisted by
   operation 04.
 - **Source state:** Every non-empty type value resolves by deployment and `ENTITY.CATEGORY` to an
@@ -862,9 +862,9 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
 
 ### 43: Migrate inbound-client entity-type references
 
-- **ID:** `2.0.0/configdb/43_migrate_inbound_client_entity_type_references`
+- **ID:** `configdb/43_migrate_inbound_client_entity_type_references`
 - **Definition:**
-  [`43_migrate_inbound_client_entity_type_references.go`](backend/internal/system/migration/releases/v2_0_0/43_migrate_inbound_client_entity_type_references.go)
+  [`43_migrate_inbound_client_entity_type_references.go`](backend/internal/system/migration/operations/43_migrate_inbound_client_entity_type_references.go)
 - **Purpose:** Replace names in `INBOUND_CLIENT.PROPERTIES.allowedUserTypes`, `allowedAgentTypes`,
   and the keys of `subjectAttribute` with persisted handles.
 - **Readiness:** Deferred until operation 04 has produced a complete mapping. Invalid JSON,
@@ -880,9 +880,9 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
 
 ### 44: Migrate identity-provider entity-type references
 
-- **ID:** `2.0.0/configdb/44_migrate_idp_entity_type_references`
+- **ID:** `configdb/44_migrate_idp_entity_type_references`
 - **Definition:**
-  [`44_migrate_idp_entity_type_references.go`](backend/internal/system/migration/releases/v2_0_0/44_migrate_idp_entity_type_references.go)
+  [`44_migrate_idp_entity_type_references.go`](backend/internal/system/migration/operations/44_migrate_idp_entity_type_references.go)
 - **Purpose:** Replace names in `IDP.ATTRIBUTE_CONFIGURATION`, including
   `userTypeResolution.default`, every `userTypeResolution.valueMapping` value, and every
   `userTypeAttributeMappings[].userType` value.
@@ -898,9 +898,9 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
 
 ### 45: Migrate flow entity-type references
 
-- **ID:** `2.0.0/configdb/45_migrate_flow_entity_type_references`
+- **ID:** `configdb/45_migrate_flow_entity_type_references`
 - **Definition:**
-  [`45_migrate_flow_entity_type_references.go`](backend/internal/system/migration/releases/v2_0_0/45_migrate_flow_entity_type_references.go)
+  [`45_migrate_flow_entity_type_references.go`](backend/internal/system/migration/operations/45_migrate_flow_entity_type_references.go)
 - **Purpose:** Rewrite every stored flow version, replacing `allowedUserTypes` on
   `UserTypeResolver` nodes and `allowedAgentTypes` on `AgentTypeResolver` nodes with persisted
   handles.
@@ -917,9 +917,9 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
 
 ### 46: Migrate the default agent name schema
 
-- **ID:** `2.0.0/configdb/46_migrate_default_agent_name_schema`
+- **ID:** `configdb/46_migrate_default_agent_name_schema`
 - **Definition:**
-  [`46_migrate_default_agent_name_schema.go`](backend/internal/system/migration/releases/v2_0_0/46_migrate_default_agent_name_schema.go)
+  [`46_migrate_default_agent_name_schema.go`](backend/internal/system/migration/operations/46_migrate_default_agent_name_schema.go)
 - **Purpose:** Add the required, unique string `name` property to the default agent type and select
   it as the display attribute for an existing deployment.
 - **Source state:** The deployment's default agent type has no `name` schema property and no
@@ -938,9 +938,9 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
 
 ### 47: Migrate agent names to schema attributes
 
-- **ID:** `2.0.0/entitydb/47_migrate_agent_names_to_attributes`
+- **ID:** `entitydb/47_migrate_agent_names_to_attributes`
 - **Definition:**
-  [`47_migrate_agent_names_to_attributes.go`](backend/internal/system/migration/releases/v2_0_0/47_migrate_agent_names_to_attributes.go)
+  [`47_migrate_agent_names_to_attributes.go`](backend/internal/system/migration/operations/47_migrate_agent_names_to_attributes.go)
 - **Purpose:** Move every existing agent name from `SYSTEM_ATTRIBUTES.name` to `ATTRIBUTES.name` and
   align its identifier projection with the target representation.
 - **Source state:** Each agent has one non-empty string name in system attributes, no name in schema
@@ -968,9 +968,9 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
 
 ### 48: Link legacy federated subjects
 
-- **ID:** `2.0.0/entitydb/48_link_legacy_federated_subjects`
+- **ID:** `entitydb/48_link_legacy_federated_subjects`
 - **Definition:**
-  [`48_49_link_legacy_federated_subjects.go`](backend/internal/system/migration/releases/v2_0_0/48_49_link_legacy_federated_subjects.go)
+  [`48_49_link_legacy_federated_subjects.go`](backend/internal/system/migration/operations/48_49_link_legacy_federated_subjects.go)
 - **Purpose:** Give every user whose federated identity is stored only as the `sub` attribute the recorded
   link that the target release resolves a federated sign-in through. The target no longer reads `sub`.
 - **Scope:** Deployment specific. The deployment has exactly two federated connections, Google and GitHub,
@@ -1007,9 +1007,9 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
 
 ### 48 rollback: Remove recorded links for legacy federated subjects
 
-- **ID:** `2.0.0/entitydb/48_link_legacy_federated_subjects_rollback`
+- **ID:** `entitydb/48_link_legacy_federated_subjects_rollback`
 - **Definition:**
-  [`48_49_link_legacy_federated_subjects.go`](backend/internal/system/migration/releases/v2_0_0/48_49_link_legacy_federated_subjects.go)
+  [`48_49_link_legacy_federated_subjects.go`](backend/internal/system/migration/operations/48_49_link_legacy_federated_subjects.go)
 - **Purpose:** Return users to the source representation, which identifies a federated user by `sub` only.
 - **Execution:** For each user holding `sub`, remove the link the forward operation derives from it, together
   with the objects the removal leaves empty, and delete the matching identifier row of source `system`.
@@ -1021,9 +1021,9 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
 
 ### 49: Link legacy federated subjects added after Expand
 
-- **ID:** `2.0.0/entitydb/49_link_legacy_federated_subjects_catch_up`
+- **ID:** `entitydb/49_link_legacy_federated_subjects_catch_up`
 - **Definition:**
-  [`48_49_link_legacy_federated_subjects.go`](backend/internal/system/migration/releases/v2_0_0/48_49_link_legacy_federated_subjects.go)
+  [`48_49_link_legacy_federated_subjects.go`](backend/internal/system/migration/operations/48_49_link_legacy_federated_subjects.go)
 - **Purpose:** Link the users the source created or changed after operation 48, and restore identifier rows
   the source removed. It is the same implementation as operation 48, registered at the start of Migrate.
 - **Execution and verification:** Identical to operation 48. When nothing remains, verification is already
@@ -1034,9 +1034,9 @@ and [`legacy_primary_key_contract_operation.go`](backend/internal/system/migrati
 
 ### 50: Remove the legacy subject attribute
 
-- **ID:** `2.0.0/entitydb/50_remove_legacy_subject_attribute`
+- **ID:** `entitydb/50_remove_legacy_subject_attribute`
 - **Definition:**
-  [`50_remove_legacy_subject_attribute.go`](backend/internal/system/migration/releases/v2_0_0/50_remove_legacy_subject_attribute.go)
+  [`50_remove_legacy_subject_attribute.go`](backend/internal/system/migration/operations/50_remove_legacy_subject_attribute.go)
 - **Purpose:** Remove the `sub` attribute, and the identifier row that indexed it, from users whose user type
   no longer declares `sub`. The target validates user attributes against the user type schema and rejects an
   attribute the schema does not declare, so a user that still holds `sub` could not be updated.

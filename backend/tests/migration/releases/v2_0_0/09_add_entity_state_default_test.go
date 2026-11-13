@@ -29,7 +29,7 @@ func verifyAddEntityStateDefault(t *testing.T, environment migrationharness.Envi
 		migrationharness.AssertQueryValue(t, db,
 			`SELECT STATE FROM "ENTITY" WHERE DEPLOYMENT_ID = 'migration-deployment'
 				AND ID = '0199a123-4710-7abc-8def-0123456789ab'`, "ACTIVE")
-		migrationharness.AssertOperationCompleted(t, db, "2.0.0/entitydb/09_add_entity_state_default")
+		migrationharness.AssertOperationCompleted(t, db, "entitydb/09_add_entity_state_default")
 		t.Log("verified: target-style entity inserts receive the temporary ACTIVE state default")
 	})
 }

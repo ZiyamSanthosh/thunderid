@@ -43,7 +43,7 @@ Files (all under `backend/internal/system/migration/releases/v2_0_0/`):
 | `25_expand_layout_primary_key.go` | Declares `droppedReferences: {INBOUND_CLIENT, [LAYOUT_ID]}` |
 | `dropped_primary_key_reference_test.go` (new) | Unit tests for the drop behaviour |
 
-**Symptom.** `apply expand` failed on `2.0.0/configdb/24_expand_theme_primary_key` (operations 1 to 24
+**Symptom.** `apply expand` failed on `configdb/24_expand_theme_primary_key` (operations 1 to 24
 had already completed):
 
 ```
@@ -113,7 +113,7 @@ assertions are commented out.
 `migrate` phase:
 
 ```
-2.0.0/entitydb/47_migrate_agent_names_to_attributes: One or more deployments contain entities with colliding name values
+entitydb/47_migrate_agent_names_to_attributes: One or more deployments contain entities with colliding name values
 ```
 
 **Finding to fix before re-enabling.** `queryAgentNameCollisions` (`MIG-ENT_MGT-16`) has no
@@ -144,7 +144,7 @@ declarative half is injected, database types are still read by the operations' o
 |---|---|
 | `internal/entitytype/init.go` | New `InitializeDeclarativeService(ouService, authzService)`: builds the service over `newEntityTypeFileBasedStore()` and loads the resource files. No routes, no MCP, no database reads, store-mode config ignored. |
 | `internal/ou/init.go` | New `InitializeService(cacheManager, authzService)`: the OU service alone (needed only to resolve `ouHandle` in resource files). |
-| `releases/v2_0_0/declarative_entity_types.go` (new) | Exported `DeclarativeEntityType`, `DeclarativeEntityTypes` interface, and the lazy, cached `declarativeEntityTypeSource`. |
+| `operations/declarative_entity_types.go` (new) | Exported `DeclarativeEntityType`, `DeclarativeEntityTypes` interface, and the lazy, cached `declarativeEntityTypeSource`. |
 | `releases/v2_0_0/release.go` | `Dependencies.DeclarativeEntityTypes func() (DeclarativeEntityTypes, error)`; `migrationPlan` builds one source and passes it to the eight operation constructors (forward and rollback of 43 to 45 and 47). |
 | `releases/v2_0_0/entity_type_reference_operation.go` | Mapping gets `declaredByName` / `declaredByHandle` (keyed by category + value, no deployment). `readMapping` merges the declarative types; `translate` consults database then declarative, and fails on a conflict. |
 | `releases/v2_0_0/43..47_*.go` | Constructors take the source and wrap their config with `withDeclaredEntityTypes`. |
@@ -180,7 +180,7 @@ Details worth knowing:
 
 ### 1.4 Operation 42: leave non-user/agent entities alone  (DONE)
 
-File: `releases/v2_0_0/42_migrate_entity_type_references.go` (+ test in `declarative_entity_types_test.go`).
+File: `operations/42_migrate_entity_type_references.go` (+ test in `declarative_entity_types_test.go`).
 
 Symptom after 1.3: `entity-type reference "application" has no forward mapping ... for category "app"`
 (92 rows). The application service always writes app entities with the fixed `TYPE = 'application'`
@@ -196,7 +196,7 @@ after:  ENTITY app/'application'  -> unchanged
 
 ### 1.5 Operation 04: reserve declarative handles when generating handles  (DONE)
 
-Files: `releases/v2_0_0/04_backfill_entity_type_handle.go`, `release.go`, tests in
+Files: `operations/04_backfill_entity_type_handle.go`, `release.go`, tests in
 `04_backfill_entity_type_handle_test.go` and `declarative_entity_types_test.go`.
 
 Why: the 2.0.0 server refuses to start when a database entity type has the same handle as a
@@ -228,7 +228,7 @@ not changed. Operation 46 needs no change (section 3.3).
 `apply migrate` fails on operation 42:
 
 ```
-2.0.0/entitydb/42_migrate_entity_type_references: pre-verification is invalid:
+entitydb/42_migrate_entity_type_references: pre-verification is invalid:
 entity-type reference "Customer" has no forward mapping in deployment "platform-idp" for category "user"
 ```
 

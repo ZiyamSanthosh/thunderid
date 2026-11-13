@@ -7,7 +7,7 @@
 | Operation file | `NN_snake_name.go` | `02_add_entity_type_handle.go` |
 | Test file | same name plus `_test.go` | `02_add_entity_type_handle_test.go` |
 | Rollback file | `NN_snake_name_rollback.go` | `04_backfill_entity_type_handle_rollback.go` |
-| Operation id | `<release>/<store>/<NN>_<snake_name>` | `2.0.0/configdb/02_add_entity_type_handle` |
+| Operation id | `<store>/<NN>_<snake_name>` | `configdb/02_add_entity_type_handle` |
 | Rollback id | forward id plus `_rollback` | |
 | Catch-up id | forward id plus `_catch_up` | |
 | Constructor | `newXxxOperation()` returning `(engine.Operation, error)` when it can fail | |
@@ -59,7 +59,7 @@ It appears in operator output, so avoid internal jargon.
 
 ## What not to do
 
-- Do not edit a shipped release.
+- Do not edit a shipped release, or an operation in `operations/` that a shipped release lists.
 - Do not catch and ignore errors to keep a run going.
 - Do not read time, randomness or environment inside verifiers. They must be deterministic.
 - Do not share mutable package state between operations.

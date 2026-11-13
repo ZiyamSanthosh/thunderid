@@ -12,7 +12,7 @@ The feasibility proof is preserved on the local `migration-service-injection-poc
 
 ## First service-backed dependency
 
-`Dependencies.DeclarativeEntityTypes` in `backend/internal/system/migration/releases/v2_0_0/release.go`
+`Dependencies.DeclarativeEntityTypes` in `backend/internal/system/migration/operations/dependencies.go`
 is the first real use of this seam. It gives the entity-type reference operations the read-only entity
 types defined in declarative resource files, which have no `ENTITY_TYPES` row. `cmd/server` builds it
 lazily from the real entity type service over the declarative store (no routes, no database reads) and

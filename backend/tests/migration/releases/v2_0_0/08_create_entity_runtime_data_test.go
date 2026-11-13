@@ -27,7 +27,7 @@ func verifyCreateEntityRuntimeData(t *testing.T, environment migrationharness.En
 				WHERE table_class.relname = 'ENTITY_RUNTIME_DATA' AND c.contype = 'p'
 				GROUP BY c.oid`, "DEPLOYMENT_ID,ENTITY_ID")
 		migrationharness.AssertOperationCompleted(t, db,
-			"2.0.0/runtime_persistent/08_create_entity_runtime_data")
+			"runtime_persistent/08_create_entity_runtime_data")
 		t.Log("verified: ENTITY_RUNTIME_DATA matches the required runtime-persistent schema")
 	})
 }

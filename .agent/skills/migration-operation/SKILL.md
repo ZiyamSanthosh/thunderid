@@ -67,7 +67,8 @@ Conventions for ids, files and SQL style: [conventions.md](conventions.md).
 
 ## Step 4: Register
 
-In the release package's `release.go`:
+The operation code lives in `backend/internal/system/migration/operations/` as an exported `New...Operation`
+constructor. In the release package's `release.go`:
 
 1. Construct the operation (and its rollback) in `migrationPlan`.
 2. Add it to the correct phase list at the position the plan gave. Add the rollback to `Rollback`.

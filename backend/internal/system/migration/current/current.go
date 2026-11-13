@@ -6,29 +6,30 @@ package current
 
 import (
 	"github.com/thunder-id/thunderid/internal/system/migration/engine"
+	"github.com/thunder-id/thunderid/internal/system/migration/operations"
 	release "github.com/thunder-id/thunderid/internal/system/migration/releases/v2_0_0"
 )
 
 // Dependencies contains the dependencies available to the release compiled into this binary.
-type Dependencies = release.Dependencies
+type Dependencies = operations.Dependencies
 
 // DeclarativeEntityTypes lists the entity types defined in declarative resource files.
-type DeclarativeEntityTypes = release.DeclarativeEntityTypes
+type DeclarativeEntityTypes = operations.DeclarativeEntityTypes
 
 // DeclarativeEntityType is an entity type defined in a declarative resource file.
-type DeclarativeEntityType = release.DeclarativeEntityType
+type DeclarativeEntityType = operations.DeclarativeEntityType
 
 // DeclarativeConnections lists the connections defined in declarative resource files.
-type DeclarativeConnections = release.DeclarativeConnections
+type DeclarativeConnections = operations.DeclarativeConnections
 
 // DeclarativeConnection is a connection defined in a declarative resource file.
-type DeclarativeConnection = release.DeclarativeConnection
+type DeclarativeConnection = operations.DeclarativeConnection
 
 // DeclarativeOrganizationUnits lists the organization units defined in declarative resource files.
-type DeclarativeOrganizationUnits = release.DeclarativeOrganizationUnits
+type DeclarativeOrganizationUnits = operations.DeclarativeOrganizationUnits
 
 // DeclarativeOrganizationUnit is an organization unit defined in a declarative resource file.
-type DeclarativeOrganizationUnit = release.DeclarativeOrganizationUnit
+type DeclarativeOrganizationUnit = operations.DeclarativeOrganizationUnit
 
 // Definition returns the release definition selected for the current binary.
 func Definition() (*engine.ReleaseDefinition, error) {

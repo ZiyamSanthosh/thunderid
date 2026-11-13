@@ -32,7 +32,7 @@ func verifyFinalizeEntityTypeHandle(t *testing.T, environment migrationharness.E
                 WHERE n.nspname = CURRENT_SCHEMA() AND t.relname = 'ENTITY_TYPES'
                     AND c.contype = 'u' AND c.conname = 'UQ_ENTITY_TYPES_HANDLE_CATEGORY_DEPLOYMENT'`,
 			"1")
-		migrationharness.AssertOperationCompleted(t, db, "2.0.0/configdb/06_finalize_entity_type_handle")
+		migrationharness.AssertOperationCompleted(t, db, "configdb/06_finalize_entity_type_handle")
 		t.Log("verified: entity-type contract retained NAME and enforced required unique handles")
 	})
 }

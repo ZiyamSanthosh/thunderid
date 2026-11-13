@@ -25,7 +25,7 @@ func verifyCreateNotificationTemplate(t *testing.T, environment migrationharness
 				WHERE n.nspname = CURRENT_SCHEMA() AND t.relname = 'NOTIFICATION_TEMPLATE'
 				AND c.contype IN ('p', 'u')`, "2")
 		migrationharness.AssertOperationCompleted(t, db,
-			"2.0.0/configdb/11_create_notification_template")
+			"configdb/11_create_notification_template")
 		t.Log("verified: NOTIFICATION_TEMPLATE matches the required configuration schema")
 	})
 }

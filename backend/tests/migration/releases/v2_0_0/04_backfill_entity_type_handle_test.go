@@ -34,8 +34,8 @@ func verifyBackfillEntityTypeHandle(t *testing.T, environment migrationharness.E
 			`SELECT CHECKPOINT_DATA::jsonb ->> 'lastID' FROM "MIGRATION_PROGRESS"
 				WHERE OPERATION_ID = $1`,
 			"0199a123-4898-7abc-8def-0123456789ab",
-			"2.0.0/configdb/04_backfill_entity_type_handle")
-		migrationharness.AssertOperationCompleted(t, db, "2.0.0/configdb/04_backfill_entity_type_handle")
+			"configdb/04_backfill_entity_type_handle")
+		migrationharness.AssertOperationCompleted(t, db, "configdb/04_backfill_entity_type_handle")
 		t.Log("verified: 103 names were converted in two batches and declarative handles were reserved")
 	})
 }

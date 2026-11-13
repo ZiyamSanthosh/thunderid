@@ -41,16 +41,16 @@ func verifyCreateAdditionalConfigTables(t *testing.T, environment migrationharne
 	}
 
 	for _, operationID := range []string{
-		"2.0.0/configdb/12_create_variable",
-		"2.0.0/configdb/13_create_secret",
-		"2.0.0/configdb/14_create_gateway",
-		"2.0.0/configdb/15_create_configuration_version",
-		"2.0.0/configdb/16_create_gateway_applied_version",
-		"2.0.0/configdb/17_create_gateway_excluded_resource",
-		"2.0.0/configdb/18_create_resource_sharing_policy",
-		"2.0.0/configdb/19_create_resource_sharing_policy_unit",
-		"2.0.0/configdb/20_create_resource_sharing_policy_overlay_rule",
-		"2.0.0/configdb/21_create_resource_overlay_value",
+		"configdb/12_create_variable",
+		"configdb/13_create_secret",
+		"configdb/14_create_gateway",
+		"configdb/15_create_configuration_version",
+		"configdb/16_create_gateway_applied_version",
+		"configdb/17_create_gateway_excluded_resource",
+		"configdb/18_create_resource_sharing_policy",
+		"configdb/19_create_resource_sharing_policy_unit",
+		"configdb/20_create_resource_sharing_policy_overlay_rule",
+		"configdb/21_create_resource_overlay_value",
 	} {
 		migrationharness.AssertOperationCompleted(t, db, operationID)
 	}

@@ -98,7 +98,7 @@ Use this template. Keep it factual and short.
 ## Operations
 | # | ID | Store | Phase | Kind | Mode | Targets | Rollback |
 |---|----|-------|-------|------|------|---------|----------|
-| 1 | <release>/<store>/<NN>_<name> | configdb | expand | schema_change | atomic | store | none, additive |
+| 1 | <store>/<NN>_<name> | configdb | expand | schema_change | atomic | store | none, additive |
 
 ### <ID>
 - Purpose:

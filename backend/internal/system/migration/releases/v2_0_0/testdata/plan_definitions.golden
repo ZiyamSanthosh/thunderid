@@ -1,0 +1,148 @@
+expand|001|configdb/01_create_authorization_pdp_connection|configdb||schema_change|atomic|Create the authorization PDP connection table
+expand|002|configdb/02_add_entity_type_handle|configdb||schema_change|atomic|Add a nullable entity-type handle column
+expand|003|entitydb/03_expand_entity_type_length|entitydb||schema_change|atomic|Increase the entity type column length to 100 characters
+expand|004|entitydb/07_expand_entity_identifier_primary_key|entitydb||schema_change|online|Allow multiple values for an entity identifier name
+expand|005|runtime_persistent/08_create_entity_runtime_data|runtime_persistent||schema_change|atomic|Create the entity runtime data table
+expand|006|entitydb/09_add_entity_state_default|entitydb||schema_change|atomic|Default legacy entity state for mixed-version creation
+expand|007|configdb/11_create_notification_template|configdb||schema_change|atomic|Create the notification template table
+expand|008|configdb/12_create_variable|configdb||schema_change|atomic|Create the variable table
+expand|009|configdb/13_create_secret|configdb||schema_change|atomic|Create the secret table
+expand|010|configdb/14_create_gateway|configdb||schema_change|atomic|Create the gateway table
+expand|011|configdb/15_create_configuration_version|configdb||schema_change|atomic|Create the configuration version table
+expand|012|configdb/16_create_gateway_applied_version|configdb||schema_change|atomic|Create the gateway applied version table
+expand|013|configdb/17_create_gateway_excluded_resource|configdb||schema_change|atomic|Create the gateway excluded-resource table
+expand|014|configdb/18_create_resource_sharing_policy|configdb||schema_change|atomic|Create the resource sharing policy table
+expand|015|configdb/19_create_resource_sharing_policy_unit|configdb||schema_change|atomic|Create the resource sharing policy unit table
+expand|016|configdb/20_create_resource_sharing_policy_overlay_rule|configdb||schema_change|atomic|Create the resource sharing policy overlay rule table
+expand|017|configdb/21_create_resource_overlay_value|configdb||schema_change|atomic|Create the resource overlay value table
+expand|018|configdb/22_expand_entity_types_primary_key|configdb||schema_change|online|Scope the ENTITY_TYPES primary key by deployment
+expand|019|configdb/23_expand_role_primary_key|configdb||schema_change|online|Scope the ROLE primary key by deployment
+expand|020|configdb/24_expand_theme_primary_key|configdb||schema_change|online|Scope the THEME primary key by deployment
+expand|021|configdb/25_expand_layout_primary_key|configdb||schema_change|online|Scope the LAYOUT primary key by deployment
+expand|022|configdb/26_expand_inbound_client_primary_key|configdb||schema_change|online|Scope the INBOUND_CLIENT primary key by deployment
+expand|023|configdb/27_expand_idp_primary_key|configdb||schema_change|online|Scope the IDP primary key by deployment
+expand|024|configdb/28_expand_notification_sender_primary_key|configdb||schema_change|online|Scope the NOTIFICATION_SENDER primary key by deployment
+expand|025|configdb/29_expand_certificate_primary_key|configdb||schema_change|online|Scope the CERTIFICATE primary key by deployment
+expand|026|configdb/30_expand_resource_server_primary_key|configdb||schema_change|online|Scope the RESOURCE_SERVER primary key by deployment
+expand|027|configdb/31_expand_resource_primary_key|configdb||schema_change|online|Scope the RESOURCE primary key by deployment
+expand|028|configdb/32_expand_action_primary_key|configdb||schema_change|online|Scope the ACTION primary key by deployment
+expand|029|configdb/33_expand_flow_primary_key|configdb||schema_change|online|Scope the FLOW primary key by deployment
+expand|030|configdb/34_expand_presentation_definition_primary_key|configdb||schema_change|online|Scope the PRESENTATION_DEFINITION primary key by deployment
+expand|031|configdb/35_expand_credential_configuration_primary_key|configdb||schema_change|online|Scope the CREDENTIAL_CONFIGURATION primary key by deployment
+expand|032|entitydb/36_expand_organization_unit_primary_key|entitydb||schema_change|online|Scope the ORGANIZATION_UNIT primary key by deployment
+expand|033|entitydb/37_expand_entity_primary_key|entitydb||schema_change|online|Scope the ENTITY primary key by deployment
+expand|034|entitydb/38_expand_group_primary_key|entitydb||schema_change|online|Scope the GROUP primary key by deployment
+expand|035|configdb/39_expand_certificate_reference_id|configdb||schema_change|atomic|Increase the certificate reference ID length to 2048 characters
+expand|036|runtime_persistent/40_expand_revocation_criterion_value|runtime_persistent||schema_change|atomic|Increase the revocation criterion value length to 2048 characters
+expand|037|runtime_persistent/41_add_sso_session_participant_application_index|runtime_persistent||schema_change|online|Add the deployment-scoped SSO session participant application lookup index
+expand|038|runtime_persistent/51_rename_session_tables|runtime_persistent||schema_change|atomic|Rename the SSO session tables and keep compatibility views for the previous binary
+expand|039|runtime_persistent/52_rename_session_indexes|runtime_persistent||schema_change|atomic|Rename the session indexes and primary keys to match the renamed tables
+expand|040|runtime_persistent/53_add_session_type_check|runtime_persistent||schema_change|atomic|Restrict the session type to SSO and DIRECT without scanning existing sessions
+expand|041|runtime_persistent/54_validate_session_type_check|runtime_persistent||schema_change|online|Validate the session type check against existing sessions
+expand|042|runtime_persistent/55_add_session_subject_index|runtime_persistent||schema_change|online|Add the deployment-scoped session subject lookup index
+expand|043|runtime_persistent/57_add_session_properties|runtime_persistent||schema_change|atomic|Add the properties a session records about its device and address
+expand|044|entitydb/73_create_project_table|entitydb||schema_change|atomic|Create the project table
+expand|045|entitydb/74_add_entity_project_id|entitydb||schema_change|atomic|Add the project ID to entities
+expand|046|entitydb/75_add_organization_unit_project_id|entitydb||schema_change|atomic|Add the project ID to organization units
+expand|047|entitydb/79_add_entity_project_index|entitydb||schema_change|online|Add the index that lists entities by project and category
+expand|048|entitydb/80_add_entity_owner_index|entitydb||schema_change|online|Add the index that looks up agents by their owner
+expand|049|entitydb/81_add_organization_unit_project_index|entitydb||schema_change|online|Add the index that lists the root organization units a project owns
+expand|050|configdb/94_add_credential_configuration_ou_index|configdb||schema_change|online|Add the index that lists credential configurations by organization unit
+expand|051|configdb/95_add_presentation_definition_ou_index|configdb||schema_change|online|Add the index that lists presentation definitions by organization unit
+expand|052|entitydb/114_add_entity_kind_index|entitydb||schema_change|online|Add the index that looks up agents by their kind
+expand|053|configdb/113_create_managed_resource|configdb||schema_change|atomic|Create the table that records what a control plane deployed
+expand|054|configdb/72_create_gateway_master|configdb||schema_change|atomic|Create the table that records what each gateway holds
+expand|055|configdb/76_create_http_connection|configdb||schema_change|atomic|Create the HTTP connection table
+expand|056|configdb/77_create_authorization_detail_type|configdb||schema_change|atomic|Create the authorization detail type table
+expand|057|configdb/78_create_gateway_apply_lease|configdb||schema_change|atomic|Create the gateway apply lease table
+expand|058|configdb/58_add_inbound_client_device_grant_flow_id|configdb||schema_change|atomic|Add the Device Grant flow ID to inbound clients
+expand|059|runtime_transient/59_create_runtime_store_device_req_partition|runtime_transient||schema_change|atomic|Add the runtime store partition for pending device authorization requests
+expand|060|configdb/60_add_role_assignment_sharing_policy_id|configdb||schema_change|atomic|Add the assignment organization unit and the sharing policy ID to role assignments
+expand|061|configdb/61_widen_role_assignment_primary_key|configdb||schema_change|online|Add the sharing policy ID to the role assignment primary key
+expand|062|configdb/91_add_role_assignment_assignee_index|configdb||schema_change|online|Add the role assignment lookup index that names the assignment organization unit
+expand|063|entitydb/62_create_user_share_migration_table|entitydb||schema_change|atomic|Create the working table that pairs duplicate users with their original
+expand|064|entitydb/63_snapshot_duplicate_users|entitydb||data_change|resumable|Record every user by email, the original that survives and the organization unit that will own it
+expand|065|configdb/64_create_original_user_share_policies|configdb|entitydb|data_change|resumable|Share each original user to its own organization unit and to those of its duplicates
+expand|066|entitydb/65_add_originals_to_duplicate_groups|entitydb|configdb|data_change|resumable|Add each original user to the groups of its duplicates
+expand|067|configdb/04_backfill_entity_type_handle|configdb||data_change|resumable|Create valid entity-type handles from legacy names
+expand|068|configdb/05_add_entity_type_handle_uniqueness|configdb||schema_change|online|Enforce unique entity-type handles while retaining legacy name uniqueness
+expand|069|entitydb/48_link_legacy_federated_subjects|entitydb||data_change|resumable|Link users holding a legacy federated subject to the connection that issued it
+expand|070|configdb/82_add_flow_ou_id|configdb||schema_change|atomic|Add the owning organization unit to flow rows
+expand|071|configdb/83_add_idp_ou_id|configdb||schema_change|atomic|Add the owning organization unit to idp rows
+expand|072|configdb/84_add_notification_sender_ou_id|configdb||schema_change|atomic|Add the owning organization unit to notification_sender rows
+expand|073|configdb/97_add_role_project_id|configdb||schema_change|atomic|Add the project ID to role rows
+expand|074|configdb/98_add_theme_project_id|configdb||schema_change|atomic|Add the project ID to theme rows
+expand|075|configdb/99_add_layout_project_id|configdb||schema_change|atomic|Add the project ID to layout rows
+expand|076|configdb/100_add_resource_server_project_id|configdb||schema_change|atomic|Add the project ID to resource_server rows
+expand|077|configdb/101_add_flow_project_id|configdb||schema_change|atomic|Add the project ID to flow rows
+expand|078|configdb/102_add_presentation_definition_project_id|configdb||schema_change|atomic|Add the project ID to presentation_definition rows
+expand|079|configdb/103_add_credential_configuration_project_id|configdb||schema_change|atomic|Add the project ID to credential_configuration rows
+expand|080|entitydb/104_add_group_project_id|entitydb||schema_change|atomic|Add the project ID to group rows
+expand|081|configdb/105_add_role_project_index|configdb||schema_change|online|Add the index that lists the role rows of a project
+expand|082|configdb/106_add_theme_project_index|configdb||schema_change|online|Add the index that lists the theme rows of a project
+expand|083|configdb/107_add_layout_project_index|configdb||schema_change|online|Add the index that lists the layout rows of a project
+expand|084|configdb/108_add_resource_server_project_index|configdb||schema_change|online|Add the index that lists the resource_server rows of a project
+expand|085|configdb/109_add_flow_project_index|configdb||schema_change|online|Add the index that lists the flow rows of a project
+expand|086|configdb/110_add_presentation_definition_project_index|configdb||schema_change|online|Add the index that lists the presentation_definition rows of a project
+expand|087|configdb/111_add_credential_configuration_project_index|configdb||schema_change|online|Add the index that lists the credential_configuration rows of a project
+expand|088|entitydb/112_add_group_project_index|entitydb||schema_change|online|Add the index that lists the group rows of a project
+migrate|001|configdb/04_backfill_entity_type_handle_catch_up|configdb||data_change|resumable|Create handles for entity types created after Expand
+migrate|002|entitydb/49_link_legacy_federated_subjects_catch_up|entitydb||data_change|resumable|Link users who gained a legacy federated subject after Expand
+migrate|003|entitydb/42_migrate_entity_type_references|entitydb|configdb|data_change|resumable|Replace entity type names with handles in entity records
+migrate|004|configdb/43_migrate_inbound_client_entity_type_references|configdb||data_change|resumable|Replace entity type names with handles in inbound client configuration
+migrate|005|configdb/44_migrate_idp_entity_type_references|configdb||data_change|resumable|Replace entity type names with handles in identity provider configuration
+migrate|006|configdb/45_migrate_flow_entity_type_references|configdb||data_change|resumable|Replace entity type names with handles in every flow version
+migrate|007|configdb/46_migrate_default_agent_name_schema|configdb||data_change|atomic|Add the agent name to the default agent type schema
+migrate|008|entitydb/47_migrate_agent_names_to_attributes|entitydb|configdb|data_change|resumable|Move agent names from system attributes to schema attributes
+migrate|009|entitydb/66_rehome_original_users|entitydb||data_change|resumable|Move each original user to the organization unit that shares it
+migrate|010|entitydb/67_merge_duplicate_linked_accounts|entitydb||data_change|resumable|Link each original user to the federated subjects of its duplicates
+migrate|011|configdb/85_backfill_flow_ou_id|configdb|entitydb|data_change|atomic|Give flow rows without an owner the system organization unit
+migrate|012|configdb/86_backfill_idp_ou_id|configdb|entitydb|data_change|atomic|Give idp rows without an owner the system organization unit
+migrate|013|configdb/87_backfill_notification_sender_ou_id|configdb|entitydb|data_change|atomic|Give notification_sender rows without an owner the system organization unit
+migrate|014|configdb/92_backfill_role_assignment_ou_id|configdb||data_change|atomic|Record the role's organization unit on assignments made before it was tracked
+migrate|015|entitydb/116_convert_agent_owner|entitydb||data_change|atomic|Store each agent's owner as an object that names its id, id type and locality
+contract|001|configdb/06_finalize_entity_type_handle|configdb||schema_change|atomic|Require entity-type handles and remove legacy name uniqueness
+contract|002|entitydb/50_remove_legacy_subject_attribute|entitydb|configdb|data_change|resumable|Remove the legacy sub attribute from users whose user type no longer declares it
+contract|003|entitydb/10_remove_entity_state|entitydb|runtime_persistent|schema_change|atomic|Remove the legacy entity state column
+contract|004|configdb/22_finalize_entity_types_primary_key|configdb||schema_change|online|Remove legacy global uniqueness from ENTITY_TYPES
+contract|005|configdb/23_finalize_role_primary_key|configdb||schema_change|online|Remove legacy global uniqueness from ROLE
+contract|006|configdb/24_finalize_theme_primary_key|configdb||schema_change|online|Remove legacy global uniqueness from THEME
+contract|007|configdb/25_finalize_layout_primary_key|configdb||schema_change|online|Remove legacy global uniqueness from LAYOUT
+contract|008|configdb/26_finalize_inbound_client_primary_key|configdb||schema_change|online|Remove legacy global uniqueness from INBOUND_CLIENT
+contract|009|configdb/27_finalize_idp_primary_key|configdb||schema_change|online|Remove legacy global uniqueness from IDP
+contract|010|configdb/28_finalize_notification_sender_primary_key|configdb||schema_change|online|Remove legacy global uniqueness from NOTIFICATION_SENDER
+contract|011|configdb/29_finalize_certificate_primary_key|configdb||schema_change|online|Remove legacy global uniqueness from CERTIFICATE
+contract|012|configdb/30_finalize_resource_server_primary_key|configdb||schema_change|online|Remove legacy global uniqueness from RESOURCE_SERVER
+contract|013|configdb/31_finalize_resource_primary_key|configdb||schema_change|online|Remove legacy global uniqueness from RESOURCE
+contract|014|configdb/32_finalize_action_primary_key|configdb||schema_change|online|Remove legacy global uniqueness from ACTION
+contract|015|configdb/33_finalize_flow_primary_key|configdb||schema_change|online|Remove legacy global uniqueness from FLOW
+contract|016|configdb/34_finalize_presentation_definition_primary_key|configdb||schema_change|online|Remove legacy global uniqueness from PRESENTATION_DEFINITION
+contract|017|configdb/35_finalize_credential_configuration_primary_key|configdb||schema_change|online|Remove legacy global uniqueness from CREDENTIAL_CONFIGURATION
+contract|018|entitydb/36_finalize_organization_unit_primary_key|entitydb||schema_change|online|Remove legacy global uniqueness from ORGANIZATION_UNIT
+contract|019|entitydb/37_finalize_entity_primary_key|entitydb||schema_change|online|Remove legacy global uniqueness from ENTITY
+contract|020|entitydb/38_finalize_group_primary_key|entitydb||schema_change|online|Remove legacy global uniqueness from GROUP
+contract|021|runtime_persistent/56_finalize_session_tables|runtime_persistent||schema_change|atomic|Remove the session compatibility views and the session type default
+contract|022|configdb/88_finalize_flow_ou_id|configdb||schema_change|atomic|Require an owning organization unit on flow rows
+contract|023|configdb/89_finalize_idp_ou_id|configdb||schema_change|atomic|Require an owning organization unit on idp rows
+contract|024|configdb/90_finalize_notification_sender_ou_id|configdb||schema_change|atomic|Require an owning organization unit on notification_sender rows
+contract|025|configdb/93_finalize_role_assignment|configdb||schema_change|atomic|Finalize the role assignment organization unit column and lookup index
+contract|026|runtime_persistent/68_delete_duplicate_user_sessions|runtime_persistent|entitydb|data_change|resumable|Delete the sessions and runtime data of duplicate users
+contract|027|configdb/69_delete_duplicate_user_assignments|configdb|entitydb|data_change|resumable|Delete the role assignments and sharing policies of duplicate users
+contract|028|entitydb/70_delete_duplicate_users|entitydb||data_change|resumable|Delete the duplicate users and their group memberships
+contract|029|entitydb/71_drop_user_share_migration_table|entitydb||schema_change|atomic|Drop the working table that paired duplicate users with their original
+contract|030|entitydb/96_drop_group_member_lookup_index|entitydb||schema_change|atomic|Remove the group member lookup index the current schema no longer has
+contract|031|configdb/115_add_agent_type_organization_unit_index|configdb||schema_change|online|Allow one agent type per organization unit
+rollback|001|entitydb/116_convert_agent_owner_rollback|entitydb||data_change|atomic|Store each agent's owner as the entity ID the previous release reads
+rollback|002|entitydb/67_merge_duplicate_linked_accounts_rollback|entitydb||data_change|resumable|Restore each original user's own federated subject links
+rollback|003|entitydb/66_rehome_original_users_rollback|entitydb||data_change|resumable|Move each original user back to its former organization unit
+rollback|004|entitydb/47_migrate_agent_names_to_attributes_rollback|entitydb|configdb|data_change|resumable|Restore agent names to system attributes
+rollback|005|configdb/46_migrate_default_agent_name_schema_rollback|configdb||data_change|atomic|Restore the legacy default agent type schema
+rollback|006|configdb/45_migrate_flow_entity_type_references_rollback|configdb||data_change|resumable|Restore entity type names in every flow version
+rollback|007|configdb/44_migrate_idp_entity_type_references_rollback|configdb||data_change|resumable|Restore entity type names in identity provider configuration
+rollback|008|configdb/43_migrate_inbound_client_entity_type_references_rollback|configdb||data_change|resumable|Restore entity type names in inbound client configuration
+rollback|009|entitydb/42_migrate_entity_type_references_rollback|entitydb|configdb|data_change|resumable|Restore entity type names in entity records
+rollback|010|entitydb/48_link_legacy_federated_subjects_rollback|entitydb||data_change|resumable|Remove the links recorded for legacy federated subjects
+rollback|011|configdb/04_backfill_entity_type_handle_rollback|configdb||data_change|resumable|Remove the entity-type handle representation before returning to the source version
+rollback|012|entitydb/65_add_originals_to_duplicate_groups_rollback|entitydb|configdb|data_change|resumable|Remove the group memberships added to original users
+rollback|013|configdb/64_create_original_user_share_policies_rollback|configdb|entitydb|data_change|resumable|Remove the sharing policies created for original users
+rollback|014|entitydb/63_snapshot_duplicate_users_rollback|entitydb||data_change|resumable|Remove the recorded users

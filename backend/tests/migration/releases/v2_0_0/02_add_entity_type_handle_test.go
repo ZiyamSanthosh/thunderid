@@ -20,7 +20,7 @@ func verifyAddEntityTypeHandle(t *testing.T, environment migrationharness.Enviro
                     FROM INFORMATION_SCHEMA.COLUMNS
 					WHERE TABLE_SCHEMA = CURRENT_SCHEMA() AND TABLE_NAME = 'ENTITY_TYPES' AND COLUMN_NAME = $1`,
 			"YES:100", "handle")
-		migrationharness.AssertOperationCompleted(t, db, "2.0.0/configdb/02_add_entity_type_handle")
+		migrationharness.AssertOperationCompleted(t, db, "configdb/02_add_entity_type_handle")
 		t.Log("verified: nullable entity-type handle column was added while NAME remained unchanged")
 	})
 }

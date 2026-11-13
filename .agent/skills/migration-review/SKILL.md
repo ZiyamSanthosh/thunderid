@@ -92,7 +92,7 @@ and [migration-testing](../migration-testing/SKILL.md).
 
 ## Layer 7: Release and process
 
-- [ ] A shipped release is untouched. New work is in a new release package.
+- [ ] A shipped release is untouched, and so is every operation it lists. New work is in a new release package or a new operation.
 - [ ] Manifest: changed stores advance and equal the release version, unchanged stores keep their level,
       accepted source level matches the previous release's required level.
 - [ ] `current` returns every supported manifest from `Catalog()`.

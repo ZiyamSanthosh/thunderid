@@ -22,7 +22,7 @@ func verifyAgentNameCollisionGuard(t *testing.T, environment migrationharness.En
 	entityDB := environment.OpenDatabase(t, "entitydb")
 	migrationharness.AssertQueryValue(t, entityDB,
 		`SELECT COUNT(*)::TEXT FROM "MIGRATION_PROGRESS" WHERE OPERATION_ID = $1`,
-		"0", "2.0.0/entitydb/47_migrate_agent_names_to_attributes")
+		"0", "entitydb/47_migrate_agent_names_to_attributes")
 
 	environment.RunMigrationCommand(t, "resume")
 	t.Log("verified: an agent-name collision blocks migrate, while duplicate non-agent names do not")
@@ -59,7 +59,7 @@ func verifyMigrateAgentNames(t *testing.T, environment migrationharness.Environm
 				WHERE DEPLOYMENT_ID = 'migration-deployment' AND CATEGORY = 'agent' AND HANDLE = 'default'`,
 			"name")
 		migrationharness.AssertOperationCompleted(t, configDB,
-			"2.0.0/configdb/46_migrate_default_agent_name_schema")
+			"configdb/46_migrate_default_agent_name_schema")
 
 		entityDB := environment.OpenDatabase(t, "entitydb")
 		migrationharness.AssertQueryValue(t, entityDB,
@@ -90,7 +90,7 @@ func verifyMigrateAgentNames(t *testing.T, environment migrationharness.Environm
 				AND NAME = 'name' AND VALUE = 'Calendar Agent'`,
 			"attribute")
 		migrationharness.AssertOperationCompleted(t, entityDB,
-			"2.0.0/entitydb/47_migrate_agent_names_to_attributes")
+			"entitydb/47_migrate_agent_names_to_attributes")
 		migrationharness.AssertQueryValue(t, entityDB,
 			`SELECT COUNT(*)::TEXT FROM "ENTITY"
 				WHERE DEPLOYMENT_ID = 'migration-deployment'

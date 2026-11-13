@@ -32,7 +32,7 @@ func verifyExpandCertificateReferenceID(t *testing.T, environment migrationharne
 				'application', $1, 'JWKS', 'target-certificate')`, longReferenceID)
 		require.NoError(t, err)
 		migrationharness.AssertOperationCompleted(t, db,
-			"2.0.0/configdb/39_expand_certificate_reference_id")
+			"configdb/39_expand_certificate_reference_id")
 		t.Log("verified: CERTIFICATE.REF_ID accepts 2048 characters without changing existing values")
 	})
 }

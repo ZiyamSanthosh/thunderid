@@ -37,7 +37,7 @@ func verifyExpandEntityIdentifierPrimaryKey(t *testing.T, environment migrationh
 			WHERE ENTITY_ID = '0199a123-4703-7abc-8def-0123456789ab'
 			AND NAME = 'username' AND DEPLOYMENT_ID = 'migration-deployment'`, "2")
 		migrationharness.AssertOperationCompleted(
-			t, db, "2.0.0/entitydb/07_expand_entity_identifier_primary_key")
+			t, db, "entitydb/07_expand_entity_identifier_primary_key")
 		t.Log("verified: ENTITY_IDENTIFIER accepts multiple values per entity and name without losing existing rows")
 	})
 }

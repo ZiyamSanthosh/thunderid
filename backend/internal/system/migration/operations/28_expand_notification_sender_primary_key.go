@@ -1,0 +1,21 @@
+// Copyright 2026 The ThunderID Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package operations
+
+import "github.com/thunder-id/thunderid/internal/system/migration/engine"
+
+// NewExpandNotificationSenderPrimaryKeyOperation returns the expand notification sender primary key operation.
+func NewExpandNotificationSenderPrimaryKeyOperation() (engine.Operation, error) {
+	return newOnlinePrimaryKeyOperation(onlinePrimaryKeyConfig{
+		definition: engine.OperationDefinition{
+			ID:          "configdb/28_expand_notification_sender_primary_key",
+			Description: "Scope the NOTIFICATION_SENDER primary key by deployment",
+			StoreID:     engine.StoreIDConfigDB, Kind: engine.OperationKindSchemaChange,
+			InterruptionMode: engine.InterruptionModeOnline,
+		},
+		table: "NOTIFICATION_SENDER", legacyColumns: []string{"ID"},
+		targetColumns: []string{"DEPLOYMENT_ID", "ID"},
+		indexName:     "idx_notification_sender_deployment_primary_key", queryPrefix: "MIG-CONFIG-PK-29",
+	})
+}

@@ -20,7 +20,7 @@ func verifyRemoveEntityState(t *testing.T, environment migrationharness.Environm
 				WHERE TABLE_SCHEMA = CURRENT_SCHEMA() AND TABLE_NAME = 'ENTITY' AND COLUMN_NAME = 'state'`, "0")
 		migrationharness.AssertQueryValue(t, db,
 			`SELECT COUNT(*) FROM "ENTITY" WHERE DEPLOYMENT_ID = 'migration-deployment'`, "2")
-		migrationharness.AssertOperationCompleted(t, db, "2.0.0/entitydb/10_remove_entity_state")
+		migrationharness.AssertOperationCompleted(t, db, "entitydb/10_remove_entity_state")
 		t.Log("verified: contract removed ENTITY.STATE without losing entity rows")
 	})
 }

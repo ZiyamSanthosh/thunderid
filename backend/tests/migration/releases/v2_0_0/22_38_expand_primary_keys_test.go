@@ -67,7 +67,7 @@ func verifyDeploymentScopedPrimaryKeys(t *testing.T, environment migrationharnes
 				WHERE n.nspname = CURRENT_SCHEMA() AND table_class.relname = $1 AND c.contype = 'p'`,
 				operation.columns, operation.table)
 			migrationharness.AssertOperationCompleted(t, db,
-				"2.0.0/"+operation.store+"/"+operation.number+"_expand_"+
+				""+operation.store+"/"+operation.number+"_expand_"+
 					strings.ToLower(operation.table)+"_primary_key")
 			migrationharness.AssertQueryValue(t, db,
 				`SELECT COUNT(*) FROM pg_indexes
@@ -103,7 +103,7 @@ func verifyFinalizedDeploymentScopedPrimaryKeys(t *testing.T, environment migrat
 					WHERE schemaname = CURRENT_SCHEMA() AND tablename = $1 AND indexname = $2`,
 				"0", operation.table, legacyPrimaryKeyIndexName(operation.table))
 			migrationharness.AssertOperationCompleted(t, db,
-				"2.0.0/"+operation.store+"/"+operation.number+"_finalize_"+
+				""+operation.store+"/"+operation.number+"_finalize_"+
 					strings.ToLower(operation.table)+"_primary_key")
 		})
 	}

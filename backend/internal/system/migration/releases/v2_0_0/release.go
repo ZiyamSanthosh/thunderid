@@ -8,39 +8,19 @@ import (
 	_ "embed"
 
 	"github.com/thunder-id/thunderid/internal/system/migration/engine"
+	"github.com/thunder-id/thunderid/internal/system/migration/operations"
 )
 
 //go:embed release-manifest.json
 var manifestData []byte
 
-// Dependencies contains the dependencies available while constructing this release's operations.
-// Add narrowly typed providers only when a concrete operation requires them.
-type Dependencies struct {
-	// DeclarativeEntityTypes lazily provides the read-only entity types defined in declarative resource
-	// files, which have no ENTITY_TYPES row. It is used by entity-type reference operations 42 to 44
-	// and 47. When nil, those operations map entity types from the database alone.
-	DeclarativeEntityTypes func() (DeclarativeEntityTypes, error)
-	// DeclarativeConnections lazily provides the connections defined in declarative resource files. It is
-	// used by operation 48 and 49 to find the connection that issued each legacy federated subject. When
-	// nil, those operations cannot link a user and report the missing connection.
-	DeclarativeConnections func() (DeclarativeConnections, error)
-	// DeclarativeOrganizationUnits lazily provides the organization units defined in declarative resource
-	// files, which have no ORGANIZATION_UNIT row. The organization unit owner operations use it to find
-	// the system organization unit, and are blocked until it is declared.
-	DeclarativeOrganizationUnits func() (DeclarativeOrganizationUnits, error)
-	// SystemOrganizationUnitID is the organization unit the deployment names in server.system_ou_id. It becomes
-	// the owner of the rows that had none, and the owner operations are blocked while it is empty or not
-	// declared.
-	SystemOrganizationUnitID string
-}
-
 // Definition returns the manifest and plan owned by ThunderID 2.0.0.
 func Definition() (*engine.ReleaseDefinition, error) {
-	return DefinitionWithDependencies(Dependencies{})
+	return DefinitionWithDependencies(operations.Dependencies{})
 }
 
 // DefinitionWithDependencies returns the release definition constructed with the supplied dependencies.
-func DefinitionWithDependencies(dependencies Dependencies) (*engine.ReleaseDefinition, error) {
+func DefinitionWithDependencies(dependencies operations.Dependencies) (*engine.ReleaseDefinition, error) {
 	plan, err := migrationPlan(dependencies)
 	if err != nil {
 		return nil, err
@@ -48,279 +28,280 @@ func DefinitionWithDependencies(dependencies Dependencies) (*engine.ReleaseDefin
 	return engine.NewReleaseDefinition(manifestData, plan)
 }
 
-func migrationPlan(dependencies Dependencies) (engine.MigrationPlan, error) {
-	declaredEntityTypes := newDeclarativeEntityTypeSource(dependencies.DeclarativeEntityTypes)
-	declaredConnections := newDeclarativeConnectionSource(dependencies.DeclarativeConnections)
-	declaredOrganizationUnits := newDeclarativeOrganizationUnitSource(
+//nolint:gocyclo // The plan lists every operation of the release in order, one construction each.
+func migrationPlan(dependencies operations.Dependencies) (engine.MigrationPlan, error) {
+	declaredEntityTypes := operations.NewDeclarativeEntityTypeSource(dependencies.DeclarativeEntityTypes)
+	declaredConnections := operations.NewDeclarativeConnectionSource(dependencies.DeclarativeConnections)
+	declaredOrganizationUnits := operations.NewDeclarativeOrganizationUnitSource(
 		dependencies.DeclarativeOrganizationUnits, dependencies.SystemOrganizationUnitID)
-	createAuthorizationPDPConnection, err := newCreateAuthorizationPDPConnectionOperation()
+	createAuthorizationPDPConnection, err := operations.NewCreateAuthorizationPDPConnectionOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	addEntityTypeHandle, err := newAddEntityTypeHandleOperation()
+	addEntityTypeHandle, err := operations.NewAddEntityTypeHandleOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	expandEntityTypeLength, err := newExpandEntityTypeLengthOperation()
+	expandEntityTypeLength, err := operations.NewExpandEntityTypeLengthOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	expandEntityIdentifierPrimaryKey, err := newExpandEntityIdentifierPrimaryKeyOperation()
+	expandEntityIdentifierPrimaryKey, err := operations.NewExpandEntityIdentifierPrimaryKeyOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	createEntityRuntimeData, err := newCreateEntityRuntimeDataOperation()
+	createEntityRuntimeData, err := operations.NewCreateEntityRuntimeDataOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	addEntityStateDefault, err := newAddEntityStateDefaultOperation()
+	addEntityStateDefault, err := operations.NewAddEntityStateDefaultOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	createNotificationTemplate, err := newCreateNotificationTemplateOperation()
+	createNotificationTemplate, err := operations.NewCreateNotificationTemplateOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	createVariable, err := newCreateVariableOperation()
+	createVariable, err := operations.NewCreateVariableOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	createSecret, err := newCreateSecretOperation()
+	createSecret, err := operations.NewCreateSecretOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	createGateway, err := newCreateGatewayOperation()
+	createGateway, err := operations.NewCreateGatewayOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	createConfigurationVersion, err := newCreateConfigurationVersionOperation()
+	createConfigurationVersion, err := operations.NewCreateConfigurationVersionOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	createGatewayAppliedVersion, err := newCreateGatewayAppliedVersionOperation()
+	createGatewayAppliedVersion, err := operations.NewCreateGatewayAppliedVersionOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	createGatewayExcludedResource, err := newCreateGatewayExcludedResourceOperation()
+	createGatewayExcludedResource, err := operations.NewCreateGatewayExcludedResourceOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	createResourceSharingPolicy, err := newCreateResourceSharingPolicyOperation()
+	createResourceSharingPolicy, err := operations.NewCreateResourceSharingPolicyOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	createResourceSharingPolicyUnit, err := newCreateResourceSharingPolicyUnitOperation()
+	createResourceSharingPolicyUnit, err := operations.NewCreateResourceSharingPolicyUnitOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	createResourceSharingPolicyOverlayRule, err := newCreateResourceSharingPolicyOverlayRuleOperation()
+	createResourceSharingPolicyOverlayRule, err := operations.NewCreateResourceSharingPolicyOverlayRuleOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	createResourceOverlayValue, err := newCreateResourceOverlayValueOperation()
+	createResourceOverlayValue, err := operations.NewCreateResourceOverlayValueOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	expandEntityTypesPrimaryKey, err := newExpandEntityTypesPrimaryKeyOperation()
+	expandEntityTypesPrimaryKey, err := operations.NewExpandEntityTypesPrimaryKeyOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	expandRolePrimaryKey, err := newExpandRolePrimaryKeyOperation()
+	expandRolePrimaryKey, err := operations.NewExpandRolePrimaryKeyOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	expandThemePrimaryKey, err := newExpandThemePrimaryKeyOperation()
+	expandThemePrimaryKey, err := operations.NewExpandThemePrimaryKeyOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	expandLayoutPrimaryKey, err := newExpandLayoutPrimaryKeyOperation()
+	expandLayoutPrimaryKey, err := operations.NewExpandLayoutPrimaryKeyOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	expandInboundClientPrimaryKey, err := newExpandInboundClientPrimaryKeyOperation()
+	expandInboundClientPrimaryKey, err := operations.NewExpandInboundClientPrimaryKeyOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	expandIDPPrimaryKey, err := newExpandIDPPrimaryKeyOperation()
+	expandIDPPrimaryKey, err := operations.NewExpandIDPPrimaryKeyOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	expandNotificationSenderPrimaryKey, err := newExpandNotificationSenderPrimaryKeyOperation()
+	expandNotificationSenderPrimaryKey, err := operations.NewExpandNotificationSenderPrimaryKeyOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	expandCertificatePrimaryKey, err := newExpandCertificatePrimaryKeyOperation()
+	expandCertificatePrimaryKey, err := operations.NewExpandCertificatePrimaryKeyOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	expandResourceServerPrimaryKey, err := newExpandResourceServerPrimaryKeyOperation()
+	expandResourceServerPrimaryKey, err := operations.NewExpandResourceServerPrimaryKeyOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	expandResourcePrimaryKey, err := newExpandResourcePrimaryKeyOperation()
+	expandResourcePrimaryKey, err := operations.NewExpandResourcePrimaryKeyOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	expandActionPrimaryKey, err := newExpandActionPrimaryKeyOperation()
+	expandActionPrimaryKey, err := operations.NewExpandActionPrimaryKeyOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	expandFlowPrimaryKey, err := newExpandFlowPrimaryKeyOperation()
+	expandFlowPrimaryKey, err := operations.NewExpandFlowPrimaryKeyOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	expandPresentationDefinitionPrimaryKey, err := newExpandPresentationDefinitionPrimaryKeyOperation()
+	expandPresentationDefinitionPrimaryKey, err := operations.NewExpandPresentationDefinitionPrimaryKeyOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	expandCredentialConfigurationPrimaryKey, err := newExpandCredentialConfigurationPrimaryKeyOperation()
+	expandCredentialConfigurationPrimaryKey, err := operations.NewExpandCredentialConfigurationPrimaryKeyOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	expandOrganizationUnitPrimaryKey, err := newExpandOrganizationUnitPrimaryKeyOperation()
+	expandOrganizationUnitPrimaryKey, err := operations.NewExpandOrganizationUnitPrimaryKeyOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	expandEntityPrimaryKey, err := newExpandEntityPrimaryKeyOperation()
+	expandEntityPrimaryKey, err := operations.NewExpandEntityPrimaryKeyOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	expandGroupPrimaryKey, err := newExpandGroupPrimaryKeyOperation()
+	expandGroupPrimaryKey, err := operations.NewExpandGroupPrimaryKeyOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	expandCertificateReferenceID, err := newExpandCertificateReferenceIDOperation()
+	expandCertificateReferenceID, err := operations.NewExpandCertificateReferenceIDOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	expandRevocationCriterionValue, err := newExpandRevocationCriterionValueOperation()
+	expandRevocationCriterionValue, err := operations.NewExpandRevocationCriterionValueOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	addSSOSessionParticipantApplicationIndex, err := newAddSSOSessionParticipantApplicationIndexOperation()
+	addSSOSessionParticipantApplicationIndex, err := operations.NewAddSSOSessionParticipantApplicationIndexOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	renameSessionTables, err := newRenameSessionTablesOperation()
+	renameSessionTables, err := operations.NewRenameSessionTablesOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	renameSessionIndexes, err := newRenameSessionIndexesOperation()
+	renameSessionIndexes, err := operations.NewRenameSessionIndexesOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	addSessionTypeCheck, err := newAddSessionTypeCheckOperation()
+	addSessionTypeCheck, err := operations.NewAddSessionTypeCheckOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	validateSessionTypeCheck, err := newValidateSessionTypeCheckOperation()
+	validateSessionTypeCheck, err := operations.NewValidateSessionTypeCheckOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	addSessionSubjectIndex, err := newAddSessionSubjectIndexOperation()
+	addSessionSubjectIndex, err := operations.NewAddSessionSubjectIndexOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	addSessionProperties, err := newAddSessionPropertiesOperation()
+	addSessionProperties, err := operations.NewAddSessionPropertiesOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	createManagedResource, err := newCreateManagedResourceOperation()
+	createManagedResource, err := operations.NewCreateManagedResourceOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	convertAgentOwner, err := newConvertAgentOwnerOperation()
+	convertAgentOwner, err := operations.NewConvertAgentOwnerOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	rollbackConvertAgentOwner, err := newRollbackConvertAgentOwnerOperation()
+	rollbackConvertAgentOwner, err := operations.NewRollbackConvertAgentOwnerOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
 	var addProjectColumns, addProjectIndexes []engine.Operation
-	for _, scoped := range projectScopedTables {
-		column, err := newAddProjectIDColumnOperation(scoped)
+	for _, scoped := range operations.ProjectScopedTables {
+		column, err := operations.NewAddProjectIDColumnOperation(scoped)
 		if err != nil {
 			return engine.MigrationPlan{}, err
 		}
 		addProjectColumns = append(addProjectColumns, column)
-		addProjectIndexes = append(addProjectIndexes, newAddProjectIndexOperation(scoped))
+		addProjectIndexes = append(addProjectIndexes, operations.NewAddProjectIndexOperation(scoped))
 	}
-	finalizeSessionTables, err := newFinalizeSessionTablesOperation()
+	finalizeSessionTables, err := operations.NewFinalizeSessionTablesOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	addInboundClientDeviceGrantFlowID, err := newAddInboundClientDeviceGrantFlowIDOperation()
+	addInboundClientDeviceGrantFlowID, err := operations.NewAddInboundClientDeviceGrantFlowIDOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	createRuntimeStoreDeviceReqPartition, err := newCreateRuntimeStoreDeviceReqPartitionOperation()
+	createRuntimeStoreDeviceReqPartition, err := operations.NewCreateRuntimeStoreDeviceReqPartitionOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	addRoleAssignmentSharingPolicyID, err := newAddRoleAssignmentSharingPolicyIDOperation()
+	addRoleAssignmentSharingPolicyID, err := operations.NewAddRoleAssignmentSharingPolicyIDOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	backfillRoleAssignment, err := newBackfillRoleAssignmentOperation()
+	backfillRoleAssignment, err := operations.NewBackfillRoleAssignmentOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	finalizeRoleAssignment, err := newFinalizeRoleAssignmentOperation()
+	finalizeRoleAssignment, err := operations.NewFinalizeRoleAssignmentOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	createUserShareMigrationTable, err := newCreateUserShareMigrationTableOperation()
+	createUserShareMigrationTable, err := operations.NewCreateUserShareMigrationTableOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	createGatewayMaster, err := newCreateGatewayMasterOperation()
+	createGatewayMaster, err := operations.NewCreateGatewayMasterOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	createProjectTable, err := newCreateProjectTableOperation()
+	createProjectTable, err := operations.NewCreateProjectTableOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	addEntityProjectID, err := newAddEntityProjectIDOperation()
+	addEntityProjectID, err := operations.NewAddEntityProjectIDOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	addOrganizationUnitProjectID, err := newAddOrganizationUnitProjectIDOperation()
+	addOrganizationUnitProjectID, err := operations.NewAddOrganizationUnitProjectIDOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	createHTTPConnection, err := newCreateHTTPConnectionOperation()
+	createHTTPConnection, err := operations.NewCreateHTTPConnectionOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	createAuthorizationDetailType, err := newCreateAuthorizationDetailTypeOperation()
+	createAuthorizationDetailType, err := operations.NewCreateAuthorizationDetailTypeOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	createGatewayApplyLease, err := newCreateGatewayApplyLeaseOperation()
+	createGatewayApplyLease, err := operations.NewCreateGatewayApplyLeaseOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	dropUserShareMigrationTable, err := newDropUserShareMigrationTableOperation()
+	dropUserShareMigrationTable, err := operations.NewDropUserShareMigrationTableOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	dropGroupMemberLookupIndex, err := newDropGroupMemberLookupIndexOperation()
+	dropGroupMemberLookupIndex, err := operations.NewDropGroupMemberLookupIndexOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
 	var addOwnerColumns, backfillOwners, finalizeOwners []engine.Operation
-	for _, owner := range organizationUnitOwnerTables {
-		add, err := newAddOrganizationUnitOwnerColumnOperation(owner)
+	for _, owner := range operations.OrganizationUnitOwnerTables {
+		add, err := operations.NewAddOrganizationUnitOwnerColumnOperation(owner)
 		if err != nil {
 			return engine.MigrationPlan{}, err
 		}
-		backfill, err := newBackfillOrganizationUnitOwnerOperation(owner, declaredOrganizationUnits)
+		backfill, err := operations.NewBackfillOrganizationUnitOwnerOperation(owner, declaredOrganizationUnits)
 		if err != nil {
 			return engine.MigrationPlan{}, err
 		}
-		finalize, err := newFinalizeOrganizationUnitOwnerOperation(owner)
+		finalize, err := operations.NewFinalizeOrganizationUnitOwnerOperation(owner)
 		if err != nil {
 			return engine.MigrationPlan{}, err
 		}
@@ -328,7 +309,7 @@ func migrationPlan(dependencies Dependencies) (engine.MigrationPlan, error) {
 		backfillOwners = append(backfillOwners, backfill)
 		finalizeOwners = append(finalizeOwners, finalize)
 	}
-	primaryKeyContractOperations, err := newLegacyPrimaryKeyContractOperations([]engine.Operation{
+	primaryKeyContractOperations, err := operations.NewLegacyPrimaryKeyContractOperations([]engine.Operation{
 		expandEntityTypesPrimaryKey,
 		expandRolePrimaryKey,
 		expandThemePrimaryKey,
@@ -350,38 +331,43 @@ func migrationPlan(dependencies Dependencies) (engine.MigrationPlan, error) {
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	backfillEntityTypeHandle := newBackfillEntityTypeHandleOperation(declaredEntityTypes)
-	backfillEntityTypeHandleCatchUp := newBackfillEntityTypeHandleCatchUpOperation(declaredEntityTypes)
-	addEntityTypeHandleUniqueness, err := newAddEntityTypeHandleUniquenessOperation()
+	backfillEntityTypeHandle := operations.NewBackfillEntityTypeHandleOperation(declaredEntityTypes)
+	backfillEntityTypeHandleCatchUp := operations.NewBackfillEntityTypeHandleCatchUpOperation(declaredEntityTypes)
+	addEntityTypeHandleUniqueness, err := operations.NewAddEntityTypeHandleUniquenessOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	finalizeEntityTypeHandle, err := newFinalizeEntityTypeHandleOperation()
+	finalizeEntityTypeHandle, err := operations.NewFinalizeEntityTypeHandleOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	linkLegacyFederatedSubjects := newLinkLegacyFederatedSubjectsOperation(declaredConnections)
-	linkLegacyFederatedSubjectsCatchUp := newLinkLegacyFederatedSubjectsCatchUpOperation(declaredConnections)
-	removeLegacySubjectAttribute := newRemoveLegacySubjectAttributeOperation(
+	linkLegacyFederatedSubjects := operations.NewLinkLegacyFederatedSubjectsOperation(declaredConnections)
+	linkLegacyFederatedSubjectsCatchUp := operations.NewLinkLegacyFederatedSubjectsCatchUpOperation(declaredConnections)
+	removeLegacySubjectAttribute := operations.NewRemoveLegacySubjectAttributeOperation(
 		declaredConnections, declaredEntityTypes)
-	migrateEntityTypeReferences := newMigrateEntityTypeReferencesOperation(declaredEntityTypes)
-	migrateInboundClientEntityTypeReferences := newMigrateInboundClientEntityTypeReferencesOperation(declaredEntityTypes)
-	migrateIDPEntityTypeReferences := newMigrateIDPEntityTypeReferencesOperation(declaredEntityTypes)
-	migrateFlowEntityTypeReferences := newMigrateFlowEntityTypeReferencesOperation(declaredEntityTypes)
-	migrateDefaultAgentNameSchema := newMigrateDefaultAgentNameSchemaOperation()
-	migrateAgentNamesToAttributes := newMigrateAgentNamesToAttributesOperation(declaredEntityTypes)
-	removeEntityState, err := newRemoveEntityStateOperation()
+	migrateEntityTypeReferences := operations.NewMigrateEntityTypeReferencesOperation(declaredEntityTypes)
+	migrateInboundClientEntityTypeReferences := operations.NewMigrateInboundClientEntityTypeReferencesOperation(
+		declaredEntityTypes,
+	)
+	migrateIDPEntityTypeReferences := operations.NewMigrateIDPEntityTypeReferencesOperation(declaredEntityTypes)
+	migrateFlowEntityTypeReferences := operations.NewMigrateFlowEntityTypeReferencesOperation(declaredEntityTypes)
+	migrateDefaultAgentNameSchema := operations.NewMigrateDefaultAgentNameSchemaOperation()
+	migrateAgentNamesToAttributes := operations.NewMigrateAgentNamesToAttributesOperation(declaredEntityTypes)
+	removeEntityState, err := operations.NewRemoveEntityStateOperation()
 	if err != nil {
 		return engine.MigrationPlan{}, err
 	}
-	rollbackEntityTypeHandleBackfill := newRollbackEntityTypeHandleBackfillOperation()
-	rollbackLinkLegacyFederatedSubjects := newRollbackLinkLegacyFederatedSubjectsOperation(declaredConnections)
-	rollbackEntityTypeReferences := newRollbackEntityTypeReferencesOperation(declaredEntityTypes)
-	rollbackInboundClientEntityTypeReferences := newRollbackInboundClientEntityTypeReferencesOperation(declaredEntityTypes)
-	rollbackIDPEntityTypeReferences := newRollbackIDPEntityTypeReferencesOperation(declaredEntityTypes)
-	rollbackFlowEntityTypeReferences := newRollbackFlowEntityTypeReferencesOperation(declaredEntityTypes)
-	rollbackDefaultAgentNameSchema := newRollbackDefaultAgentNameSchemaOperation()
-	rollbackAgentNamesToAttributes := newRollbackAgentNamesToAttributesOperation(declaredEntityTypes)
+	rollbackEntityTypeHandleBackfill := operations.NewRollbackEntityTypeHandleBackfillOperation()
+	rollbackLinkLegacyFederatedSubjects := operations.NewRollbackLinkLegacyFederatedSubjectsOperation(
+		declaredConnections)
+	rollbackEntityTypeReferences := operations.NewRollbackEntityTypeReferencesOperation(declaredEntityTypes)
+	rollbackInboundClientEntityTypeReferences := operations.NewRollbackInboundClientEntityTypeReferencesOperation(
+		declaredEntityTypes,
+	)
+	rollbackIDPEntityTypeReferences := operations.NewRollbackIDPEntityTypeReferencesOperation(declaredEntityTypes)
+	rollbackFlowEntityTypeReferences := operations.NewRollbackFlowEntityTypeReferencesOperation(declaredEntityTypes)
+	rollbackDefaultAgentNameSchema := operations.NewRollbackDefaultAgentNameSchemaOperation()
+	rollbackAgentNamesToAttributes := operations.NewRollbackAgentNamesToAttributesOperation(declaredEntityTypes)
 	plan := engine.MigrationPlan{
 		TargetVersion: "2.0.0-m1",
 		Expand: []engine.Operation{
@@ -431,12 +417,12 @@ func migrationPlan(dependencies Dependencies) (engine.MigrationPlan, error) {
 			createProjectTable,
 			addEntityProjectID,
 			addOrganizationUnitProjectID,
-			newAddEntityProjectIndexOperation(),
-			newAddEntityOwnerIndexOperation(),
-			newAddOrganizationUnitProjectIndexOperation(),
-			newAddCredentialConfigurationOUIndexOperation(),
-			newAddPresentationDefinitionOUIndexOperation(),
-			newAddEntityKindIndexOperation(),
+			operations.NewAddEntityProjectIndexOperation(),
+			operations.NewAddEntityOwnerIndexOperation(),
+			operations.NewAddOrganizationUnitProjectIndexOperation(),
+			operations.NewAddCredentialConfigurationOUIndexOperation(),
+			operations.NewAddPresentationDefinitionOUIndexOperation(),
+			operations.NewAddEntityKindIndexOperation(),
 			createManagedResource,
 			createGatewayMaster,
 			createHTTPConnection,
@@ -445,12 +431,12 @@ func migrationPlan(dependencies Dependencies) (engine.MigrationPlan, error) {
 			addInboundClientDeviceGrantFlowID,
 			createRuntimeStoreDeviceReqPartition,
 			addRoleAssignmentSharingPolicyID,
-			newWidenRoleAssignmentPrimaryKeyOperation(),
-			newAddRoleAssignmentAssigneeIndexOperation(),
+			operations.NewWidenRoleAssignmentPrimaryKeyOperation(),
+			operations.NewAddRoleAssignmentAssigneeIndexOperation(),
 			createUserShareMigrationTable,
-			newSnapshotDuplicateUsersOperation(),
-			newCreateOriginalUserSharePoliciesOperation(),
-			newAddOriginalsToDuplicateGroupsOperation(),
+			operations.NewSnapshotDuplicateUsersOperation(),
+			operations.NewCreateOriginalUserSharePoliciesOperation(),
+			operations.NewAddOriginalsToDuplicateGroupsOperation(),
 			backfillEntityTypeHandle,
 			addEntityTypeHandleUniqueness,
 			linkLegacyFederatedSubjects,
@@ -464,8 +450,8 @@ func migrationPlan(dependencies Dependencies) (engine.MigrationPlan, error) {
 			migrateFlowEntityTypeReferences,
 			migrateDefaultAgentNameSchema,
 			migrateAgentNamesToAttributes,
-			newRehomeOriginalUsersOperation(),
-			newMergeDuplicateLinkedAccountsOperation(),
+			operations.NewRehomeOriginalUsersOperation(),
+			operations.NewMergeDuplicateLinkedAccountsOperation(),
 		},
 		Contract: append([]engine.Operation{
 			finalizeEntityTypeHandle,
@@ -474,8 +460,8 @@ func migrationPlan(dependencies Dependencies) (engine.MigrationPlan, error) {
 		}, append(primaryKeyContractOperations, finalizeSessionTables)...),
 		Rollback: []engine.RollbackOperation{
 			rollbackConvertAgentOwner,
-			newRollbackMergeDuplicateLinkedAccountsOperation(),
-			newRollbackRehomeOriginalUsersOperation(),
+			operations.NewRollbackMergeDuplicateLinkedAccountsOperation(),
+			operations.NewRollbackRehomeOriginalUsersOperation(),
 			rollbackAgentNamesToAttributes,
 			rollbackDefaultAgentNameSchema,
 			rollbackFlowEntityTypeReferences,
@@ -484,9 +470,9 @@ func migrationPlan(dependencies Dependencies) (engine.MigrationPlan, error) {
 			rollbackEntityTypeReferences,
 			rollbackLinkLegacyFederatedSubjects,
 			rollbackEntityTypeHandleBackfill,
-			newRollbackAddOriginalsToDuplicateGroupsOperation(),
-			newRollbackCreateOriginalUserSharePoliciesOperation(),
-			newRollbackSnapshotDuplicateUsersOperation(),
+			operations.NewRollbackAddOriginalsToDuplicateGroupsOperation(),
+			operations.NewRollbackCreateOriginalUserSharePoliciesOperation(),
+			operations.NewRollbackSnapshotDuplicateUsersOperation(),
 		},
 	}
 	plan.Expand = append(plan.Expand, addOwnerColumns...)
@@ -497,12 +483,12 @@ func migrationPlan(dependencies Dependencies) (engine.MigrationPlan, error) {
 	plan.Contract = append(plan.Contract, finalizeOwners...)
 	plan.Contract = append(plan.Contract,
 		finalizeRoleAssignment,
-		newDeleteDuplicateUserSessionsOperation(),
-		newDeleteDuplicateUserAssignmentsOperation(),
-		newDeleteDuplicateUsersOperation(),
+		operations.NewDeleteDuplicateUserSessionsOperation(),
+		operations.NewDeleteDuplicateUserAssignmentsOperation(),
+		operations.NewDeleteDuplicateUsersOperation(),
 		dropUserShareMigrationTable,
 		dropGroupMemberLookupIndex,
-		newAddAgentTypeOrganizationUnitIndexOperation(),
+		operations.NewAddAgentTypeOrganizationUnitIndexOperation(),
 	)
 	return plan, nil
 }

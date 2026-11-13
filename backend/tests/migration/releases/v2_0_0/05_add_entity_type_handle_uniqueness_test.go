@@ -35,7 +35,7 @@ func verifyAddEntityTypeHandleUniqueness(t *testing.T, environment migrationharn
                     AND COLUMN_NAME = 'handle'`,
 			"YES")
 		migrationharness.AssertOperationCompleted(t, db,
-			"2.0.0/configdb/05_add_entity_type_handle_uniqueness")
+			"configdb/05_add_entity_type_handle_uniqueness")
 		t.Log("verified: source name uniqueness and target handle uniqueness coexist before contract")
 	})
 }

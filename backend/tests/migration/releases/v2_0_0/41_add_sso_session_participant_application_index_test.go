@@ -42,7 +42,7 @@ func verifyAddSSOSessionParticipantApplicationIndex(
 					AND DEPLOYMENT_ID = 'migration-deployment'`,
 			"0199a123-4795-7abc-8def-0123456789ab")
 		migrationharness.AssertOperationCompleted(t, db,
-			"2.0.0/runtime_persistent/41_add_sso_session_participant_application_index")
+			"runtime_persistent/41_add_sso_session_participant_application_index")
 		t.Log("verified: the concurrent participant application index is exact and preserves existing rows")
 	})
 }
