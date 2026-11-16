@@ -38,7 +38,7 @@ Every changed store needs at least one operation. An operation is described by:
 
 | Field | Values |
 |---|---|
-| `ID` | `<store>/<NN>_<snake_name>`, unique in the plan |
+| `ID` | `<store>/<NN>_<snake_name>`, unique in the plan. A file that covers several numbers (`48_49_`, `82_90_`, `97_112_`) defines one id per number |
 | `StoreID` | The one store it writes |
 | `ReadStoreIDs` | Extra stores it may read |
 | `Kind` | `schema_change` or `data_change` |

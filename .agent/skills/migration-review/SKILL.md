@@ -67,7 +67,7 @@ and [migration-testing](../migration-testing/SKILL.md).
 - [ ] Constraints on large tables are added `NOT VALID` then validated, or attached `USING INDEX`.
 - [ ] No volatile default on an added column. Column types only widen in Expand.
 - [ ] Legacy unique indexes needed by the old binary's `ON CONFLICT` remain until contract.
-- [ ] Query ids are unique across the release package.
+- [ ] Query ids are unique across the `operations` package (`query_ids_test.go`).
 
 ## Layer 5: Rollback
 
@@ -81,7 +81,8 @@ and [migration-testing](../migration-testing/SKILL.md).
 ## Layer 6: Tests
 
 - [ ] Definition, verifier (source, target, invalid), readiness and statement or helper unit tests exist.
-- [ ] The release plan test pins sizes and order, and was updated.
+- [ ] The plan sizes in `release_test.go` were bumped and `testdata/plan_definitions.golden` changed only by additions.
+      A change to an existing entry means a shipped operation was edited.
 - [ ] Integration fixture is in the **source** schema, covers edge rows, several deployments, and more
       than one batch for resumable operations.
 - [ ] An old binary SQL compatibility check exists for Expand steps.
@@ -93,6 +94,7 @@ and [migration-testing](../migration-testing/SKILL.md).
 ## Layer 7: Release and process
 
 - [ ] A shipped release is untouched, and so is every operation it lists. New work is in a new release package or a new operation.
+      `TestPlanDefinitionsAreFrozen` catches changed definitions only, so still read the diff for edited SQL and verifiers.
 - [ ] Manifest: changed stores advance and equal the release version, unchanged stores keep their level,
       accepted source level matches the previous release's required level.
 - [ ] `current` returns every supported manifest from `Catalog()`.
@@ -115,6 +117,11 @@ Found and fixed during review of the engine and release 2.0.0:
 | Fixed boundary | Phase rollback returned every store to a fixed boundary instead of the one before its own first phase |
 | Skipped failed store | Revert-all looked only for stores with progress rows and ignored a store that failed before writing any |
 | Duplicate query ids | Copy paste reused ids across files. Harmless at run time, wrong in logs and mocks |
+| Primary key swap blocked by a foreign key | A single column key cannot be replaced while a foreign key from a non key column of another table depends on it (`INBOUND_CLIENT.THEME_ID` and `LAYOUT_ID`). Re-create it through `references`, or drop it through `droppedReferences` when the target schema has no such key. Dropping changes delete behaviour (`ON DELETE SET NULL` is lost), so confirm it with the owners |
+| Declarative resources have no database row | Entity types and similar resources defined in files are absent from the tables a conversion reads. Inject them through a declarative provider. They carry no deployment id, so they apply to every deployment in the run |
+| Converting a column that is not a reference | `ENTITY.TYPE` holds the fixed value `application` for application entities. Translate only the categories that have the reference |
+| Generated value clashes with a declarative one | A generated handle can equal a declarative handle and stop the server at startup. Reserve declarative values when generating |
+| Readiness blocks on rows the operation does not touch | The agent name collision check counted user entities. Scope readiness queries to the rows the operation migrates |
 
 Risks flagged in audits that remain design decisions. Raise them when a change touches the area:
 

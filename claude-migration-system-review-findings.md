@@ -4,7 +4,7 @@ Reviewer: Claude. Branch: `migration-plan`. Code reviewed: HEAD `0cfc71202` plus
 Scope: `backend/internal/system/migration/**`, `backend/cmd/server/migration_cmd.go`, `backend/cmd/server/main.go`, the v2.0.0 release operations, the metadata schema scripts.
 Method: every item below was re-checked against the current code, not against the design documents. `go vet` (including the `migration_integration` build tag) and the unit tests for the migration packages and `cmd/server` pass. The Postgres integration suite under `backend/tests/migration` was **not** run, so every finding comes from reading the code. Confidence is stated per finding.
 
-This file replaces all earlier versions. It lists only issues that are still open. Items from earlier reviews that have been fixed are not repeated (they include the revert-all state and fencing problems, the interrupted revert-all wedge, resume after an interrupted rollback, the silent no-op rollback, the split rollback cleanup, the `markFailed` abort, the metadata table sprawl, and the SMTP credentials).
+Status re-verified against the code on 2026-11-16. R6 and R23 are closed, R3 is narrowed, and F3, F7 and D1 carry over from the retired engine review. This file lists only issues that are still open. Items from earlier reviews that have been fixed are not repeated (they include the revert-all state and fencing problems, the interrupted revert-all wedge, resume after an interrupted rollback, the silent no-op rollback, the split rollback cleanup, the `markFailed` abort, the metadata table sprawl, and the SMTP credentials).
 
 Severity: **High** = data loss, wedged state, or outage risk. **Medium** = incorrect or misleading behavior, or a gap with a workaround. **Low** = hygiene.
 
@@ -14,10 +14,9 @@ Severity: **High** = data loss, wedged state, or outage risk. **Medium** = incor
 |---|---|---|---|
 | R1 | High | Rollback | Phase rollback fails when a namespace's run row was already deleted |
 | R2 | High | Execution | Re-running migrate for an already-migrated deployment wedges the store |
-| R3 | High | Backfill | No catch-up for rows written by the old binary during migrate |
+| R3 | Medium | Backfill | Renames made by the old binary after the backfill are not re-synced (null handles are now caught up) |
 | R4 | High | Rollback | The backfill rollback operation clears every non-null handle in scope |
 | R5 | Medium | Rollback | Failed-operation rollback of a store-wide backfill leaves deployment markers |
-| R6 | Medium | Resume | Resume rejects an interrupted rollback only for `failed` stores |
 | R7 | Medium | Compatibility | Any failed contract operation retires the old binary |
 | R8 | Medium | Metadata | No in-place metadata upgrade, and schema inspection is all-or-nothing |
 | R9 | Medium | Coordinator | Cross-namespace reservation is not atomic |
@@ -34,7 +33,8 @@ Severity: **High** = data loss, wedged state, or outage risk. **Medium** = incor
 | R20 | Low | Engine | `time.Time` compared with `!=` and exact `UPDATED_AT` matching |
 | R21 | Low | Locking | Session advisory locks break behind transaction-pooling proxies |
 | R22 | Low | Misc | Smaller items |
-| R23 | Low | Repository | Review artifacts committed to the repository root |
+| F3 | Medium | Compatibility | An expand-only store rests at `contract_ready`, which retires a gate-capable source binary |
+| F7 | Low | Resumable | No batch count or duration cap, and batch size is fixed at 100 |
 
 ---
 
@@ -62,16 +62,14 @@ A second `apply migrate --deployment-id A` after the first one completed hits a 
 
 Fix direction: treat an existing completed progress row for the same target as "already done" (skip and verify), or exclude already-migrated deployments in preflight with a clear message.
 
-### R3. No catch-up for rows written by the old binary during migrate
-Confidence: high. Partly mitigated for contract.
+### R3. Renames made by the old binary after the backfill are not re-synced
+Confidence: high. Null handles are fixed.
 
-The old binary keeps serving while the store is `migrating` and inserts entity types with `HANDLE NULL`, or renames existing ones.
-- The backfill pages with `ID > lastID` ([04_backfill_entity_type_handle.go](backend/internal/system/migration/operations/04_backfill_entity_type_handle.go)). Rows that appear behind the cursor are never visited, and renames after the backfill are never re-synced.
-- On resume the executor continues from the saved checkpoint ([resumable_executor.go](backend/internal/system/migration/engine/resumable_executor.go), `executeBatches`) and never rescans from the beginning. If post-verification found remaining null handles, every retry fails the same way.
-- What is now better: operation 06's verification detects null handles, so `apply contract` is blocked in preflight instead of failing inside the transaction ([06_finalize_entity_type_handle.go](backend/internal/system/migration/operations/06_finalize_entity_type_handle.go)).
-- What is still missing: once the store is `contract_ready`, migrate cannot be re-run (`requestedPhaseCompleted`), so the operator has no engine command to fix the null handles. The remediation text names no command.
+Fixed: `entitydb`/`configdb` operation `04_backfill_entity_type_handle_catch_up` runs in Migrate and rescans from an empty checkpoint, and operation 06 verification reports `entity_type_handle_nulls_remain` so `apply contract` is blocked in preflight.
 
-Fix direction: a database-side mechanism installed in expand (trigger or default derived from the name), or a catch-up pass that rescans from the beginning before contract, or a resumable operation that restarts its scan when post-verification fails.
+Still open: a handle already set is never re-derived when the old binary renames the type afterwards. Once the store is `contract_ready`, migrate cannot be re-run, so there is no engine command to repair such a row.
+
+Fix direction: decide whether handles are immutable once set (then document it) or add a re-sync to the catch-up.
 
 ### R4. The backfill rollback operation clears every non-null handle in scope
 Confidence: high.
@@ -88,11 +86,6 @@ Fix direction: record which rows the backfill touched (checkpoint list, marker c
 Confidence: medium-high.
 
 The failed-operation scope runs the rollback operation for target `""`, which clears all handles in the store. `CompleteOperationRollback` ([state_controller.go](backend/internal/system/migration/engine/state_controller.go)) deletes progress and updates the run, but never deletes `MIGRATION_DEPLOYMENT_STATE` rows (only `CompleteRollback` and `CompleteRevertAll` do). If an earlier selective run migrated deployment A, A's marker stays while A's handles are gone, and `CheckDeployment` ([compatibility.go](backend/internal/system/migration/engine/compatibility.go)) lets the new binary start for A against `NULL` handles. The run row already knows the selection, so the data to fix this exists.
-
-### R6. Resume rejects an interrupted rollback only for `failed` stores
-Confidence: medium.
-
-`rejectForwardResumeDuringRollback` ([coordinator.go](backend/internal/system/migration/engine/coordinator.go)) iterates `resume.failedByNamespace`, so it only inspects `failed` stores. A phase or failed-operation rollback killed mid-way leaves the store `in_progress` with `run.Mode = rollback`, which the check never examines (revert-all is caught separately by the `rolling_back` stage). Forward `resume` is then stopped only incidentally, when a rollback progress row exists and does not match the plan. Read the run mode for every active store.
 
 ### R7. Any failed contract operation retires the old binary
 Confidence: high. Narrowed by the new null-handle check.
@@ -140,6 +133,18 @@ The startup gate now checks the supported stores and marks the others `skipped` 
 
 ## Low
 
+### F3. An expand-only store rests at `contract_ready`
+Confidence: medium (read from code, not tested).
+
+`phasePlanForStore` appends an implicit contract phase, so a store with only expand operations finishes expand at `contract_ready`. `servingCompatibilityReason` retires the source binary from `contract_ready`, so a gate-capable source is refused once expand completes. It does not affect 1.0.0 to 2.0.0 because 1.0.0 has no gate. Revisit before the next release pair.
+
+### F7. Resumable batches have no cap
+`executeBatches` has no batch count or duration limit, and the batch size is fixed at 100. Operators cannot pace a backfill. This is also the backfill throttling item in the status notes.
+
+### D1. The compatibility gate runs only at process start
+A running pod is never stopped when the store state changes (see R10, R11).
+
+
 ### R15. `MarkFailed` loads the run first and adds a misleading error
 `MarkFailedWithFailure` calls `GetRun` before it skips `clean` stores and returns "active run is missing" when the row was already deleted. In revert-all and rollback failure paths the stores set can still include stores that finished, so the real error is joined with a misleading one. Load the run only when a store actually needs to be marked failed.
 
@@ -169,8 +174,6 @@ Every changed store now ends through a contract phase. Stores with only expand o
 - Rollback and revert-all call `c.namespaceIndexes()` inside loops (cheap but repeated).
 - `--phase` parsing for `rollback` is more permissive than the usage string; check combinations of `--phase` and a positional phase.
 
-### R23. Review artifacts committed to the repository root
-Commit `0cfc71202` added `claude-migration-system-review-findings.md`, `migration-engine-review-findings.md` and `claude-migration-diagrams.excalidraw` (about 20,900 lines, because the file is pretty-printed JSON) to the repository root. These are working notes, not product documentation. Consider moving them under a docs folder, regenerating the diagram without indentation, or keeping them out of the main history. Also keep the unrelated uncommitted `gate_client` change in `backend/cmd/server/deployment.yaml` out of migration commits.
 
 ---
 
@@ -186,6 +189,5 @@ Commit `0cfc71202` added `claude-migration-system-review-findings.md`, `migratio
 2. R2: run `apply migrate --deployment-id A` twice and assert the second run is a clean skip.
 3. R3: insert an entity type with `HANDLE NULL` while the backfill runs, and assert a catch-up or a recoverable failure.
 4. R5: selective migrate of A, then a failing store-wide migrate; fail-operation rollback; assert A's marker and handles agree.
-5. R6: kill a phase rollback mid-way, then run `resume` and assert it refuses.
 6. R7: force a contract failure and assert the old binary can still start.
 7. R11: run `rollback --revert-all` while a forward run is `failed` and assert it asks for confirmation or refuses.

@@ -10,10 +10,10 @@
 | Operation id | `<store>/<NN>_<snake_name>` | `configdb/02_add_entity_type_handle` |
 | Rollback id | forward id plus `_rollback` | |
 | Catch-up id | forward id plus `_catch_up` | |
-| Constructor | `newXxxOperation()` returning `(engine.Operation, error)` when it can fail | |
-| Query id | `MIG-<CFG\|ENT\|RTP>_MGT-<n>` | `MIG-CFG_MGT-05` |
+| Constructor | Exported `NewXxxOperation(...)` in package `operations`, returning `(engine.Operation, error)` when it can fail | |
+| Query id | `MIG-<STORE>_MGT-<n>`; helpers use their own prefixes such as `MIG-CONFIG-PK` and `MIG-USM-TBL` | `MIG-CFG_MGT-05` |
 
-Query ids are unique across the release package. Pick the next unused number by listing the existing
+Query ids are unique across the `operations` package, enforced by `operations/query_ids_test.go`. Pick the next unused number by listing the existing
 ids. Operation ids carry the store segment that matches `StoreID`.
 
 Every `.go` file starts with the licence header used in the package:

@@ -136,7 +136,7 @@ deployment, not globally.
 
 ## Batch behaviour
 
-- Default size 100. Pick a size so one batch is a short transaction. Large JSON rows justify smaller.
+- Default size 100 (bulk clears of helper tables use 500). Pick a size so one batch is a short transaction. Large JSON rows justify smaller.
 - A batch must be safe to retry from scratch: after a rollback the same rows are read again.
 - Write only through `execution.Access().Execute`. It is bound to the operation's store.
 - Read other stores only if listed in `ReadStoreIDs`.

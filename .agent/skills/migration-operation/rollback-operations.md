@@ -57,7 +57,7 @@ type rollbackWidgetColorOperation struct {
 }
 
 func (o *rollbackWidgetColorOperation) ForwardOperationID() engine.OperationID {
-	return "2.1.0/configdb/63_backfill_widget_color"
+	return "configdb/63_backfill_widget_color"
 }
 ```
 

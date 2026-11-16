@@ -46,18 +46,18 @@ func widgetColumnRow(name, nullable string) engine.QueryRow {
 }
 ```
 
-Existing test files in the release package define small fakes like this. A new release should add one
-shared test helper file rather than copy it per operation.
+The `operations` package already has a shared fake in `fake_access_test.go`: `newFakeAccess()`, `.on(query, rows...)` and
+`.onArgs(query, handler)`. Use it instead of defining a new one. The `fakeReadAccess` above only shows the shape.
 
 ## Definition and statements
 
 ```go
 func TestAddWidgetColorOperation(t *testing.T) {
-	operation, err := newAddWidgetColorOperation()
+	operation, err := NewAddWidgetColorOperation()
 	require.NoError(t, err)
 
 	definition := operation.Definition()
-	assert.Equal(t, engine.OperationID("2.1.0/configdb/60_add_widget_color"), definition.ID)
+	assert.Equal(t, engine.OperationID("configdb/60_add_widget_color"), definition.ID)
 	assert.Equal(t, engine.StoreIDConfigDB, definition.StoreID)
 	assert.Equal(t, engine.OperationKindSchemaChange, definition.Kind)
 	assert.Equal(t, engine.InterruptionModeAtomic, definition.InterruptionMode)
@@ -106,16 +106,19 @@ when fewer than a full batch was found and that the checkpoint advances.
 
 ## Release plan test
 
-In the release package, pin what the plan must contain. When you add an operation, this test must
-change in the same commit.
+Two tests in `releases/<version>/` pin the plan. Both change in the same commit as the operation.
 
 ```go
-require.Len(t, definition.Plan.Expand, 39)
-assert.Equal(t, "2.1.0/configdb/60_add_widget_color", string(definition.Plan.Expand[38].Definition().ID))
-require.Len(t, definition.Plan.Rollback, 9)
+// release_test.go: sizes per phase
+require.Len(t, definition.Plan.Expand, 89)
+require.Len(t, definition.Plan.Rollback, 15)
 ```
 
-Also keep the query id uniqueness test green.
+`release_definitions_test.go` (`TestPlanDefinitionsAreFrozen`) compares every ordered operation definition with
+`testdata/plan_definitions.golden`. Regenerate it with `UPDATE_PLAN_GOLDEN=1 go test ./internal/system/migration/releases/...`
+only while the release is unshipped, and review the diff. It guards definitions, not SQL or verifier logic.
+
+Also keep the query id uniqueness test (`operations/query_ids_test.go`) green.
 
 ## Engine level tests
 

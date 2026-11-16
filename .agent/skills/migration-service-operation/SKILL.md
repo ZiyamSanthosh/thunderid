@@ -122,8 +122,8 @@ Build the source once in `migrationPlan` and pass it to every operation that nee
 rollback alike, so both directions see the same data:
 
 ```go
-declaredEntityTypes := newDeclarativeEntityTypeSource(dependencies.DeclarativeEntityTypes)
-backfill := newBackfillEntityTypeHandleOperation(declaredEntityTypes)
+declaredEntityTypes := operations.NewDeclarativeEntityTypeSource(dependencies.DeclarativeEntityTypes)
+backfill := operations.NewBackfillEntityTypeHandleOperation(declaredEntityTypes)
 ```
 
 ### 4. Forward through `current`
@@ -181,6 +181,13 @@ Pitfalls found while building it:
 - A nil provider is treated as "no declarative types" so tools and tests that omit it keep working.
   `cmd/server` always supplies it. See "Missing provider behaviour" below.
 
+### Declarative organization units
+
+`cmd/server/migration_declarative_organization_units.go` reads the organization unit documents and keeps only the id and
+handle. `Dependencies.SystemOrganizationUnitID` (from `server.system_ou_id`) is a plain string, not a provider, and is carried
+inside `operations.NewDeclarativeOrganizationUnitSource(provider, systemID)`. The organization unit owner operations
+(`82_90_`) use both to find the owner of rows that had none.
+
 ### Declarative connections
 
 `cmd/server/migration_declarative_connections.go` reads every connection document the declarative
@@ -193,7 +200,7 @@ The provider holds no services at all, which keeps it cheap and read only.
 - Keep the migration engine independent of ThunderID business packages.
 - Implement the operation through the existing atomic or resumable contract (online is for SQL only
   schema changes). Do not introduce a separate programmatic operation executor.
-- Define the smallest service interface needed in the release package, preferably next to the operation.
+- Define the smallest service interface needed in the `operations` package, preferably next to the operation.
 - Inject it through the operation constructor.
 - Add narrowly typed fields to the existing release dependency seam only when a concrete operation
   consumes them. No universal registries, no speculative providers.
@@ -220,8 +227,9 @@ A service backed operation keeps every guarantee of a SQL operation:
 
 ### Missing provider behaviour
 
-Choose deliberately. Release 2.0.0 treats a nil provider as "no declarative data" so existing callers
-keep working. If a missing provider could cause wrong conversions, return a clear error from the
+Choose deliberately. Release 2.0.0 treats a nil entity type provider as "no declarative data" so existing callers
+keep working. The counterexample is the organization unit owner operations: an undeclared or empty system organization
+unit makes their readiness `blocked`, because guessing an owner would be wrong. If a missing provider could cause wrong conversions, return a clear error from the
 constructor or the plan builder instead. Return an error when the selected phase contains an operation
 whose required provider is absent.
 

@@ -37,7 +37,7 @@ Do not write an operation before the plan exists and the developer has confirmed
 |---|---|
 | `backend/internal/system/migration/engine/` | The engine: coordinator, state controller, executors, preflight, compatibility gate, rollback, metadata store, locks |
 | `backend/internal/system/migration/operations/` | Every operation (`NN_name.go`, one per file, numbered as the plan lists them), the helpers they share, `Dependencies`, and their unit tests. No operation belongs to one release |
-| `backend/internal/system/migration/releases/<version>/` | One release: `release.go` (the ordered plan and target version), `release-manifest.json`, `release_test.go`. It picks operations from `operations/`; it defines none |
+| `backend/internal/system/migration/releases/<version>/` | One release: `release.go` (the ordered plan and target version), `release-manifest.json`, `release_test.go`, and the frozen plan golden file. It picks operations from `operations/`; it defines none |
 | `backend/internal/system/migration/current/` | Selects the release compiled into the binary and exposes the manifest catalog |
 | `backend/cmd/server/migration_*.go` | CLI wiring: argument parsing, namespace building, declarative providers, startup gate |
 | `backend/internal/system/middleware/operatingmode.go` and `featuregate` | Restricted mode fences |

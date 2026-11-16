@@ -46,6 +46,10 @@ type entityIdentifierPrimaryKeyOperation struct {
 }
 
 // NewExpandEntityIdentifierPrimaryKeyOperation returns the expand entity identifier primary key operation.
+// It only widens the key to include VALUE. No operation resynchronizes the identifier projection for entities
+// whose multi-valued attributes were skipped before: they continue through the entity JSON lookup fallback, and
+// later entity mutations populate the projection. Add a resumable data operation only if a fully populated
+// projection becomes a requirement.
 func NewExpandEntityIdentifierPrimaryKeyOperation() (engine.Operation, error) {
 	operation, err := newOnlinePrimaryKeyOperation(onlinePrimaryKeyConfig{
 		definition: engine.OperationDefinition{

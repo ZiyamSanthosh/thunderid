@@ -27,7 +27,14 @@ backend/tests/migration/
     source_fixture_test.go            Seeds source schema data
     NN_name_test.go                   verifyX for one operation or a group
     resume_test.go, deployment_selective_test.go, execution_lock_test.go, compatibility_gate_test.go
+    owner_and_sharing_test.go, session_tables_test.go, declared_system_ou_test.go, schema_equivalence_test.go
+    real_server_upgrade_test.go       Runs a real previous server and a real target server through the upgrade
+    NN_MM_name_test.go                Grouped files such as 12_21_, 22_38_, 42_45_, 46_47_
+  deployment-previous*.yaml, scripts/ Configuration and helpers for the previous version server
 ```
+
+Extra harness helpers: `StartPreviousServer`, `StartTargetServer`, `RunServerExpectCompatibilityFailure` and
+`WithDeclaredOrganizationUnit`.
 
 Every Go file carries `//go:build migration_integration` and the licence header.
 
@@ -59,7 +66,7 @@ func verifyAddWidgetColor(t *testing.T, environment migrationharness.Environment
 			`SELECT IS_NULLABLE FROM INFORMATION_SCHEMA.COLUMNS
 				WHERE TABLE_SCHEMA = CURRENT_SCHEMA() AND TABLE_NAME = 'WIDGET' AND COLUMN_NAME = 'color'`,
 			"YES")
-		migrationharness.AssertOperationCompleted(t, db, "2.1.0/configdb/60_add_widget_color")
+		migrationharness.AssertOperationCompleted(t, db, "configdb/60_add_widget_color")
 	})
 }
 ```

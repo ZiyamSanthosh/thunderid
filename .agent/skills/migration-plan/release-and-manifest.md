@@ -10,7 +10,8 @@ version with underscores, for example `v2_0_0`. It is a Go package that chooses 
 |---|---|
 | `release-manifest.json` | Embedded manifest: release version, metadata version, per store levels |
 | `release.go` | `Definition()`, `DefinitionWithDependencies()` and `migrationPlan()` that builds the ordered plan from `operations.New...` constructors |
-| `release_test.go` | Pins the plan: sizes and ordered operation ids |
+| `release_test.go` | Pins the plan size per phase, that the manifest version matches `version.txt`, and that `DefinitionWithDependencies` builds the same plan |
+| `release_definitions_test.go`, `testdata/plan_definitions.golden` | `TestPlanDefinitionsAreFrozen` pins the ordered operation definitions in a golden file. A diff means a shipped plan changed. While the release is still in development, regenerate with `UPDATE_PLAN_GOLDEN=1` |
 
 The `operations` package holds `NN_name.go` (one operation per file, `NN_name_rollback.go` for its rollback
 operation), the shared helpers (table specs, primary key operations, JSON rewriting, declarative sources),
@@ -82,14 +83,14 @@ Dependencies for service backed operations are added as narrowly typed fields on
 
 | Item | Convention | Example |
 |---|---|---|
-| Operation file | `NN_snake_name.go`, `NN` is a two digit authoring number unique in the release | `02_add_entity_type_handle.go` |
+| Operation file | `NN_snake_name.go`, `NN` is an authoring number unique in the release. Numbers reach three digits, and one file may cover a range (`97_112_add_project_id_columns.go`, `82_90_organization_unit_owner.go`), whose ids use each number | `02_add_entity_type_handle.go` |
 | Rollback file | same name plus `_rollback` | `04_backfill_entity_type_handle_rollback.go` |
 | Operation id | `<store>/<NN>_<snake_name>` | `configdb/02_add_entity_type_handle` |
 | Rollback id | forward id plus `_rollback` | `.../04_backfill_entity_type_handle_rollback` |
 | Catch-up id | forward id plus `_catch_up`, or its own number | `.../04_backfill_entity_type_handle_catch_up` |
-| Query id | `MIG-<STORE>_MGT-<n>`, unique across the whole release package | `MIG-CFG_MGT-05` |
+| Query id | `MIG-<STORE>_MGT-<n>`, unique across the `operations` package | `MIG-CFG_MGT-05` |
 
-Store prefixes in query ids are `CFG` (configdb), `ENT` (entitydb) and `RTP` (runtime persistent). Follow
+Store prefixes in query ids are `CFG` (configdb), `ENT` (entitydb) and `RTP` (runtime persistent). Shared helpers use their own prefixes (`MIG-CONFIG-PK`, `MIG-ENTITY-PK`, `MIG-USM-TBL`, `MIG-OIX`). Follow
 the same pattern for runtime transient if it ever gets an operation. Numbers need not be contiguous but must never repeat. A test fails on
 duplicates. Choose the next unused number by listing the existing ids.
 
@@ -107,10 +108,9 @@ the binary knows, ordered oldest first. When you add a release:
 
 ## Documentation and tests to touch
 
-- Release unit tests: plan size per phase, ids and order (`release_test.go` style), manifest levels.
-- A query id uniqueness test already covers duplicate ids.
-- If the repository keeps an operation catalog document, add an entry with purpose, source and target
-  state, readiness, execution, verification, rollback and dependencies.
+- Release unit tests: bump the plan sizes in `release_test.go` and regenerate or review the golden file in `testdata/plan_definitions.golden`.
+- A query id uniqueness test (`operations/query_ids_test.go`) already covers duplicate ids.
+- Document the operation in the Go doc comment of its constructor: purpose, source and target state, rollback and dependencies. There is no separate catalog document.
 - Integration suite registration, see [migration-testing](../migration-testing/SKILL.md).
 
 ## Holding an operation back

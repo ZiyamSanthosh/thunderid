@@ -6,7 +6,7 @@ An operation writes one store but may read others by listing them in `ReadStoreI
 
 ```go
 engine.OperationDefinition{
-	ID:           "2.1.0/entitydb/64_convert_widget_references",
+	ID:           "entitydb/64_convert_widget_references",
 	StoreID:      engine.StoreIDEntityDB,                  // the one store it writes
 	ReadStoreIDs: []engine.StoreID{engine.StoreIDConfigDB}, // read only
 	Kind:         engine.OperationKindDataChange,
@@ -39,7 +39,7 @@ generated handle must not collide with one.
 
 Use an **injected provider**:
 
-1. Define the smallest interface the operation needs in the release package, next to the operation.
+1. Define the smallest interface the operation needs in the `operations` package, next to the operation.
 2. Add a narrowly typed, lazy field to the release's `Dependencies` struct.
 3. Wrap it in a small source type that resolves the provider on first use, so phases that do not need
    it never build the services behind it. A nil provider yields no extra data.

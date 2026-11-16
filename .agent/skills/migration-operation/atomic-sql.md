@@ -18,10 +18,10 @@ var queryWidgetColumns = dbmodel.DBQuery{
 		AND COLUMN_NAME IN ('id', 'color')`,
 }
 
-func newAddWidgetColorOperation() (engine.Operation, error) {
+func NewAddWidgetColorOperation() (engine.Operation, error) {
 	return engine.NewSQLOperation(engine.SQLOperationConfig{
 		Definition: engine.OperationDefinition{
-			ID:               "2.1.0/configdb/60_add_widget_color",
+			ID:               "configdb/60_add_widget_color",
 			Description:      "Add a nullable color column to the widget table",
 			StoreID:          engine.StoreIDConfigDB,
 			Kind:             engine.OperationKindSchemaChange,
@@ -66,7 +66,7 @@ Include the indexes in the same operation so the table is complete or absent.
 
 If a dependent table must exist first (foreign key), return `deferred` readiness naming the operation
 that creates it. The 2.0.0 release builds these through a spec driven helper that checks every
-listed column, key and index; a new release package should follow that structure rather than
+listed column, key and index; new tables should use these helpers rather than
 asserting a bare `CREATE TABLE`.
 
 ## Data change template
@@ -90,7 +90,7 @@ func resolveDeployments(
 func newDefaultWidgetColorOperation() (engine.Operation, error) {
 	return engine.NewSQLOperation(engine.SQLOperationConfig{
 		Definition: engine.OperationDefinition{
-			ID:               "2.1.0/configdb/61_default_widget_color",
+			ID:               "configdb/61_default_widget_color",
 			Description:      "Set the default color on widgets that have none",
 			StoreID:          engine.StoreIDConfigDB,
 			Kind:             engine.OperationKindDataChange,

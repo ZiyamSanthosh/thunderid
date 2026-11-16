@@ -1,6 +1,6 @@
 ---
 name: migration-operation
-description: Write or change a ThunderID migration operation in a release package. Use after a migration plan exists, when implementing an atomic SQL operation, an online schema operation, a resumable data operation, a rollback operation, a catch-up operation or a service backed operation. Covers the operation contract, verifiers (source, target, invalid), readiness checks, SQL and locking rules, deployment targets, checkpoints, naming, query ids and plan registration.
+description: Write or change a ThunderID migration operation in the shared operations package. Use after a migration plan exists, when implementing an atomic SQL operation, an online schema operation, a resumable data operation, a rollback operation, a catch-up operation or a service backed operation. Covers the operation contract, verifiers (source, target, invalid), readiness checks, SQL and locking rules, deployment targets, checkpoints, naming, query ids and plan registration.
 ---
 
 # Writing a Migration Operation
@@ -16,10 +16,15 @@ Background: [migration-system](../migration-system/SKILL.md).
 | Plan says | Form | Playbook |
 |---|---|---|
 | schema change, short, one transaction | `engine.NewSQLOperation` with atomic mode | [atomic-sql.md](atomic-sql.md) |
-| new table with expected shape | the release's table builder helper if one exists, else atomic SQL | [atomic-sql.md](atomic-sql.md) |
+| new table with expected shape | `newCreateTableOperation` (`table_operation.go`) or `newConfigTableOperation` (`config_table.go`), else atomic SQL | [atomic-sql.md](atomic-sql.md) |
+| add a nullable or defaulted column | `newAddColumnOperation` (`add_column_operation.go`) | [atomic-sql.md](atomic-sql.md) |
 | data change, one quick statement per target | `engine.NewSQLOperation` atomic with a target resolver | [atomic-sql.md](atomic-sql.md) |
 | schema change needing DDL outside a transaction (concurrent index, constraint swap) | custom type implementing `OnlineOperation` | [online.md](online.md) |
+| concurrent index | `newOnlineIndexOperation` (`online_index_operation.go`) | [online.md](online.md) |
+| primary key swap to a deployment scoped key | `newOnlinePrimaryKeyOperation` (`online_primary_key_operation.go`), with `references` for inbound keys that are re-created and `droppedReferences` for ones the target schema drops. The contract side comes from `NewLegacyPrimaryKeyContractOperations` | [online.md](online.md) |
 | data change over many rows, per deployment, restartable | custom type implementing `ResumableOperation` | [resumable.md](resumable.md) |
+| batched data change with a keyset checkpoint | `newBatchOperation` and `rollbackBatchOperation` (`batch_operation.go`) | [resumable.md](resumable.md) |
+| entity type reference rewrite (name to handle) | `newEntityTypeReferenceOperation` and `newRollbackEntityTypeReferenceOperation`, with the config store variant in `config_entity_type_reference_operation.go` | [rollback-operations.md](rollback-operations.md) |
 | undo of a data change | custom type implementing `RollbackOperation` | [rollback-operations.md](rollback-operations.md) |
 | needs entities or settings declared outside the database | any of the above plus an injected provider | [cross-store-and-services.md](cross-store-and-services.md) |
 

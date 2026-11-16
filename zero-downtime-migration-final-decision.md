@@ -6,8 +6,13 @@ This document is the authoritative product decision for ThunderID version upgrad
 migration. It defines the process that the migration engine and future feature migrations must
 follow.
 
-Where an earlier migration discussion or recommendation conflicts with this document, this document
-wins. The earlier documents remain useful as background analysis and detailed design input.
+This is the single design document for the migration system. It holds the decisions, the rationale
+behind the implemented model, the implementation status and the open work. Day to day implementation
+guidance lives in the skills under `.agent/skills/migration-*` (start with `migration-system`), and the
+code under `backend/internal/system/migration/` is authoritative for behaviour. Open defects are
+tracked in `claude-migration-system-review-findings.md`.
+
+Last verified against the code: 2026-11-16, release `2.0.0-m1`.
 
 ## Final decision
 
@@ -19,9 +24,11 @@ The migration approach priority is:
 2. Database-copy migration using snapshot plus change-data capture and blue-green deployment.
 3. Controlled downtime migration as the final safety fallback.
 
-The release immediately following the current 1.0 baseline is the foundation release. Its upgrade
-will use a planned maintenance window because 1.0 does not contain the migration metadata,
-compatibility contract or complete change-capture capabilities required to guarantee ZDM.
+The release immediately following the 1.0 baseline is the foundation release. In the code this is
+`2.0.0-m1`, whose manifest accepts source level `1.0.0` for all four stores. Its upgrade should use a
+planned maintenance window unless 1.0 is retrofitted, because 1.0 does not contain the migration
+metadata, compatibility gate or restricted mode required to guarantee ZDM. The 2.0.0-m1 plan is still
+authored as expand, migrate and contract so that it is correct and so later releases inherit the model.
 
 The foundation release must introduce those capabilities. Every subsequent adjacent release must be
 designed and reviewed as ZDM-first. A release that requires downtime after the foundation release
@@ -105,7 +112,8 @@ The following operations are fenced by default when their affected data is under
 - organization-unit creation; and
 - administrative operations.
 
-The foundation implementation exposes `operating_mode: full | restricted`. An administrator enables
+The foundation implementation exposes `operating_mode: full | restricted` (earlier notes call this
+login-only mode). An administrator enables
 restricted mode on every serving source instance and restarts those instances before migration work
 that requires fencing. The migration engine does not activate or deactivate the mode automatically.
 All source instances must use the same configured mode so that one instance cannot continue accepting
@@ -156,18 +164,17 @@ One compiled binary exposes isolated modes:
 ```text
 thunderid migration initialize
 thunderid migration status
-thunderid migration check
-thunderid migration apply
+thunderid migration check [expand|migrate|contract]
+thunderid migration apply [expand|migrate|contract] [--deployment-id <id>]
 thunderid migration resume
-thunderid migration activate
-thunderid migration finalize
+thunderid migration rollback [--phase <phase>] [--revert-all]
 
 thunderid serve
 ```
 
-The command names are illustrative until the command contract is implemented. The architectural
-decision is that migration and serving use the same versioned product artifact but execute in
-separate modes.
+These are the implemented commands. `apply` with no phase runs expand only, and `apply contract` is the
+only way into contract. There is no separate activate or finalize command. The architectural decision is
+that migration and serving use the same versioned product artifact but execute in separate modes.
 
 Migration mode can run as a Kubernetes Job, command-line process or equivalent Control Plane task
 using the target release image. Request-serving replicas do not each start their own migration.
@@ -260,31 +267,21 @@ assumed to be atomic.
 The shared lifecycle is:
 
 ```text
-CURRENT
-    |
+complete          the store is at its source level
+    |  apply expand
     v
-PREPARING
-    |
-    | expand, backfill, delta processing, validation
+expanding -> expanded        source and target binaries may both serve
+    |  apply migrate (source binary drained first)
     v
-SERVE_READY
-    |
-    | target version may enter its declared serving mode
+migrating -> contract_ready  only the target serves, rollback window open
+    |  apply contract (explicit)
     v
-ACTIVE
-    |
-    | old version drained, new representation authoritative
-    v
-OBSERVING
-    |
-    | rollback observation period
-    v
-CONTRACT_READY
-    |
-    | destructive cleanup explicitly authorized
-    v
-COMPLETE
+contracting -> complete      the store is at the target level
 ```
+
+Status values are `clean`, `in_progress`, `completed` and `failed`. A store whose plan declares only some
+phases rests at `contract_ready` after its last declared phase and completes through a metadata only
+contract. `rolling_back` is used by `rollback --revert-all`.
 
 A failure moves the affected store or migration run to a durable failed or interrupted state. The
 engine resumes from verified checkpoints instead of assuming that the whole release rolled back.
@@ -614,7 +611,7 @@ Migration is selected per logical store. One release can use different approache
 stores, coordinated by one global release plan.
 
 Cross-store work is not assumed to be atomic. A migration that changes more than one database must
-define ordering, durable intermediate states, compensation or repair behavior and final validation.
+define ordering, durable intermediate states, rollback or repair behavior and final validation.
 
 ## Developer migration contract
 
@@ -849,29 +846,63 @@ pass the same migration contracts before ZDM is claimed for them.
 SQLite is not a production ZDM target. SQLite migrations still use the common version metadata and
 migration definitions where practical, but they may use controlled downtime.
 
-## Foundation implementation order
+## Implementation status
 
-The implementation now proceeds in this order:
+Verified against the code on 2026-11-16 (release `2.0.0-m1`, metadata version 2). The engine is
+functionally complete for PostgreSQL. ThunderID must not yet claim a production database-changing ZDM
+guarantee, because the complete mixed-version topology has not been qualified under continuous traffic.
 
-1. Complete the PostgreSQL migration-engine foundation, including manifests, compatibility gates,
-   commands, atomic and resumable execution, readiness checks, deployment-selective progress,
-   restricted operating mode and rollback. Completed.
-2. Maintain the representative multi-phase 2.0.0 migration and its PostgreSQL integration suite.
-   Completed.
-3. Qualify the base in-place path while a restricted source instance continuously serves
-   authentication, authorization and token traffic. This is the next required increment.
-4. Add configurable backfill resource controls and complete provider-specific serving-impact
-   qualification.
-5. Publish the operator runbook for preflight, execution, monitoring, cutover, contract and
-   rollback.
-6. Add standalone service initialization only when a real migration operation requires a ThunderID
-   business service.
-7. Add change capture, conflict handling and projection state only for concrete migrations whose
-   writable representations require them.
-8. Implement database-copy snapshot, relay, validation and cutover orchestration only when that
-   fallback becomes a product requirement.
-9. Extend mixed-version and failure-injection qualification for each newly implemented migration
-   pattern and database provider.
+### Implemented
+
+| Capability | Where |
+|---|---|
+| Embedded manifest and ordered plan (`Expand`, `Migrate`, `Contract`, `Rollback`) | `migration/releases/v2_0_0`, `engine/manifest.go`, `engine/plan.go` |
+| Four metadata tables shared by all stores | `engine/postgres_metadata.sql` |
+| Startup compatibility gate, per-store, with a release route search | `engine/compatibility.go`, `engine/route.go`, `cmd/server/migration_cmd.go` |
+| Commands: initialize, status, check, apply, resume, rollback | `cmd/server/migration_cmd.go` |
+| Atomic, online and resumable executors with transactional progress and checkpoints | `engine/*_executor.go` |
+| Per namespace advisory lock, non blocking | `engine/postgres_execution_lock.go` |
+| Deployment selective migrate with per deployment progress | `--deployment-id`, `MIGRATION_DEPLOYMENT_STATE` |
+| Shared and separate physical database layouts | namespace grouping in `cmd/server` |
+| Operation readiness (ready, deferred, blocked) and mandatory verifiers | `engine/preflight.go` |
+| Rollback of a failed operation, a failed phase, or everything before contract | `engine/rollback.go` |
+| Restricted operating mode and feature gates | `middleware/operatingmode.go`, `featuregate` |
+| Service backed operations through declarative providers (entity types, connections, organization units) | `operations/dependencies.go`, `cmd/server/migration_declarative_*.go` |
+| About 110 operations for 2.0.0-m1 and a frozen plan golden file | `operations/`, `testdata/plan_definitions.golden` |
+| Docker PostgreSQL integration suite, including a real previous and target server | `backend/tests/migration` |
+
+### Corrections to earlier notes
+
+- `apply` with no phase runs expand only. It does not run migrate.
+- The source binary is admitted at `expanding` and `expanded` only, and retired from `migrating`. The target is
+  admitted from `expanded`.
+- Restricted mode is still configuration, but the startup gate now refuses a target that serves a store mid
+  migration unless restricted mode is on. The gate runs only when `migration.startup_compatibility_check` is
+  true, which defaults to false.
+- There is no contract authorization flag. `apply contract` runs when the stores are at `contract_ready` and
+  preflight passes. Operation specific guards can still refuse it.
+- The vocabulary is "rollback operation". Older notes say compensation.
+- Service backed operations are no longer hypothetical. The seam exists and is used.
+
+### Open work before the ZDM claim
+
+1. Mixed-version qualification. A real source and target server already run through the upgrade for both
+   layouts. Still missing: continuous authentication, token and revocation traffic, target serving in restricted
+   mode at `expanded` while migrate runs, source rejected once migrate begins, compare and set conflict checks, and
+   failure injection during traffic.
+2. Backfill resource controls. Batch size is fixed at 100 with no pacing, batch cap or operator setting.
+3. Serving impact measurement. No latency or lock wait measurement exists for schema operations.
+4. Operator runbook. None exists under `docs/content`. It must cover backups, restricted mode, every command,
+   deployment selection, monitoring, draining the source, contract (required for every changed store) and
+   rollback boundaries.
+5. Defects in `claude-migration-system-review-findings.md`, in particular R1, R2, R4, R7, R8 and R11.
+6. Product owned legacy reads for each in place representation change. The engine admits the target at
+   `expanded` but cannot verify them.
+
+Conditional, only when a concrete release needs them: change capture and conflict handling for
+representations that stay writable during backfill, contract only plans, database copy or blue green
+orchestration, hosted background coordination, machine readable reports and providers other than PostgreSQL.
+SQLite is not a production ZDM target.
 
 ## Final policy statement
 
@@ -884,3 +915,98 @@ The shared migration engine is responsible for executing those definitions consi
 In-place expand-and-contract is the normal path. Database-copy CDC with blue-green deployment is the
 online fallback. Controlled downtime remains available only when the release proves that neither
 online method can safely preserve correctness.
+
+## Design rationale
+
+These decisions shaped the implemented model. The skills describe how it works. This section records why.
+
+### Embedded release manifest
+
+Each binary embeds a manifest that states, per logical store, the level it accepts as a source, the level it
+requires and whether the release changes the store. The binary is the single source of truth for what it needs,
+so no external file can drift from the code. A target release owns exactly one transition from its declared
+source, which keeps the compatibility model bounded to adjacent releases. Levels are canonical semantic
+versions, never build timestamps. A timestamp does not describe a database change: most builds do not change the
+database, the same commit can be rebuilt, and artifact rollback does not always imply database rollback.
+
+### State lives with each store
+
+Migration state is kept in the databases themselves (`MIGRATION_STATE`, `MIGRATION_PROGRESS`,
+`MIGRATION_DEPLOYMENT_STATE`, `MIGRATION_RUN`) so that it survives a crashed runner and always matches the data
+it describes. The model must work for every physical layout:
+
+- one physical database holds every logical store, so one namespace, one lock and one transaction scope;
+- each store has its own database, so state, locks and transactions are independent per store;
+- a hybrid, which is grouped by namespace exactly as the first two.
+
+There are no cross database transactions. Cross store work is expressed as separate operations with durable
+intermediate states, and recovery relies on verifiers rather than on atomicity.
+
+### Gate before serving
+
+Startup performs a read only comparison of the embedded manifest with each store's state. It never creates,
+stamps, repairs or resumes anything, never infers a level from the apparent structure, and does not run
+verification, which belongs to the migration process. A store that is behind, ahead, interrupted, failed,
+unestablished, unsupported or unreadable fails with a precise diagnostic and the process exits. A binary that is
+older than the data is told to use the newer binary, and no down migration is suggested. Migration management
+commands are exempt because assessing an incompatible store is their purpose. The gate proves compatibility only
+at the time it reads, and stopping affected instances remains an administrator responsibility.
+
+### Operations and the engine
+
+Operations are compiled Go, not scripts. Each declares its store, kind and interruption mode and supplies
+verifiers that classify the target as source, target or invalid. The engine owns ordering, reservation,
+transactions, progress, batch loops, checkpoints, finalization and resume, so an operation cannot move
+bookkeeping out of the transaction that changes the data. Atomic and resumable operations commit data and
+progress together. SQL versus service backed implementation is independent of the interruption mode.
+
+### Initialization is trust based
+
+`migration initialize` registers fixed level `1.0.0` for databases that predate the framework, and the manifest
+target for a fresh installation. It does not validate the structure it registers. Structural correctness is
+established by each operation's verifiers during migration, and finalization validates the complete progress
+set before a level advances. Known weakness: an absent metadata schema on a fresh 2.0.0 install is recorded as
+1.0.0, and converges only because each operation recognises its target state (review finding R19).
+
+### Scope decisions
+
+- Relational stores on PostgreSQL only. Redis backed `runtime_transient` has no migration strategy yet. A release
+  that changes a Redis representation must say so in its release notes. The cache subsystem is not a store and has
+  no migration level.
+- Configuration and declarative resource changes between releases are handled by the administrator and described
+  per release. Declarative resources that operations depend on reach them through declarative providers.
+- A migration that changes more than one store must define ordering and repair behaviour itself.
+
+## Appendix: choosing an approach per change
+
+| Change type | Default approach | Reason |
+|---|---|---|
+| No persisted data change | Rolling upgrade | No transformation is needed |
+| Add table or nullable column | In place expand and contract | Both versions stay compatible |
+| Large historical backfill | In place with a catch up pass | Backfill and live writes converge without copying the database |
+| Replace a representation | In place when the target can read both | The old representation stays authoritative until migrate |
+| High lock or physically disruptive change | Database copy with change capture | Work is isolated from the serving source |
+| Change database provider | Database copy with change capture | Transformation and validation happen at the destination |
+| Source lacks required capture | Downtime, trigger or native change capture | Application level capture cannot recover unrecorded writes |
+| Unsafe destructive change | Downtime or a redesigned multi release change | Versions cannot coexist |
+
+Per store defaults: `configdb` blocks management writes and keeps runtime reads available, `entitydb` keeps
+login critical writes and fences registration, recovery, JIT provisioning and organization unit creation,
+`runtime_transient` shares a compatible representation or drains by TTL, `runtime_persistent` stays writable
+through backward compatible changes.
+
+Control plane and data plane during an online upgrade: the control plane coordinates state and blocks
+incompatible configuration mutations, the source data plane keeps serving the authoritative representation, the
+migration process runs backfill and validation outside the request path, and the target data plane serves only
+when its compatibility requirement is met. Coordination state must not depend only on a database that is about
+to be replaced.
+
+## Appendix: future work
+
+- **Database copy with change capture** (Approach 2 above) is not implemented. Nothing in the engine names it.
+  If it is built, the design needs a coordinator, snapshot reader, normalizer and applier, correctness invariants
+  for ordering and deduplication, security critical lifecycle data handled explicitly, and a stated rollback
+  boundary after the destination accepts writes.
+- **Continuous deployment with daily artifacts.** If migrations later become independent of product releases,
+  separate the artifact identity (timestamp and revision) from a stable contract or migration identifier, and
+  keep transitions immutable and per database change. Not planned for the current model.
